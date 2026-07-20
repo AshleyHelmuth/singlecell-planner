@@ -12,3 +12,4 @@ compatibility_date = "2026-07-01"
 directory = "."
 binding = "ASSETS"
 not_found_handling = "single-page-application"
+run_worker_first = ["/api/*"]
