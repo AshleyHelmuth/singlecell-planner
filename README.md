@@ -8,7 +8,7 @@ spreadsheet.
 Everything runs in the browser. There is no server and nothing to install to *use* it.
 To *host* it, you put these files in a GitHub repository and turn on GitHub Pages.
 
----
+--- 
 
 ## What's in this folder
 
