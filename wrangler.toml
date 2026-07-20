@@ -15,4 +15,4 @@ INVENTORY_SHEET_ID = "1EXC2kdreRnWj5c3ONbNO5US4RI6iWHedCL3SDJxrgbw"
 directory = "."
 binding = "ASSETS"
 not_found_handling = "single-page-application"
-run_worker_first = ["/api/*"]
+run_worker_first = true
