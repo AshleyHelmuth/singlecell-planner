@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Single-Cell Experiment Planner · Tsang Lab</title>
+<link rel="stylesheet" href="css/style.css" />
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <span class="mark" aria-hidden="true"></span>
+    <div>
+      <h1>Single-Cell Experiment Planner</h1>
+      <p class="sub">CZ Biohub &times; Yale Annex &middot; Tsang Lab &middot; plan a batch end-to-end from the master schema</p>
+    </div>
+  </div>
+  <div class="brand-logos" aria-label="Yale and CZ Biohub">
+    <img src="assets/logos/biohub.svg" alt="bi[o]hub">
+    <span class="logo-div" aria-hidden="true"></span>
+    <img src="assets/logos/yale.svg" alt="Yale">
+  </div>
+  <div class="datastatus" id="dataStatus" role="status">Loading spreadsheet…</div>
+</header>
+
+<nav class="tabs" role="tablist" aria-label="Sections">
+  <button class="tab is-active" data-tab="projects" role="tab" aria-selected="true">Project manager</button>
+  <button class="tab" data-tab="plan" role="tab" aria-selected="false">Plan</button>
+  <button class="tab" data-tab="workflow" role="tab" aria-selected="false">Workflow</button>
+  <button class="tab" data-tab="reagents" role="tab" aria-selected="false">Reagents &amp; cost</button>
+  <button class="tab" data-tab="protocols" role="tab" aria-selected="false">Protocols</button>
+  <button class="tab" data-tab="inventory" role="tab" aria-selected="false">Inventory</button>
+  <button class="tab" data-tab="handbook" role="tab" aria-selected="false">Handbook</button>
+  <button class="tab" data-tab="scheduling" role="tab" aria-selected="false">Scheduling</button>
+</nav>
+
+<main>
+  <!-- ============ PLAN TAB ============ -->
+  <section class="panel" id="tab-plan" role="tabpanel">
+    <div class="wrap">
+      <div class="exp-switch" id="planExpBar">
+        <span class="exp-switch-current" id="currentExpLabel">No experiment selected</span>
+        <span class="exp-switch-spacer"></span>
+        <span class="save-status" id="saveStatus" hidden></span>
+        <button type="button" id="savePlanBtn" class="btn primary">Save experiment</button>
+        <button type="button" id="backToProjectsBtn" class="btn ghost">Back to Project manager</button>
+      </div>
+      <div class="callout warn" id="noExpHint" hidden>Create an experiment from the <strong>Project manager</strong> tab first, then build its plan here.</div>
+      <section class="acc open" id="acc-1">
+        <button class="acc-head" type="button" aria-expanded="true">
+          <span class="acc-no">01</span><span class="acc-title">Design the experiment</span>
+          <span class="acc-status" data-status>–</span><span class="acc-caret">▾</span>
+        </button>
+        <div class="acc-summary" hidden></div>
+        <div class="acc-body">
+          <p class="step-hint">Choose which cell <strong>populations</strong> this batch looks at, then the downstream modality for each. V(D)J or ASAP-seq ride along where offered. Everything downstream adapts to this.</p>
+          <div id="dataError" class="data-error" hidden></div>
+          <label class="madi-toggle"><input type="checkbox" id="useMadiDefault" />
+            <span>Use the default workflow<span class="madi-sub">unsorted → 5′ CITE-seq + TCR/BCR + ASAP-seq · sorted → 5′ scRNA-seq (hashed) · stim → 5′ CITE-seq · bulk → bulk RNA-seq</span></span>
+          </label>
+          <div id="populationBuilder" class="pop-builder"></div>
+          <div class="sort-pop-panel" id="sortPopPanel" hidden>
+            <div class="sort-pop-head">Sort populations <button type="button" class="info-i" data-explain="sortFreq">i</button> <span class="muted">(for the sorted arm — toggle which to sort &amp; load)</span></div>
+            <div class="pop-btn-row" id="sortToggles"></div>
+          </div>
+        </div>
+      </section>
+      <section class="acc" id="acc-2">
+        <button class="acc-head" type="button" aria-expanded="false">
+          <span class="acc-no">02</span><span class="acc-title">Samples</span>
+          <span class="acc-status" data-status>–</span><span class="acc-caret">▾</span>
+        </button>
+        <div class="acc-summary" hidden></div>
+        <div class="acc-body">
+          <div class="thaw-shared">
+            <label>Cells / sample at thaw <button type="button" class="info-i" data-explain="perSampleAllocation">i</button><input type="number" id="scen_cellsPerSample" value="5000000" step="100000" /></label>
+            <label>People available to thaw <button type="button" class="info-i" data-explain="thawCapacity">i</button><input type="number" id="scen_nPeople" value="3" min="1" /></label>
+          </div>
+          <div id="thawMsg" class="feas-msg" hidden></div>
+          <div class="mode-toggle" id="inputModeToggle">
+            <span class="mode-label">How are you providing samples?</span>
+            <label class="mode-opt"><input type="radio" name="inputMode" value="grid" checked /> <span>I have my samples <em>(enter them in the table)</em></span></label>
+            <label class="mode-opt"><input type="radio" name="inputMode" value="counts" /> <span>Planning / conceptual <em>(just the counts)</em></span></label>
+            <button type="button" class="info-i" data-explain="inputMode">i</button>
+          </div>
+          <div id="gridInputWrap">
+            <p class="step-hint">One row per sample — paste directly from Excel/Sheets. Give each a <strong>Sample ID</strong> and <strong>Patient ID</strong> (repeat Patient ID for a donor’s timepoints; share a <strong>Lineage</strong> label for related people). Add columns for confounders, then flag which to spread across pools.</p>
+            <div class="row-actions">
+              <button id="addGridRow" class="btn ghost" type="button">+ Row</button>
+              <button id="addGridCol" class="btn ghost" type="button">+ Column</button>
+              <button id="loadExample" class="btn ghost" type="button">Load MADI example (54 samples)</button>
+              <button id="clearGrid" class="btn ghost" type="button">Clear all</button>
+              <span class="muted" id="sampleCount"></span>
+            </div>
+            <div class="grid-scroll"><table id="sampleGrid" class="sample-grid"></table></div>
+            <div class="confounder-panel" id="confounderPanel" hidden>
+              <h3>Confounding variables</h3>
+              <p class="muted">Check any column whose values should be <strong>spread across pools</strong>. Patient ID and Lineage are kept apart automatically.</p>
+              <div id="confounderChecks" class="confounder-checks"></div>
+            </div>
+          </div>
+          <div id="countsInputWrap" hidden>
+            <p class="step-hint">No sample sheet yet? Give the batch shape and the tool builds a representative sample set that still obeys every biological rule. <button type="button" class="info-i" data-explain="inputMode">i</button></p>
+            <div class="explore-inputs" id="planningCounts">
+              <label># samples<input type="number" id="pc_nSamples" value="54" min="1" /></label>
+              <label># patients (distinct donors)<input type="number" id="pc_nPatients" value="27" min="1" /></label>
+              <label># related lineage groups<input type="number" id="pc_nLineages" value="27" min="1" /></label>
+              <label># timepoints / patient<input type="number" id="pc_nTimepoints" value="2" min="1" /></label>
+              <label># conditions<input type="number" id="pc_nConditions" value="1" min="1" /></label>
+            </div>
+          </div>
+        </div>
+      </section>
+      <section class="acc" id="acc-3">
+        <button class="acc-head" type="button" aria-expanded="false">
+          <span class="acc-no">03</span><span class="acc-title">Assumptions &amp; fixed protocol parameters</span>
+          <span class="acc-status" data-status>–</span><span class="acc-caret">▾</span>
+        </button>
+        <div class="acc-summary" hidden></div>
+        <div class="acc-body">
+          <p class="step-hint">Assumptions &amp; fixed protocol parameters used for every downstream calculation — split into a General section and one per selected modality. Click any <span class="info-i-inline">i</span> for where a value comes from.</p>
+          <div class="opts-grid" id="assumptionsGrid"></div>
+        </div>
+      </section>
+      <section class="acc" id="acc-4">
+        <button class="acc-head" type="button" aria-expanded="false">
+          <span class="acc-no">04</span><span class="acc-title">Per-sample cell allocation</span>
+          <span class="acc-status" data-status>–</span><span class="acc-caret">▾</span>
+        </button>
+        <div class="acc-summary" hidden></div>
+        <div class="acc-body">
+          <p class="step-hint">Before planning further, check the cells add up. A single pool contribution is taken to pool; bulk + stim are set aside; the rest is leftover. A deficit means the plan won’t fit your thaw cells. <button type="button" class="info-i" data-explain="perSampleAllocation">i</button></p>
+          <div class="thaw-shared">
+            <label>Pool contribution / sample<input type="number" id="scen_poolContrib" value="1500000" step="100000" /></label>
+            <label>Bulk RNA reserve / sample<input type="number" id="scen_bulkTarget" value="500000" step="50000" /></label>
+            <label>Stim cells / sample / condition<input type="number" id="scen_stimPerCond" value="200000" step="50000" /></label>
+            <label>Stim conditions<input type="number" id="scen_stimN" value="5" min="0" /></label>
+          </div>
+          <div id="allocOutput"></div>
+        </div>
+      </section>
+      <section class="acc" id="acc-6">
+        <button class="acc-head" type="button" aria-expanded="false">
+          <span class="acc-no">05</span><span class="acc-title">Lyo panel staining</span>
+          <span class="acc-status" data-status>–</span><span class="acc-caret">▾</span>
+        </button>
+        <div class="acc-summary" hidden></div>
+        <div class="acc-body">
+          <p class="step-hint">Tell it how many cells to stain per modality — this number is carried into the pipeline chart below. BioLegend universal cocktails stain up to 2,000,000 cells per panel of 3 lyo vials. CITE-seq is constrained to TotalSeq-C, ASAP-seq to TotalSeq-A. <button type="button" class="info-i" data-explain="stainingTarget">i</button></p>
+          <div id="lyoInputs"></div>
+          <div id="lyoOutput"></div>
+          <div class="row-actions" style="margin-top:14px">
+            <button id="computePooling" class="btn primary" type="button">Compute pooling strategy →</button>
+          </div>
+        </div>
+      </section>
+      <section class="acc" id="acc-5">
+        <button class="acc-head" type="button" aria-expanded="false">
+          <span class="acc-no">06</span><span class="acc-title">Review pooling strategy</span>
+          <span class="acc-status" data-status>–</span><span class="acc-caret">▾</span>
+        </button>
+        <div class="acc-summary" hidden></div>
+        <div class="acc-body">
+          <p class="step-hint">Genetic pools (≤<output id="capEcho">20</output>/pool, SNP-demux, no same-patient/lineage) <button type="button" class="info-i" data-explain="geneticPool">i</button> with HTO/loading assignments and alternative pool-count options. Edit &amp; re-upload to lock in your own assignments.</p>
+          <div class="row-actions">
+            <button id="downloadPooling" class="btn ghost" type="button" disabled>Download strategy (.xlsx)</button>
+            <label class="btn ghost file-btn">Upload adjusted strategy (.xlsx)<input type="file" id="poolingReupload" accept=".xlsx,.xls" hidden /></label>
+            <button id="tubeLabelsBtn" class="btn ghost" type="button">Generate tube labels (.xlsx)</button>
+          </div>
+          <div id="poolingStatus" class="callout info" hidden></div>
+          <div id="poolingPreview"><p class="empty">Set the staining numbers above, then run “Compute pooling strategy”.</p></div>
+        </div>
+      </section>
+      <section class="acc" id="acc-7">
+        <button class="acc-head" type="button" aria-expanded="false">
+          <span class="acc-no">07</span><span class="acc-title">Sequencing</span>
+          <span class="acc-status" data-status>–</span><span class="acc-caret">▾</span>
+        </button>
+        <div class="acc-summary" hidden></div>
+        <div class="acc-body">
+          <p class="step-hint">Desired reads per cell, asked separately for each arm (depth differs by modality). Defaults are the lab’s targets; these drive sequencing depth, the library-by-type pooling, and the reagent estimate. <button type="button" class="info-i" data-explain="libraryPooling">i</button></p>
+          <div class="opts-grid" id="seqInputs"></div>
+        </div>
+      </section>
+      <div class="step" id="stepRun">
+        <button id="runPlan" class="btn primary big" type="button">Build the plan →</button>
+        <p class="muted" id="runHint">Fills in the Workflow, Reagents &amp; cost, and Protocols tabs. Building auto-saves to the current experiment.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ WORKFLOW TAB ============ -->
+  <section class="panel" id="tab-workflow" role="tabpanel">
+    <div class="wrap" id="workflowContent"><p class="empty">Build a plan first — the workflow diagram and personnel timeline will appear here.</p></div>
+  </section>
+
+  <!-- ============ REAGENTS TAB ============ -->
+  <section class="panel" id="tab-reagents" role="tabpanel">
+    <div class="wrap" id="reagentsContent"><p class="empty">Build a plan first — reagents, quantities, and estimated cost will appear here.</p></div>
+  </section>
+
+  <!-- ============ PROTOCOLS TAB ============ -->
+  <section class="panel" id="tab-protocols" role="tabpanel">
+    <div class="wrap" id="protocolsContent"><p class="empty">Build a plan first — a printable protocol packet will appear here.</p></div>
+  </section>
+
+  <!-- ============ PROJECTS TAB ============ -->
+  <section class="panel is-active" id="tab-projects" role="tabpanel">
+    <div class="wrap" id="manageContent"></div>
+  </section>
+  <section class="panel" id="tab-inventory" role="tabpanel">
+    <div class="wrap" id="inventoryContent"></div>
+  </section>
+
+  <!-- ============ HANDBOOK TAB ============ -->
+  <section class="panel" id="tab-handbook" role="tabpanel">
+    <div class="wrap" id="handbookContent"></div>
+  </section>
+
+  <!-- ============ EQUIPMENT TAB ============ -->
+  <section class="panel" id="tab-scheduling" role="tabpanel">
+    <div id="schedulingContent"></div>
+  </section>
+</main>
+
+<footer class="foot">
+  <span>Reads live from <code id="dataFile">data/SingleCell_Pipeline_MasterSchema.xlsx</code>. Update the spreadsheet to update the tool.</span>
+</footer>
+
+<!-- SheetJS (reads the .xlsx). If this CDN is ever unreachable, see README for how to vendor it locally. -->
+<div id="explainScrim" hidden></div>
+<aside id="explainDrawer" aria-live="polite">
+  <div class="explain-head"><span id="explainTitle"></span><button type="button" id="explainClose" aria-label="Close">×</button></div>
+  <div id="explainBody"></div>
+</aside>
+<script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
+<script src="js/pooling.js"></script>
+<script src="js/parse.js"></script>
+<script src="js/cost.js"></script>
+<script src="js/workflow.js"></script>
+<script src="js/handbook.js"></script>
+<script src="js/store.js"></script>
+<script src="js/scheduling.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>
