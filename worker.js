@@ -11,7 +11,7 @@
  *  1. Google Cloud: create a project, enable the "Google Calendar API".
  *  2. Create a Service Account; create a JSON key; download it.
  *  3. Share EACH equipment calendar with the service account's email
- *     (permission: "Make changes to events").
+ *     (permission: "Make changes to events"). 
  *  4. In this Worker → Settings → Variables and Secrets, add a SECRET named
  *     GOOGLE_SA_KEY whose value is the ENTIRE JSON key file contents.
  *  5. Re-deploy. The key is read only at runtime; it never ships to browsers.
