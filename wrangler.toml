@@ -8,6 +8,10 @@ compatibility_date = "2026-07-01"
 
 # Serve the whole repo as the static site; the Worker (worker.js) intercepts
 # /api/book and passes everything else to these assets via env.ASSETS.
+[vars]
+INVENTORY_SHEET_ID = "1EXC2kdreRnWj5c3ONbNO5US4RI6iWHedCL3SDJxrgbw"
+
+
 [assets]
 directory = "."
 binding = "ASSETS"
