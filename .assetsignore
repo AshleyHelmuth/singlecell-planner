@@ -1,0 +1,7 @@
+.git
+.wrangler
+wrangler.toml
+worker.js
+*.map
+README.md
+CALENDAR_SETUP.md
