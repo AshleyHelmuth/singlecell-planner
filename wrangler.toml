@@ -11,7 +11,6 @@ compatibility_date = "2026-07-01"
 [vars]
 INVENTORY_SHEET_ID = "1EXC2kdreRnWj5c3ONbNO5US4RI6iWHedCL3SDJxrgbw"
 
-
 [assets]
 directory = "."
 binding = "ASSETS"
