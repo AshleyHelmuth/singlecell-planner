@@ -1964,7 +1964,11 @@
     }));
     return {
       nSamples: plan.nSamples, nPools: plan.nPools, arms: (plan.arms || []).slice(), modalities: (plan.modalities || []).slice(),
-      knownTotal: cost.knownTotal, reagents, lineItems, customCols, batches, warnings: (plan.warnings || []).slice()
+      knownTotal: cost.knownTotal, reagents, lineItems, customCols, batches, warnings: (plan.warnings || []).slice(),
+      laneBreakdown: (cost.laneBreakdown || []).map((l) => ({
+        arm: l.arm || l.key, chem: l.chem, population: l.population, laneChem: l.laneChem, lanes: l.lanes,
+        vdj: !!l.vdj, libraries: (l.libraries || []).slice(), label: l.label
+      }))
     };
   }
 

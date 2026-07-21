@@ -319,6 +319,10 @@
       '<div class="wrap sched">' +
       '<h2>Scheduling</h2>' +
       '<section class="sched-block">' +
+      '<h3>Project timing planner</h3>' +
+      '<p class="muted">Plan a whole project\u2019s library prep. Each experiment with a built plan is a \u201cbatch.\u201d Compare running each batch straight through vs. taking all batches to cDNA then prepping libraries together \u2014 see the day-by-day schedule, hands-on time and library count per task, 10x safe stops, and where one person\u2019s 8 h day is exceeded.</p>' +
+      '<div id="projectPlanner"></div>' +
+      '</section>' +
       '<h3>Scheduled experiments</h3>' +
       '<p class="muted">Everything with an experiment date, plus the experiment you\u2019re currently designing (highlighted). The last column shows whether that day\u2019s equipment has been booked here yet.</p>' +
       '<div id="scheduledList"></div>' +
@@ -343,6 +347,7 @@
     renderExpCalendar();
     renderEquipTable();
     renderScheduledList();
+    renderProjectPlanner();
 
     var cal = document.getElementById('expCalendar');
     if (cal) cal.addEventListener('click', onCalClick);
@@ -350,6 +355,83 @@
       if (e.target.id === 'bookEquipBtn') bookEquipment();
       if (e.target.id === 'selectAllEquip') { document.querySelectorAll('.equip-check').forEach(function (c) { c.checked = true; }); }
     });
+  }
+
+  // ---- Project timing planner ----------------------------------------------
+  var plannerProject = '', plannerConfig = 'perBatch';
+  function labelFor(c) { return c === 'perBatch' ? 'per-batch' : 'pooled prep'; }
+  function fmtMin(m) { m = Math.round(m || 0); var h = Math.floor(m / 60), mm = m % 60; return (h ? h + 'h ' : '') + ((mm || !h) ? mm + 'm' : '').trim() || '0m'; }
+
+  function projectBatches(project) {
+    var exps = (root.Store ? root.Store.allExperiments() : []).filter(function (e) {
+      return (e.project || '') === project && e.snapshot && e.snapshot.laneBreakdown && e.snapshot.laneBreakdown.length;
+    });
+    return exps.map(function (e) {
+      return {
+        name: e.name,
+        armLanes: e.snapshot.laneBreakdown.filter(function (l) { return l.lanes > 0; }).map(function (l) {
+          return { arm: { chem: l.chem, population: l.population, vdj: l.vdj }, lanes: l.lanes };
+        })
+      };
+    }).filter(function (b) { return b.armLanes.length; });
+  }
+
+  function wirePlanner() {
+    var ps = document.getElementById('plannerProjectSel');
+    if (ps) ps.onchange = function () { plannerProject = ps.value; renderProjectPlanner(); };
+    var cs = document.getElementById('plannerConfigSel');
+    if (cs) cs.onchange = function () { plannerConfig = cs.value; renderProjectPlanner(); };
+  }
+
+  function renderProjectPlanner() {
+    var host = document.getElementById('projectPlanner');
+    if (!host) return;
+    if (!root.Timing) { host.innerHTML = '<p class="empty">Timing engine not loaded.</p>'; return; }
+    var projects = (root.Store && root.Store.projects) ? (root.Store.projects().names || []) : [];
+    if (!plannerProject && projects.length) plannerProject = projects[0];
+    var projOpts = projects.map(function (p) { return '<option' + (p === plannerProject ? ' selected' : '') + '>' + esc(p) + '</option>'; }).join('');
+    var controls = '<div class="proj-bar">' +
+      '<label>Project <select id="plannerProjectSel">' + (projOpts || '<option value="">(no projects)</option>') + '</select></label>' +
+      '<label style="margin-left:16px">Configuration <select id="plannerConfigSel">' +
+      '<option value="perBatch"' + (plannerConfig === 'perBatch' ? ' selected' : '') + '>Per-batch (each straight through)</option>' +
+      '<option value="pooledPrep"' + (plannerConfig === 'pooledPrep' ? ' selected' : '') + '>Pooled prep (all to cDNA, then one prep)</option>' +
+      '</select></label></div>';
+    if (!plannerProject) { host.innerHTML = controls + '<p class="empty">Create a project and build plans for its experiments first.</p>'; wirePlanner(); return; }
+    var batches = projectBatches(plannerProject);
+    if (!batches.length) {
+      host.innerHTML = controls + '<p class="empty">No experiments in \u201c' + esc(plannerProject) + '\u201d have a built plan with lane counts yet. Build &amp; save a plan for each (re-save older experiments so lane data is captured), then they appear here as batches.</p>';
+      wirePlanner(); return;
+    }
+    var project = { batches: batches };
+    var chosen = root.Timing.schedule(project, { config: plannerConfig });
+    var other = root.Timing.schedule(project, { config: plannerConfig === 'perBatch' ? 'pooledPrep' : 'perBatch' });
+    var totalLibs = Object.keys(chosen.libraries).reduce(function (a, k) { return a + chosen.libraries[k]; }, 0);
+    var cmp = '<div class="cost-headline">' +
+      '<div><span class="ch-num">' + batches.length + '</span><span class="ch-lbl">experiments (batches)</span></div>' +
+      '<div><span class="ch-num">' + chosen.totalDays + '</span><span class="ch-lbl">total days</span></div>' +
+      '<div><span class="ch-num">' + chosen.libPrepSessions + '</span><span class="ch-lbl">library-prep days</span></div>' +
+      '<div><span class="ch-num">' + totalLibs + '</span><span class="ch-lbl">total libraries</span></div>' +
+      '</div>';
+    var libsum = 'Libraries by type: ' + (Object.keys(chosen.libraries).length ? Object.keys(chosen.libraries).map(function (k) { return '<strong>' + chosen.libraries[k] + '</strong> ' + esc(k); }).join(' \u00b7 ') : '\u2014');
+    var altNote = '<p class="muted">Alternative (' + labelFor(plannerConfig === 'perBatch' ? 'pooledPrep' : 'perBatch') + '): <strong>' + other.totalDays + '</strong> days, <strong>' + other.libPrepSessions + '</strong> library-prep day(s).</p>';
+    var dayHtml = chosen.days.map(function (d) {
+      var tasks = d.tasks.map(function (t) {
+        return '<tr><td>' + esc(t.label) + '</td>' +
+          '<td class="num">' + (t.libraries != null ? t.libraries : '\u2014') + '</td>' +
+          '<td class="num">' + fmtMin(t.handsOnMin) + '</td>' +
+          '<td class="num">' + (t.incubMin ? fmtMin(t.incubMin) : '\u2014') + '</td>' +
+          '<td>' + (t.safeStopAfter ? '<span class="rsv rsv-ok">safe stop</span>' : '') + '</td></tr>';
+      }).join('');
+      return '<div class="planner-day' + (d.over ? ' day-over' : '') + '">' +
+        '<h4 style="margin:14px 0 6px">Day ' + d.day + ' \u2014 ' + esc(d.batch || '') +
+        ' <span class="who">' + (d.phase === 'batch' ? 'batch day (exempt from 8 h cap)' : 'library prep') +
+        ' \u00b7 hands-on ' + fmtMin(d.handsOnMin) + (d.over ? '  \u26a0 over 8 h' : '') + '</span></h4>' +
+        '<table class="cost-table"><thead><tr><th>Task</th><th class="num">Libraries</th><th class="num">Hands-on</th><th class="num">Incubation</th><th>Stop</th></tr></thead><tbody>' + tasks + '</tbody></table></div>';
+    }).join('');
+    var warn = chosen.warnings.length ? '<div class="callout warn"><strong>\u26a0 Timing flags:</strong><ul>' + chosen.warnings.map(function (w) { return '<li>' + esc(w) + '</li>'; }).join('') + '</ul></div>' : '';
+    host.innerHTML = controls + cmp + '<p class="muted">' + libsum + '</p>' + altNote + warn + dayHtml +
+      '<p class="muted small">Hands-on time scales with the number of libraries in each step (no cap \u2014 so you can see how big a pooled prep gets); days break only at 10x safe stops; batch days are exempt from the 8 h/person limit. Timings are the lab defaults \u2014 ask Claude to change any. Assumes one person working sequentially; splitting steps across people is the next addition.</p>';
+    wirePlanner();
   }
 
   root.Scheduling = { render: render, EQUIPMENT: EQUIPMENT, mergedEmbedUrl: mergedEmbedUrl, scheduledRows: scheduledRows, bookedByDate: bookedByDate };
