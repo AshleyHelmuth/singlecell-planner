@@ -566,3 +566,12 @@ h3{font-size:15px;margin:22px 0 10px}
 .pm-form{border:1.5px solid var(--purple-200);background:var(--purple-50);border-radius:12px;
   padding:14px 16px;margin:12px 0}
 .pm-form h3{margin:0 0 10px;font-size:15px}
+
+/* Inventory collapsible category sections */
+.inv-cat { margin: 14px 0; border: 1px solid var(--border, #d9dee4); border-radius: 8px; overflow: hidden; }
+.inv-cat > summary { cursor: pointer; padding: 10px 14px; background: #f4f6f8; font-size: 15px; user-select: none; list-style: none; }
+.inv-cat > summary::-webkit-details-marker { display: none; }
+.inv-cat > summary::before { content: '\25B8'; display: inline-block; margin-right: 8px; transition: transform .15s; color: #6a7480; }
+.inv-cat[open] > summary::before { transform: rotate(90deg); }
+.inv-cat > summary .who { font-weight: 400; }
+.inv-cat > table { margin: 0; }

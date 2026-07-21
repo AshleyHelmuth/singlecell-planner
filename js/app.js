@@ -47,6 +47,44 @@
   }
 
   // ---- Load workbook --------------------------------------------------------
+  // Pull the live inventory (kits + reagents) from the Google Sheet via
+  // /api/inventory and normalize into the liveInventory item shape used by the
+  // inventory engine. Falls back silently to the workbook's Live_Inventory tab
+  // if the endpoint isn't reachable (e.g. running the bundled file locally).
+  async function loadLiveInventory() {
+    try {
+      const r = await fetch('/api/inventory');
+      if (!r.ok) return;
+      const d = await r.json();
+      if (!d || !d.ok || d.configured === false) return;
+      const num = (v) => { if (v == null || v === '') return null; const n = Number(String(v).replace(/[^0-9.\-]/g, '')); return isFinite(n) ? n : null; };
+      const kits = (d.kits || []).map((k) => ({
+        id: String(k['Catalog #'] || '').trim(), name: k['Description'] || '', category: '10X Kits',
+        container: 'kit', packSize: 1, usageUnit: 'kit', unit: 'kit',
+        currentUnits: num(k['On hand (kits)']), currentContainers: num(k['On hand (kits)']), currentStock: num(k['On hand (kits)']),
+        minStock: num(k['Reorder at']), orderStatus: k['Order status'] || '', location: k['Storage'] || '',
+        reservedForProject: String(k['Reserved for'] || '').trim(), lots: k['Lot #(s)'] || '', expiry: k['Earliest expiry'] || '', notes: k['Notes'] || ''
+      })).filter((x) => x.id);
+      const reagents = (d.reagents || []).map((r2) => {
+        const pack = num(r2['Pack size']) || 1;
+        let cu = num(r2['On hand (units)']); const cc = num(r2['On hand (containers)']);
+        if (cu == null && cc != null) cu = cc * pack;
+        const cat = String(r2['Category'] || 'Reagent').trim();
+        return {
+          id: String(r2['item_id'] || '').trim(), name: r2['Item'] || '', category: (cat === 'Supply' ? 'Supplies' : 'Reagents'),
+          container: r2['Container'] || '', packSize: pack, usageUnit: r2['Unit'] || '', unit: r2['Unit'] || '',
+          currentUnits: cu, currentContainers: (cc != null ? cc : (cu != null && pack ? cu / pack : null)), currentStock: cu,
+          minStock: num(r2['Reorder at']), orderStatus: r2['Order status'] || '', location: r2['Location'] || '',
+          reservedForProject: '', lots: '', expiry: '', notes: r2['Notes'] || ''
+        };
+      }).filter((x) => x.id);
+      if (kits.length || reagents.length) {
+        DATA.liveInventory = kits.concat(reagents);
+        DATA.inventorySource = 'live';
+      }
+    } catch (e) { /* keep workbook fallback */ }
+  }
+
   async function loadData() {
     const status = $('#dataStatus');
     try {
@@ -55,6 +93,7 @@
       const buf = await resp.arrayBuffer();
       const wb = XLSX.read(buf, { type: 'array' });
       DATA = SchemaParse.parseWorkbook(wb);
+      await loadLiveInventory();
       status.textContent = DATA.modalities.length + ' modalities · ' + DATA.kits.length + ' kits loaded';
       status.classList.add('ok');
       $('#handbookContent').innerHTML = HandbookContent.handbookHTML;
@@ -2260,6 +2299,8 @@
         onHandUnits: onHandUnits, onHandContainers: known ? onHandUnits / pack : null,
         reserved: res, availableUnits: availUnits, availableContainers: availUnits / pack,
         threshold: thr, orderStatus: it.orderStatus || '', location: it.location || '',
+        category: it.category || 'Reagents', reservedForProject: it.reservedForProject || '',
+        lots: it.lots || '', expiry: it.expiry || '',
         status: status, known: known, toOrder: toOrder, reservedBy: reservedBy[it.id] || [] };
     });
     return { items: items, reservingExps: reservingExps, deductedExps: deductedExps, idleExps: idleExps,
@@ -2320,8 +2361,14 @@
           (i.threshold ? ', reorder at ' + fmtQ(i.threshold) : '') + ')' +
           (i.orderStatus ? ' \u00b7 ' + esc(i.orderStatus) : '') + '</li>').join('') + '</ul></div>'
       : '<div class="callout info">All tracked items are above their reorder thresholds.</div>';
-    const rows = sorted.map((i) => '<tr>' +
-      '<td>' + esc(i.name) + ' <span class="who">' + esc(i.id) + '</span></td>' +
+    const invRow = (i) => '<tr>' +
+      '<td>' + esc(i.name) + ' <span class="who">' + esc(i.id) + '</span>' +
+        ((i.category === '10X Kits' && (i.reservedForProject || i.expiry || i.lots))
+          ? '<div class="who">' +
+              (i.reservedForProject ? 'reserved for ' + esc(i.reservedForProject) : '') +
+              (i.expiry ? (i.reservedForProject ? ' \u00b7 ' : '') + 'exp ' + esc(i.expiry) : '') +
+              (i.lots ? ' \u00b7 lot ' + esc(i.lots) : '') + '</div>'
+          : '') + '</td>' +
       '<td class="num">' + (i.known
         ? '<strong>' + fmtQ(i.onHandUnits) + '</strong> ' + esc(i.usageUnit) + (i.hasContainers ? '<div class="who">' + fmt1(i.onHandUnits / i.packSize) + ' ' + esc(i.container) + '</div>' : '')
         : '\u2014') + '</td>' +
@@ -2330,7 +2377,20 @@
       '<td class="num">' + (i.toOrder > 0 ? '<strong>' + fmtQ(i.toOrder) + '</strong> ' + orderUnit(i) : '\u2014') + '</td>' +
       '<td class="num">' + (i.threshold ? fmtQ(i.threshold) + ' ' + esc(i.usageUnit) : '\u2014') + '</td>' +
       '<td>' + badge(i.status) + '</td>' +
-      '<td class="src">' + esc(i.location || i.orderStatus || '') + '</td></tr>').join('');
+      '<td class="src">' + esc(i.location || i.orderStatus || '') + '</td></tr>';
+
+    const CAT_ORDER = ['10X Kits', 'Reagents', 'Supplies'];
+    const byCat = {};
+    sorted.forEach((i) => { const c = i.category || 'Reagents'; (byCat[c] = byCat[c] || []).push(i); });
+    const cats = CAT_ORDER.filter((c) => byCat[c]).concat(Object.keys(byCat).filter((c) => CAT_ORDER.indexOf(c) === -1));
+    const invHead = '<thead><tr><th>Item</th><th class="num">On hand</th><th class="num">Reserved</th><th class="num">Available</th><th class="num">To order</th><th class="num">Threshold</th><th>Status</th><th>Location / order</th></tr></thead>';
+    const invSections = cats.map((c) => {
+      const list = byCat[c];
+      const toOrderN = list.filter((i) => i.toOrder > 0).length;
+      return '<details class="inv-cat" open><summary><strong>' + esc(c) + '</strong> <span class="who">' + list.length + ' item' + (list.length === 1 ? '' : 's') +
+        (toOrderN ? ' \u00b7 ' + toOrderN + ' to order' : '') + '</span></summary>' +
+        '<table class="cost-table">' + invHead + '<tbody>' + list.map(invRow).join('') + '</tbody></table></details>';
+    }).join('');
     const expMetaCols = (e) =>
       '<td class="num">' + (e.snapshot ? e.snapshot.nSamples : '\u2014') + '</td>' +
       '<td>' + esc(e.project || '\u2014') + '</td>' +
@@ -2368,8 +2428,7 @@
         '<div><span class="ch-num">' + st.plannedCount + '</span><span class="ch-lbl">experiments reserving stock</span></div>' +
       '</div>' + orderCallout +
       '<p class="muted">Stock is drawn down in <strong>usage units</strong> (tubes / mL / reactions); <strong>To order</strong> is rounded up to whole <strong>containers</strong> (bag / kit / vial / bottle) using each item\u2019s pack size. On hand = starting stock + received \u2212 used (completed experiments). Reserved = demand from reserving experiments. Available = on hand \u2212 reserved. Set pack_size, container, and min_stock_threshold per item in the Live_Inventory sheet.</p>' +
-      '<table class="cost-table"><thead><tr><th>Item</th><th class="num">On hand</th><th class="num">Reserved</th><th class="num">Available</th><th class="num">To order</th><th class="num">Threshold</th><th>Status</th><th>Location / order</th></tr></thead><tbody>' +
-      rows + '</tbody></table>' +
+      invSections +
       '<h3 style="margin-top:28px">Reserved by experiment</h3>' +
       '<p class="muted">Planned experiments holding stock. Removing a reservation frees its reagents back to Available without deleting the experiment.</p>' +
       resTable + addReserve +
