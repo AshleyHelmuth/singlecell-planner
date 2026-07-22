@@ -426,9 +426,19 @@
 
     // Merge rows for the same reagent used at multiple scopes (e.g. PBS at pool
     // and super-pool level), then work out an order quantity per reagent.
+    // Treat count-unit synonyms (each/tube/vial/...) as the same unit when
+    // merging, so an item entered with mixed count words across sections (e.g.
+    // eppendorf as "each" in one section and "tube" in another) collapses into a
+    // single reagent line whose Total needed = the item's full demand. This
+    // keeps the reagents list aligned with the inventory reservation (which sums
+    // an item across all its uses).
+    function normUnit(u) {
+      var s = (u || '').toLowerCase().trim();
+      return /^(each|ea|tube|tubes|vial|vials|strip|strips|plate|plates|strainer|strainers|cap|caps|tip|tips|bottle|bottles|aliquot|aliquots|well|wells)$/.test(s) ? 'ct' : s;
+    }
     const merged = {};
     reagents.forEach((r) => {
-      const key = (r.itemId || r.reagent) + '|' + (r.units || '');
+      const key = (r.itemId || r.reagent) + '|' + normUnit(r.units);
       if (!merged[key]) { merged[key] = Object.assign({}, r, { scopes: [r.scope] }); }
       else {
         const m = merged[key];

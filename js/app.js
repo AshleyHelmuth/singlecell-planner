@@ -2225,15 +2225,42 @@
   }
 
   // ---- inventory ------------------------------------------------------------
+  // Convert an amount between compatible units (volume µL/mL/L or mass µg/mg/g).
+  // Same/blank units or incompatible kinds -> returned unchanged (never guess).
+  function invUnitKind(u) {
+    const s = (u || '').toLowerCase().trim();
+    if (/^(µl|ul|microl)/.test(s)) return { k: 'vol', f: 1e-6 };
+    if (/^ml\b|^milli/.test(s)) return { k: 'vol', f: 1e-3 };
+    if (/^l\b|^liter|^litre/.test(s)) return { k: 'vol', f: 1 };
+    if (/^(µg|ug|microg)/.test(s)) return { k: 'mass', f: 1e-6 };
+    if (/^mg\b/.test(s)) return { k: 'mass', f: 1e-3 };
+    if (/^g\b|^gram/.test(s)) return { k: 'mass', f: 1 };
+    return null;
+  }
+  function convToUnit(amount, fromU, toU) {
+    if (amount == null) return amount;
+    const a = (fromU || '').toLowerCase().trim(), b = (toU || '').toLowerCase().trim();
+    if (!a || !b || a === b) return amount;
+    const fa = invUnitKind(a), fb = invUnitKind(b);
+    if (fa && fb && fa.k === fb.k) return amount * fa.f / fb.f;
+    return amount; // incompatible or count units -> leave as-is
+  }
+
   function computeExperimentUsage(rec) {
     const inv = {}; ((DATA && DATA.liveInventory) || []).forEach((i) => { inv[i.id] = i; });
     const usage = [];
     const s = rec.snapshot || {};
     (s.reagents || []).forEach((r) => {
       if (!r.itemId || !inv[r.itemId]) return;
-      const amt = (r.quantity != null) ? r.quantity : r.totalAmount;
+      // Reserve the ACTUAL amount consumed ("Total needed"), NOT the rounded-up
+      // order/purchase quantity — otherwise a tiny reagent (e.g. a few µL of
+      // digitonin) would reserve a whole vial. Convert into the inventory item's
+      // unit so the reservation lines up with on-hand.
+      const invUnit = inv[r.itemId].unit || inv[r.itemId].usageUnit || '';
+      let amt = (r.totalAmount != null) ? convToUnit(r.totalAmount, r.units, invUnit)
+        : (r.quantity != null ? r.quantity : null);
       if (amt == null) return;
-      usage.push({ itemId: r.itemId, itemName: inv[r.itemId].name || r.reagent, unit: inv[r.itemId].unit || (r.quantityUnit || r.units || ''), amount: amt });
+      usage.push({ itemId: r.itemId, itemName: inv[r.itemId].name || r.reagent, unit: invUnit || (r.units || ''), amount: amt });
     });
     (s.lineItems || []).forEach((li) => {
       if (li.category !== '10x kits' || !li.itemId || !inv[li.itemId]) return;

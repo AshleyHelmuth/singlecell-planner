@@ -262,6 +262,116 @@ async function handleInventoryPost(request, env) {
   } catch (e) { return json({ error: 'exception', message: (e && e.message) || String(e) }, 500); }
 }
 
+/* ===========================================================================
+ * EXPERIMENTS  —  shared experiment store in a Google Sheet (source of truth).
+ * GET  /api/experiments                     -> { experiments:[...], projects:[...] }
+ * POST /api/experiments {action:'upsert', record:{...}}   (writes only that row)
+ * POST /api/experiments {action:'delete', id}             (moves row to Trash)
+ * POST /api/experiments {action:'saveProject', project:{name,owner,notes}}
+ * Reads env.GOOGLE_SA_KEY (reused) + env.EXPERIMENTS_SHEET_ID.
+ * Surgical: upsert/delete find the one row by id and rewrite only that row.
+ * =========================================================================== */
+const EXP_TAB = 'Experiments', EXP_TRASH = 'Trash', PROJ_TAB = 'Projects';
+const EXP_COLS = 12; // id..record_json
+
+function expRow(rec) {
+  const s = rec.snapshot || {};
+  const arms = Array.isArray(s.arms) ? s.arms.join(', ') : '';
+  const mods = Array.isArray(s.modalities) ? s.modalities.join(', ') : '';
+  return [
+    rec.id || '', rec.project || '', rec.name || '', rec.status || '',
+    (s.nSamples != null ? s.nSamples : ''), (s.nPools != null ? s.nPools : ''),
+    arms, mods, (s.knownTotal != null ? s.knownTotal : ''),
+    rec.createdAt || '', rec.updatedAt || '', JSON.stringify(rec)
+  ];
+}
+
+async function sheetsUpdateRow(token, sheetId, rangeA1, valuesRow) {
+  const r = await fetch('https://sheets.googleapis.com/v4/spreadsheets/' + sheetId + '/values/' + encodeURIComponent(rangeA1) + '?valueInputOption=USER_ENTERED',
+    { method: 'PUT', headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' }, body: JSON.stringify({ values: [valuesRow] }) });
+  const d = await r.json();
+  if (!r.ok) throw new Error('sheets row update failed: ' + JSON.stringify(d));
+  return d;
+}
+
+async function handleExperimentsGet(env) {
+  try {
+    if (!env.GOOGLE_SA_KEY) return json({ error: 'not_configured' }, 503);
+    if (!env.EXPERIMENTS_SHEET_ID) return json({ error: 'no_sheet', message: 'EXPERIMENTS_SHEET_ID not set' }, 503);
+    const token = await invToken(env);
+    const vr = await sheetsBatchGet(token, env.EXPERIMENTS_SHEET_ID, [EXP_TAB, PROJ_TAB]);
+    const expItems = rowsToObjects(vr[0] ? vr[0].values : []).items;
+    const experiments = [];
+    expItems.forEach((o) => {
+      const jsonStr = o['record_json'];
+      if (!jsonStr) return;
+      try { experiments.push(JSON.parse(jsonStr)); } catch (e) { /* skip malformed */ }
+    });
+    const projects = rowsToObjects(vr[1] ? vr[1].values : []).items
+      .filter((p) => p['name'])
+      .map((p) => ({ name: p['name'], owner: p['Owner'] || '', notes: p['Notes'] || '', createdAt: p['Created'] || '', updatedAt: p['Updated'] || '' }));
+    return json({ ok: true, configured: true, experiments: experiments, projects: projects });
+  } catch (e) { return json({ error: 'exception', message: (e && e.message) || String(e) }, 500); }
+}
+
+async function findRowById(token, sheetId, tab, id) {
+  const vr = await sheetsBatchGet(token, sheetId, [tab]);
+  const { items } = rowsToObjects(vr[0] ? vr[0].values : []);
+  const it = items.find((o) => String(o['id']).trim() === String(id).trim());
+  return it ? it.__row : null;
+}
+
+async function handleExperimentsPost(request, env) {
+  try {
+    if (!env.GOOGLE_SA_KEY) return json({ error: 'not_configured' }, 503);
+    if (!env.EXPERIMENTS_SHEET_ID) return json({ error: 'no_sheet' }, 503);
+    let body; try { body = await request.json(); } catch (e) { return json({ error: 'bad_json' }, 400); }
+    const id = env.EXPERIMENTS_SHEET_ID;
+    const token = await invToken(env);
+
+    if (body.action === 'upsert') {
+      const rec = body.record;
+      if (!rec || !rec.id) return json({ error: 'missing_record_or_id' }, 400);
+      const row = expRow(rec);
+      const existing = await findRowById(token, id, EXP_TAB, rec.id);       // read-before-write
+      if (existing) {
+        await sheetsUpdateRow(token, id, qtab(EXP_TAB) + '!A' + existing + ':' + colLetter(EXP_COLS) + existing, row);
+        return json({ ok: true, updated: rec.id, row: existing });
+      }
+      await sheetsAppend(token, id, EXP_TAB, [row]);
+      return json({ ok: true, appended: rec.id });
+    }
+
+    if (body.action === 'delete') {
+      if (!body.id) return json({ error: 'missing_id' }, 400);
+      const vr = await sheetsBatchGet(token, id, [EXP_TAB]);
+      const { items } = rowsToObjects(vr[0] ? vr[0].values : []);
+      const it = items.find((o) => String(o['id']).trim() === String(body.id).trim());
+      if (!it) return json({ ok: true, deleted: body.id, note: 'not found (already gone)' });
+      // move to Trash, then clear the source row (recoverable)
+      await sheetsAppend(token, id, EXP_TRASH, [[it['id'], it['Project'], it['Experiment'], it['Status'], new Date().toISOString(), it['record_json']]]);
+      const blank = new Array(EXP_COLS).fill('');
+      await sheetsUpdateRow(token, id, qtab(EXP_TAB) + '!A' + it.__row + ':' + colLetter(EXP_COLS) + it.__row, blank);
+      return json({ ok: true, deleted: body.id, trashed: true });
+    }
+
+    if (body.action === 'saveProject') {
+      const p = body.project || {};
+      if (!p.name) return json({ error: 'missing_name' }, 400);
+      const now = new Date().toISOString();
+      const vr = await sheetsBatchGet(token, id, [PROJ_TAB]);
+      const { items } = rowsToObjects(vr[0] ? vr[0].values : []);
+      const it = items.find((o) => String(o['name']).trim() === String(p.name).trim());
+      const rowVals = [p.name, p.owner || '', (it ? it['Created'] : now) || now, now, p.notes || ''];
+      if (it) await sheetsUpdateRow(token, id, qtab(PROJ_TAB) + '!A' + it.__row + ':E' + it.__row, rowVals);
+      else await sheetsAppend(token, id, PROJ_TAB, [rowVals]);
+      return json({ ok: true, project: p.name });
+    }
+
+    return json({ error: 'unknown_action', action: body.action }, 400);
+  } catch (e) { return json({ error: 'exception', message: (e && e.message) || String(e) }, 500); }
+}
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
@@ -273,6 +383,11 @@ export default {
     if (url.pathname === '/api/inventory') {
       if (request.method === 'GET') return handleInventoryGet(env);
       if (request.method === 'POST') return handleInventoryPost(request, env);
+      return json({ error: 'method_not_allowed' }, 405);
+    }
+    if (url.pathname === '/api/experiments') {
+      if (request.method === 'GET') return handleExperimentsGet(env);
+      if (request.method === 'POST') return handleExperimentsPost(request, env);
       return json({ error: 'method_not_allowed' }, 405);
     }
     // Any non-API path: serve the static site files.
