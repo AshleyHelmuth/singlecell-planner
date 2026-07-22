@@ -171,7 +171,7 @@ async function sheetsUpdateCell(token, sheetId, range, value) {
   return d;
 }
 async function sheetsAppend(token, sheetId, tab, values) {
-  const r = await fetch('https://sheets.googleapis.com/v4/spreadsheets/' + sheetId + '/values/' + encodeURIComponent(qtab(tab) + '!A1') + ':append?valueInputOption=USER_ENTERED&insertDataOption=INSERT_ROWS',
+  const r = await fetch('https://sheets.googleapis.com/v4/spreadsheets/' + sheetId + '/values/' + encodeURIComponent(qtab(tab) + '!A1') + ':append?valueInputOption=USER_ENTERED&insertDataOption=OVERWRITE',
     { method: 'POST', headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' }, body: JSON.stringify({ values: values }) });
   const d = await r.json();
   if (!r.ok) throw new Error('sheets append failed: ' + JSON.stringify(d));

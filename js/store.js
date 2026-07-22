@@ -57,12 +57,18 @@
   function _exp() { if (EXP_CACHE === null) EXP_CACHE = readArr(EXP_KEY); return EXP_CACHE; }
   function _proj() { if (PROJ_CACHE === null) PROJ_CACHE = readArr(PROJ_KEY); return PROJ_CACHE; }
 
+  var _driveQueue = Promise.resolve();
   function drivePost(payload) {
     if (!DRIVE_READY) return Promise.resolve(); // never push if we never connected
-    return fetch('/api/experiments', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload)
-    }).then(function (r) { if (!r.ok) console.warn('[experiments] sync failed', payload.action, r.status); })
-      .catch(function (e) { console.warn('[experiments] sync error', payload.action, e); });
+    // Chain writes so rapid saves for the same id can't race (each read-before-
+    // write completes before the next begins).
+    _driveQueue = _driveQueue.then(function () {
+      return fetch('/api/experiments', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload)
+      }).then(function (r) { if (!r.ok) console.warn('[experiments] sync failed', payload.action, r.status); })
+        .catch(function (e) { console.warn('[experiments] sync error', payload.action, e); });
+    });
+    return _driveQueue;
   }
 
   // Pull the shared experiments/projects from Drive into the cache.
