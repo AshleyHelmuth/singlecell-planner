@@ -44,8 +44,48 @@
   }
   function nowIso() { return new Date().toISOString(); }
 
+  // ---- Drive-backed cache ---------------------------------------------------
+  // Experiments/projects live in a Google Sheet (source of truth). On load we
+  // hydrate an in-memory cache from /api/experiments; the synchronous API below
+  // reads that cache, and every write mirrors to Drive in the background
+  // (read-before-write is handled server-side, one row at a time). localStorage
+  // is kept only as an offline cache/fallback.
+  var EXP_CACHE = null;   // null = not hydrated yet
+  var PROJ_CACHE = null;
+  var DRIVE_READY = false;
+
+  function _exp() { if (EXP_CACHE === null) EXP_CACHE = readArr(EXP_KEY); return EXP_CACHE; }
+  function _proj() { if (PROJ_CACHE === null) PROJ_CACHE = readArr(PROJ_KEY); return PROJ_CACHE; }
+
+  function drivePost(payload) {
+    if (!DRIVE_READY) return Promise.resolve(); // never push if we never connected
+    return fetch('/api/experiments', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload)
+    }).then(function (r) { if (!r.ok) console.warn('[experiments] sync failed', payload.action, r.status); })
+      .catch(function (e) { console.warn('[experiments] sync error', payload.action, e); });
+  }
+
+  // Pull the shared experiments/projects from Drive into the cache.
+  function hydrateFromDrive() {
+    return fetch('/api/experiments').then(function (r) {
+      if (!r.ok) throw new Error('http ' + r.status);
+      return r.json();
+    }).then(function (d) {
+      if (!d || !d.ok) throw new Error('bad response');
+      EXP_CACHE = Array.isArray(d.experiments) ? d.experiments : [];
+      PROJ_CACHE = Array.isArray(d.projects) ? d.projects : [];
+      DRIVE_READY = true;
+      writeArr(EXP_KEY, EXP_CACHE); writeArr(PROJ_KEY, PROJ_CACHE); // mirror offline
+      return { ok: true, source: 'drive', experiments: EXP_CACHE.length };
+    }).catch(function (e) {
+      EXP_CACHE = readArr(EXP_KEY); PROJ_CACHE = readArr(PROJ_KEY); DRIVE_READY = false;
+      console.warn('[experiments] using local cache (Drive unavailable):', e && e.message);
+      return { ok: false, source: 'local', experiments: EXP_CACHE.length };
+    });
+  }
+
   // ---- Experiments ----------------------------------------------------------
-  function allExperiments() { return readArr(EXP_KEY); }
+  function allExperiments() { return _exp(); }
 
   function getExperiment(id) {
     return allExperiments().filter(function (e) { return e.id === id; })[0] || null;
@@ -53,7 +93,7 @@
 
   // Insert or update. If rec.id exists it is replaced; otherwise a new id is set.
   function saveExperiment(rec) {
-    var arr = allExperiments();
+    var arr = _exp();
     if (!rec.id) rec.id = uuid();
     if (!rec.createdAt) rec.createdAt = nowIso();
     rec.updatedAt = nowIso();
@@ -61,13 +101,16 @@
     for (var i = 0; i < arr.length; i++) { if (arr[i].id === rec.id) { idx = i; break; } }
     if (idx >= 0) arr[idx] = rec; else arr.push(rec);
     writeArr(EXP_KEY, arr);
+    drivePost({ action: 'upsert', record: rec });
     return rec;
   }
 
   function deleteExperiment(id) {
-    writeArr(EXP_KEY, allExperiments().filter(function (e) { return e.id !== id; }));
-    // also drop that experiment's inventory transactions
+    EXP_CACHE = _exp().filter(function (e) { return e.id !== id; });
+    writeArr(EXP_KEY, EXP_CACHE);
+    // also drop that experiment's inventory transactions (local)
     writeArr(TX_KEY, allTransactions().filter(function (t) { return t.experimentId !== id; }));
+    drivePost({ action: 'delete', id: id });
   }
 
   // Distinct project names (non-empty), sorted, plus a flag for "unfiled".
@@ -97,13 +140,13 @@
   // ---- Project metadata (name + owner) --------------------------------------
   // Projects are still linked to experiments by the experiment.project name; this
   // store just holds per-project metadata (owner) and lets empty projects exist.
-  function allProjects() { return readArr(PROJ_KEY); }
+  function allProjects() { return _proj(); }
   function getProject(name) {
     var t = (name || '').trim();
     return allProjects().filter(function (p) { return (p.name || '') === t; })[0] || null;
   }
   function saveProject(rec) {
-    var arr = allProjects();
+    var arr = _proj();
     rec.name = (rec.name || '').trim();
     if (!rec.name) return null;
     if (!rec.createdAt) rec.createdAt = nowIso();
@@ -112,11 +155,13 @@
     for (var i = 0; i < arr.length; i++) { if ((arr[i].name || '') === rec.name) { idx = i; break; } }
     if (idx >= 0) arr[idx] = rec; else arr.push(rec);
     writeArr(PROJ_KEY, arr);
+    drivePost({ action: 'saveProject', project: { name: rec.name, owner: rec.owner || '', notes: rec.notes || '' } });
     return rec;
   }
   function deleteProject(name) {
     var t = (name || '').trim();
-    writeArr(PROJ_KEY, allProjects().filter(function (p) { return (p.name || '') !== t; }));
+    PROJ_CACHE = _proj().filter(function (p) { return (p.name || '') !== t; });
+    writeArr(PROJ_KEY, PROJ_CACHE);
   }
 
   // ---- Inventory transactions ----------------------------------------------
@@ -178,6 +223,7 @@
 
   var api = {
     uuid: uuid,
+    hydrateFromDrive: hydrateFromDrive,
     allExperiments: allExperiments, getExperiment: getExperiment,
     saveExperiment: saveExperiment, deleteExperiment: deleteExperiment,
     projects: projects, experimentsInProject: experimentsInProject,

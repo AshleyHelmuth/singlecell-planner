@@ -2754,9 +2754,23 @@
       if (e.target.id === 'clearPoolingOverrideInline') { POOL_OVERRIDE = null; runComputePooling(); }
     });
 
-    // experiments / projects
+    // experiments / projects — hydrate from the shared Drive store first, then render
+    Store.hydrateFromDrive().then((res) => {
+      renderManage();
+      updatePlanExpBar();
+      if (typeof refreshProjectDatalist === 'function') refreshProjectDatalist();
+      if (!res.ok) console.warn('[experiments] Drive store unavailable; using local cache.');
+    });
     renderManage();
     updatePlanExpBar();
+    // keep an open tab in sync with others' changes: re-pull when it regains focus
+    let _lastSync = Date.now();
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible' && Date.now() - _lastSync > 5000) {
+        _lastSync = Date.now();
+        Store.hydrateFromDrive().then(() => { renderManage(); updatePlanExpBar(); });
+      }
+    });
     const sp = $('#savePlanBtn'); if (sp) sp.addEventListener('click', saveExperimentUI);
     const bp = $('#backToProjectsBtn'); if (bp) bp.addEventListener('click', () => { $('.tab[data-tab="projects"]').click(); });
   });
