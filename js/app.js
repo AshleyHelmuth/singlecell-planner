@@ -1433,6 +1433,7 @@
         rec.state = serializeState();
         rec.snapshot = buildSnapshot(res);
         Store.saveExperiment(rec);
+        exportExperimentToDrive(rec);
         renderManage();
         updatePlanExpBar();
         flashSaveStatus('Saved \u201c' + rec.name + '\u201d.', true);
@@ -2182,9 +2183,49 @@
   }
 
   // ---- per-experiment workbook (pooling + reagents + pricing + summary) ------
+  // ---- Drive export ---------------------------------------------------------
+  const XLSX_MIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+  const GSHEET_MIME = 'application/vnd.google-apps.spreadsheet';
+  const HTML_MIME = 'text/html';
+  const GDOC_MIME = 'application/vnd.google-apps.document';
+
+  function wbBase64(wb) { return XLSX.write(wb, { bookType: 'xlsx', type: 'base64' }); }
+  function htmlBase64(html) { return btoa(unescape(encodeURIComponent(html))); }
+  function driveApi(payload) {
+    return fetch('/api/drive', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) }).then((r) => r.json());
+  }
+
+  // Auto-export a built experiment's artifacts to its Drive folder as native
+  // Google files. Fire-and-forget from the build; logs but never blocks the UI.
+  async function exportExperimentToDrive(rec) {
+    try {
+      if (!rec || !rec.snapshot) return;
+      const project = rec.project || 'Unfiled';
+      const path = await driveApi({ action: 'ensurePath', project: project, experiment: rec.name || 'Experiment' });
+      if (!path || !path.ok || !path.experimentId) { console.warn('[drive] ensurePath failed', path); return; }
+      if (rec.driveFolderId !== path.experimentId) {
+        rec.driveFolderId = path.experimentId; rec.driveProjectId = path.projectId; Store.saveExperiment(rec);
+      }
+      // Experiment summary (Summary + Pooling + Reagents + Pricing) -> Google Sheet
+      await driveApi({ action: 'upload', name: 'Experiment summary', folderId: path.experimentId,
+        base64: wbBase64(buildExperimentWb(rec)), sourceMime: XLSX_MIME, targetMime: GSHEET_MIME });
+      // Protocol packet (rendered HTML) -> Google Doc
+      const protoEl = document.getElementById('protocolsContent');
+      if (protoEl && protoEl.innerHTML.trim()) {
+        const html = '<html><head><meta charset="utf-8"></head><body>' + protoEl.innerHTML + '</body></html>';
+        await driveApi({ action: 'upload', name: 'Protocol', folderId: path.experimentId,
+          base64: htmlBase64(html), sourceMime: HTML_MIME, targetMime: GDOC_MIME });
+      }
+      console.log('[drive] exported', project + '/' + (rec.name || 'Experiment'));
+    } catch (e) { console.warn('[drive] export error', e); }
+  }
+
   function experimentWorkbookXlsx(id) {
     const rec = Store.getExperiment(id);
     if (!rec || !rec.snapshot) { alert('Open this experiment and Save it after building the plan, then export.'); return; }
+    XLSX.writeFile(buildExperimentWb(rec), 'experiment_' + projectLabel(rec.name) + '.xlsx');
+  }
+  function buildExperimentWb(rec) {
     const s = rec.snapshot;
     const wb = XLSX.utils.book_new();
 
@@ -2221,7 +2262,7 @@
     const wsC = XLSX.utils.aoa_to_sheet(priceRows); wsC['!cols'] = [{ wch: 24 }, { wch: 34 }, { wch: 9 }, { wch: 13 }, { wch: 12 }, { wch: 13 }, { wch: 12 }];
     XLSX.utils.book_append_sheet(wb, wsC, 'Pricing');
 
-    XLSX.writeFile(wb, 'experiment_' + projectLabel(rec.name) + '.xlsx');
+    return wb;
   }
 
   // ---- inventory ------------------------------------------------------------
@@ -2684,7 +2725,7 @@
       if (act === 'open') openExperiment(id);
       else if (act === 'reschedule') { CURRENT_EXP_ID = id; updatePlanExpBar(); $('.tab[data-tab="scheduling"]').click(); if (window.Scheduling) Scheduling.render($('#schedulingContent')); }
       else if (act === 'inv') recordInventoryUI(id);
-      else if (act === 'del') { const r = Store.getExperiment(id); if (r && confirm('Delete \u201c' + r.name + '\u201d? This cannot be undone.')) { if (CURRENT_EXP_ID === id) { CURRENT_EXP_ID = null; updatePlanExpBar(); } Store.deleteExperiment(id); renderManage(); } }
+      else if (act === 'del') { const r = Store.getExperiment(id); if (r && confirm('Delete \u201c' + r.name + '\u201d? This cannot be undone.')) { if (CURRENT_EXP_ID === id) { CURRENT_EXP_ID = null; updatePlanExpBar(); } const folder = r.driveFolderId; Store.deleteExperiment(id); if (folder) driveApi({ action: 'trash', id: folder }).catch(() => {}); renderManage(); } }
       else if (act === 'packet') experimentWorkbookXlsx(id);
       else if (act === 'protocols') openExperimentProtocols(id);
       else if (act === 'labels') { openExperiment(id); generateTubeLabels(); }
