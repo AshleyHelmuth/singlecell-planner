@@ -272,18 +272,29 @@ async function handleInventoryPost(request, env) {
  * Surgical: upsert/delete find the one row by id and rewrite only that row.
  * =========================================================================== */
 const EXP_TAB = 'Experiments', EXP_TRASH = 'Trash', PROJ_TAB = 'Projects';
-const EXP_COLS = 12; // id..record_json
+const EXP_META = 11;          // id..Updated (human-readable columns)
+const EXP_CHUNK = 12;         // JSON chunk columns (12 x 45k = ~540k chars capacity)
+const EXP_WIDTH = EXP_META + EXP_CHUNK; // 18 -> column R
+const CHUNK_SIZE = 45000;     // safely under the 50,000-char/cell Sheets limit
+
+function chunkJson(str) {
+  const out = [];
+  for (let i = 0; i < str.length; i += CHUNK_SIZE) out.push(str.slice(i, i + CHUNK_SIZE));
+  while (out.length < EXP_CHUNK) out.push('');
+  return out.slice(0, EXP_CHUNK);
+}
 
 function expRow(rec) {
   const s = rec.snapshot || {};
   const arms = Array.isArray(s.arms) ? s.arms.join(', ') : '';
   const mods = Array.isArray(s.modalities) ? s.modalities.join(', ') : '';
-  return [
+  const meta = [
     rec.id || '', rec.project || '', rec.name || '', rec.status || '',
     (s.nSamples != null ? s.nSamples : ''), (s.nPools != null ? s.nPools : ''),
     arms, mods, (s.knownTotal != null ? s.knownTotal : ''),
-    rec.createdAt || '', rec.updatedAt || '', JSON.stringify(rec)
+    rec.createdAt || '', rec.updatedAt || ''
   ];
+  return meta.concat(chunkJson(JSON.stringify(rec)));
 }
 
 async function sheetsUpdateRow(token, sheetId, rangeA1, valuesRow) {
@@ -300,13 +311,15 @@ async function handleExperimentsGet(env) {
     if (!env.EXPERIMENTS_SHEET_ID) return json({ error: 'no_sheet', message: 'EXPERIMENTS_SHEET_ID not set' }, 503);
     const token = await invToken(env);
     const vr = await sheetsBatchGet(token, env.EXPERIMENTS_SHEET_ID, [EXP_TAB, PROJ_TAB]);
-    const expItems = rowsToObjects(vr[0] ? vr[0].values : []).items;
+    const rows = (vr[0] && vr[0].values) ? vr[0].values : [];
     const experiments = [];
-    expItems.forEach((o) => {
-      const jsonStr = o['record_json'];
-      if (!jsonStr) return;
+    for (let r = 1; r < rows.length; r++) {           // skip header row
+      const row = rows[r] || [];
+      if (!row[0]) continue;                          // blank/cleared row
+      const jsonStr = row.slice(EXP_META, EXP_WIDTH).join('');
+      if (!jsonStr) continue;
       try { experiments.push(JSON.parse(jsonStr)); } catch (e) { /* skip malformed */ }
-    });
+    }
     const projects = rowsToObjects(vr[1] ? vr[1].values : []).items
       .filter((p) => p['name'])
       .map((p) => ({ name: p['name'], owner: p['Owner'] || '', notes: p['Notes'] || '', createdAt: p['Created'] || '', updatedAt: p['Updated'] || '' }));
@@ -335,7 +348,7 @@ async function handleExperimentsPost(request, env) {
       const row = expRow(rec);
       const existing = await findRowById(token, id, EXP_TAB, rec.id);       // read-before-write
       if (existing) {
-        await sheetsUpdateRow(token, id, qtab(EXP_TAB) + '!A' + existing + ':' + colLetter(EXP_COLS) + existing, row);
+        await sheetsUpdateRow(token, id, qtab(EXP_TAB) + '!A' + existing + ':' + colLetter(EXP_WIDTH) + existing, row);
         return json({ ok: true, updated: rec.id, row: existing });
       }
       await sheetsAppend(token, id, EXP_TAB, [row]);
@@ -345,13 +358,18 @@ async function handleExperimentsPost(request, env) {
     if (body.action === 'delete') {
       if (!body.id) return json({ error: 'missing_id' }, 400);
       const vr = await sheetsBatchGet(token, id, [EXP_TAB]);
-      const { items } = rowsToObjects(vr[0] ? vr[0].values : []);
-      const it = items.find((o) => String(o['id']).trim() === String(body.id).trim());
-      if (!it) return json({ ok: true, deleted: body.id, note: 'not found (already gone)' });
-      // move to Trash, then clear the source row (recoverable)
-      await sheetsAppend(token, id, EXP_TRASH, [[it['id'], it['Project'], it['Experiment'], it['Status'], new Date().toISOString(), it['record_json']]]);
-      const blank = new Array(EXP_COLS).fill('');
-      await sheetsUpdateRow(token, id, qtab(EXP_TAB) + '!A' + it.__row + ':' + colLetter(EXP_COLS) + it.__row, blank);
+      const rows = (vr[0] && vr[0].values) ? vr[0].values : [];
+      let rowIdx = -1, found = null;
+      for (let r = 1; r < rows.length; r++) {
+        if (rows[r] && String(rows[r][0]).trim() === String(body.id).trim()) { rowIdx = r + 1; found = rows[r]; break; }
+      }
+      if (!found) return json({ ok: true, deleted: body.id, note: 'not found (already gone)' });
+      const jsonStr = found.slice(EXP_META, EXP_WIDTH).join('');
+      // move to Trash (id, project, name, status, deletedAt, + JSON chunks), then clear the source row
+      const trashRow = [found[0], found[1], found[2], found[3], new Date().toISOString()].concat(chunkJson(jsonStr));
+      await sheetsAppend(token, id, EXP_TRASH, [trashRow]);
+      const blank = new Array(EXP_WIDTH).fill('');
+      await sheetsUpdateRow(token, id, qtab(EXP_TAB) + '!A' + rowIdx + ':' + colLetter(EXP_WIDTH) + rowIdx, blank);
       return json({ ok: true, deleted: body.id, trashed: true });
     }
 

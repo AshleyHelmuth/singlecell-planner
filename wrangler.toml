@@ -10,7 +10,7 @@ compatibility_date = "2026-07-01"
 # /api/book and passes everything else to these assets via env.ASSETS.
 [vars]
 INVENTORY_SHEET_ID = "1EXC2kdreRnWj5c3ONbNO5US4RI6iWHedCL3SDJxrgbw"
-EXPERIMENTS_SHEET_ID = "1Qu5QmAi6Z3KPhkBgsCTwWyuninEOComk3EhBZ06huGA"
+
 [assets]
 directory = "."
 binding = "ASSETS"
