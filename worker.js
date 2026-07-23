@@ -417,9 +417,26 @@ async function handleExperimentsPost(request, env) {
 const DRIVE_SCOPE = 'https://www.googleapis.com/auth/drive';
 const G_FOLDER = 'application/vnd.google-apps.folder';
 
+// Drive files must be owned by an account with storage quota. A service account
+// has none, so Drive calls authenticate as the Annex account via an OAuth
+// refresh token (client id/secret + refresh token -> short-lived access token).
 async function driveToken(env) {
-  const sa = JSON.parse(env.GOOGLE_SA_KEY);
-  return getAccessToken(sa.client_email, sa.private_key, DRIVE_SCOPE);
+  if (!env.GOOGLE_OAUTH_CLIENT_ID || !env.GOOGLE_OAUTH_CLIENT_SECRET || !env.GOOGLE_OAUTH_REFRESH_TOKEN) {
+    throw new Error('drive_oauth_not_configured');
+  }
+  const resp = await fetch('https://oauth2.googleapis.com/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      client_id: env.GOOGLE_OAUTH_CLIENT_ID,
+      client_secret: env.GOOGLE_OAUTH_CLIENT_SECRET,
+      refresh_token: env.GOOGLE_OAUTH_REFRESH_TOKEN,
+      grant_type: 'refresh_token'
+    })
+  });
+  const data = await resp.json();
+  if (!data.access_token) throw new Error('drive token refresh failed: ' + JSON.stringify(data));
+  return data.access_token;
 }
 function qEsc(s) { return String(s).replace(/\\/g, '\\\\').replace(/'/g, "\\'"); }
 
@@ -485,11 +502,17 @@ async function driveTrash(token, parentId, itemId) {
 }
 
 function handleDriveGet(env) {
-  return json({ ok: true, endpoint: '/api/drive', configured: !!env.GOOGLE_SA_KEY, parentSet: !!env.DRIVE_PARENT_FOLDER_ID });
+  return json({
+    ok: true, endpoint: '/api/drive',
+    configured: !!(env.GOOGLE_OAUTH_CLIENT_ID && env.GOOGLE_OAUTH_CLIENT_SECRET && env.GOOGLE_OAUTH_REFRESH_TOKEN),
+    parentSet: !!env.DRIVE_PARENT_FOLDER_ID
+  });
 }
 async function handleDrivePost(request, env) {
   try {
-    if (!env.GOOGLE_SA_KEY) return json({ error: 'not_configured' }, 503);
+    if (!(env.GOOGLE_OAUTH_CLIENT_ID && env.GOOGLE_OAUTH_CLIENT_SECRET && env.GOOGLE_OAUTH_REFRESH_TOKEN)) {
+      return json({ error: 'not_configured', message: 'Drive OAuth credentials not set (GOOGLE_OAUTH_CLIENT_ID / _SECRET / _REFRESH_TOKEN).' }, 503);
+    }
     if (!env.DRIVE_PARENT_FOLDER_ID) return json({ error: 'no_parent', message: 'DRIVE_PARENT_FOLDER_ID not set' }, 503);
     let body; try { body = await request.json(); } catch (e) { return json({ error: 'bad_json' }, 400); }
     const parent = env.DRIVE_PARENT_FOLDER_ID;
