@@ -351,6 +351,9 @@ async function handleExperimentsPost(request, env) {
       const rows = (vr[0] && vr[0].values) ? vr[0].values : [];
       let hdr = -1;
       for (let r = 0; r < rows.length; r++) { if (String((rows[r] || [])[0] || '').trim().toLowerCase() === 'id') { hdr = r; break; } }
+      if (hdr < 0) {
+        return json({ error: 'no_header', message: 'Experiments tab is missing its "id" header in column A. Refusing to write so the sheet is not clobbered. Restore the header row (id | Project | Experiment | ...) and retry.' }, 409);
+      }
       let target = -1, firstEmpty = -1;
       for (let r = (hdr >= 0 ? hdr + 1 : 0); r < rows.length; r++) {
         const cell = String((rows[r] || [])[0] || '').trim();
@@ -398,6 +401,121 @@ async function handleExperimentsPost(request, env) {
   } catch (e) { return json({ error: 'exception', message: (e && e.message) || String(e) }, 500); }
 }
 
+/* ===========================================================================
+ * DRIVE  —  per-experiment folders + files in Google Drive (service account).
+ * GET  /api/drive                                  -> health
+ * POST /api/drive {action:'ensurePath', project, experiment?}
+ *      -> finds/creates <parent>/<project>[/<experiment>], returns folder ids
+ * POST /api/drive {action:'upload', name, folderId, base64, sourceMime, targetMime}
+ *      -> uploads a file into folderId, converting to a Google-native type
+ *         (targetMime = google-apps.spreadsheet / .document); replaces if the
+ *         same name already exists in that folder.
+ * POST /api/drive {action:'trash', id}   -> moves the item to a _Trash folder
+ * Needs the Drive API enabled, the parent folder shared with the service
+ * account (Editor), and env.DRIVE_PARENT_FOLDER_ID.
+ * =========================================================================== */
+const DRIVE_SCOPE = 'https://www.googleapis.com/auth/drive';
+const G_FOLDER = 'application/vnd.google-apps.folder';
+
+async function driveToken(env) {
+  const sa = JSON.parse(env.GOOGLE_SA_KEY);
+  return getAccessToken(sa.client_email, sa.private_key, DRIVE_SCOPE);
+}
+function qEsc(s) { return String(s).replace(/\\/g, '\\\\').replace(/'/g, "\\'"); }
+
+async function driveFind(token, q) {
+  const url = 'https://www.googleapis.com/drive/v3/files?q=' + encodeURIComponent(q) +
+    '&fields=files(id,name,mimeType)&supportsAllDrives=true&includeItemsFromAllDrives=true';
+  const r = await fetch(url, { headers: { Authorization: 'Bearer ' + token } });
+  const d = await r.json();
+  if (!r.ok) throw new Error('drive find: ' + JSON.stringify(d));
+  return d.files || [];
+}
+async function driveEnsureFolder(token, name, parentId) {
+  const q = "mimeType='" + G_FOLDER + "' and name='" + qEsc(name) + "' and '" + parentId + "' in parents and trashed=false";
+  const found = await driveFind(token, q);
+  if (found.length) return found[0].id;
+  const r = await fetch('https://www.googleapis.com/drive/v3/files?supportsAllDrives=true',
+    { method: 'POST', headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: name, mimeType: G_FOLDER, parents: [parentId] }) });
+  const d = await r.json();
+  if (!r.ok) throw new Error('drive create folder: ' + JSON.stringify(d));
+  return d.id;
+}
+function b64ToBytes(b64) {
+  const bin = atob(b64); const u = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) u[i] = bin.charCodeAt(i);
+  return u;
+}
+async function driveUpload(token, name, folderId, base64, sourceMime, targetMime) {
+  const q = "name='" + qEsc(name) + "' and '" + folderId + "' in parents and trashed=false";
+  const existing = await driveFind(token, q);
+  const meta = { name: name };
+  if (targetMime) meta.mimeType = targetMime;
+  if (!existing.length) meta.parents = [folderId];
+  const boundary = 'scpBoundary' + Date.now();
+  const enc = new TextEncoder();
+  const pre = enc.encode('--' + boundary + '\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n' +
+    JSON.stringify(meta) + '\r\n--' + boundary + '\r\nContent-Type: ' + sourceMime + '\r\n\r\n');
+  const media = b64ToBytes(base64);
+  const post = enc.encode('\r\n--' + boundary + '--');
+  const body = new Uint8Array(pre.length + media.length + post.length);
+  body.set(pre, 0); body.set(media, pre.length); body.set(post, pre.length + media.length);
+  const isUpdate = existing.length > 0;
+  const url = isUpdate
+    ? 'https://www.googleapis.com/upload/drive/v3/files/' + existing[0].id + '?uploadType=multipart&supportsAllDrives=true'
+    : 'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&supportsAllDrives=true';
+  const r = await fetch(url, { method: isUpdate ? 'PATCH' : 'POST',
+    headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'multipart/related; boundary=' + boundary }, body: body });
+  const d = await r.json();
+  if (!r.ok) throw new Error('drive upload: ' + JSON.stringify(d));
+  return d;
+}
+async function driveTrash(token, parentId, itemId) {
+  const trashFolder = await driveEnsureFolder(token, '_Trash', parentId);
+  const cur = await fetch('https://www.googleapis.com/drive/v3/files/' + itemId + '?fields=parents&supportsAllDrives=true', { headers: { Authorization: 'Bearer ' + token } });
+  const cd = await cur.json();
+  const prev = (cd.parents || []).join(',');
+  const r = await fetch('https://www.googleapis.com/drive/v3/files/' + itemId + '?addParents=' + trashFolder +
+    (prev ? '&removeParents=' + prev : '') + '&supportsAllDrives=true',
+    { method: 'PATCH', headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' }, body: '{}' });
+  const d = await r.json();
+  if (!r.ok) throw new Error('drive trash: ' + JSON.stringify(d));
+  return d;
+}
+
+function handleDriveGet(env) {
+  return json({ ok: true, endpoint: '/api/drive', configured: !!env.GOOGLE_SA_KEY, parentSet: !!env.DRIVE_PARENT_FOLDER_ID });
+}
+async function handleDrivePost(request, env) {
+  try {
+    if (!env.GOOGLE_SA_KEY) return json({ error: 'not_configured' }, 503);
+    if (!env.DRIVE_PARENT_FOLDER_ID) return json({ error: 'no_parent', message: 'DRIVE_PARENT_FOLDER_ID not set' }, 503);
+    let body; try { body = await request.json(); } catch (e) { return json({ error: 'bad_json' }, 400); }
+    const parent = env.DRIVE_PARENT_FOLDER_ID;
+    const token = await driveToken(env);
+
+    if (body.action === 'ensurePath') {
+      if (!body.project) return json({ error: 'missing_project' }, 400);
+      const projectId = await driveEnsureFolder(token, body.project, parent);
+      let experimentId = null;
+      if (body.experiment) experimentId = await driveEnsureFolder(token, body.experiment, projectId);
+      return json({ ok: true, projectId: projectId, experimentId: experimentId });
+    }
+    if (body.action === 'upload') {
+      if (!body.name || !body.folderId || !body.base64 || !body.sourceMime) return json({ error: 'missing_fields' }, 400);
+      const d = await driveUpload(token, body.name, body.folderId, body.base64, body.sourceMime, body.targetMime || null);
+      return json({ ok: true, id: d.id, name: d.name });
+    }
+    if (body.action === 'trash') {
+      if (!body.id) return json({ error: 'missing_id' }, 400);
+      await driveTrash(token, parent, body.id);
+      return json({ ok: true, trashed: body.id });
+    }
+    return json({ error: 'unknown_action', action: body.action }, 400);
+  } catch (e) { return json({ error: 'exception', message: (e && e.message) || String(e) }, 500); }
+}
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
@@ -414,6 +532,11 @@ export default {
     if (url.pathname === '/api/experiments') {
       if (request.method === 'GET') return handleExperimentsGet(env);
       if (request.method === 'POST') return handleExperimentsPost(request, env);
+      return json({ error: 'method_not_allowed' }, 405);
+    }
+    if (url.pathname === '/api/drive') {
+      if (request.method === 'GET') return handleDriveGet(env);
+      if (request.method === 'POST') return handleDrivePost(request, env);
       return json({ error: 'method_not_allowed' }, 405);
     }
     // Any non-API path: serve the static site files.
