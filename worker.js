@@ -313,9 +313,10 @@ async function handleExperimentsGet(env) {
     const vr = await sheetsBatchGet(token, env.EXPERIMENTS_SHEET_ID, [EXP_TAB, PROJ_TAB]);
     const rows = (vr[0] && vr[0].values) ? vr[0].values : [];
     const experiments = [];
-    for (let r = 1; r < rows.length; r++) {           // skip header row
+    for (let r = 0; r < rows.length; r++) {           // find data rows by content, not position
       const row = rows[r] || [];
-      if (!row[0]) continue;                          // blank/cleared row
+      const idCell = String(row[0] || '').trim();
+      if (!idCell || idCell.toLowerCase() === 'id') continue;   // skip blanks and the header row
       const jsonStr = row.slice(EXP_META, EXP_WIDTH).join('');
       if (!jsonStr) continue;
       try { experiments.push(JSON.parse(jsonStr)); } catch (e) { /* skip malformed */ }
@@ -346,13 +347,19 @@ async function handleExperimentsPost(request, env) {
       const rec = body.record;
       if (!rec || !rec.id) return json({ error: 'missing_record_or_id' }, 400);
       const row = expRow(rec);
-      const existing = await findRowById(token, id, EXP_TAB, rec.id);       // read-before-write
-      if (existing) {
-        await sheetsUpdateRow(token, id, qtab(EXP_TAB) + '!A' + existing + ':' + colLetter(EXP_WIDTH) + existing, row);
-        return json({ ok: true, updated: rec.id, row: existing });
+      const vr = await sheetsBatchGet(token, id, [EXP_TAB]);
+      const rows = (vr[0] && vr[0].values) ? vr[0].values : [];
+      let hdr = -1;
+      for (let r = 0; r < rows.length; r++) { if (String((rows[r] || [])[0] || '').trim().toLowerCase() === 'id') { hdr = r; break; } }
+      let target = -1, firstEmpty = -1;
+      for (let r = (hdr >= 0 ? hdr + 1 : 0); r < rows.length; r++) {
+        const cell = String((rows[r] || [])[0] || '').trim();
+        if (cell === String(rec.id).trim()) { target = r + 1; break; }
+        if (!cell && firstEmpty < 0) firstEmpty = r + 1;
       }
-      await sheetsAppend(token, id, EXP_TAB, [row]);
-      return json({ ok: true, appended: rec.id });
+      if (target < 0) target = (firstEmpty > 0) ? firstEmpty : (rows.length + 1);
+      await sheetsUpdateRow(token, id, qtab(EXP_TAB) + '!A' + target + ':' + colLetter(EXP_WIDTH) + target, row);
+      return json({ ok: true, wrote: rec.id, row: target });
     }
 
     if (body.action === 'delete') {
@@ -360,8 +367,9 @@ async function handleExperimentsPost(request, env) {
       const vr = await sheetsBatchGet(token, id, [EXP_TAB]);
       const rows = (vr[0] && vr[0].values) ? vr[0].values : [];
       let rowIdx = -1, found = null;
-      for (let r = 1; r < rows.length; r++) {
-        if (rows[r] && String(rows[r][0]).trim() === String(body.id).trim()) { rowIdx = r + 1; found = rows[r]; break; }
+      for (let r = 0; r < rows.length; r++) {
+        const idCell = String((rows[r] || [])[0] || '').trim();
+        if (idCell && idCell.toLowerCase() !== 'id' && idCell === String(body.id).trim()) { rowIdx = r + 1; found = rows[r]; break; }
       }
       if (!found) return json({ ok: true, deleted: body.id, note: 'not found (already gone)' });
       const jsonStr = found.slice(EXP_META, EXP_WIDTH).join('');
