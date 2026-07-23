@@ -150,6 +150,7 @@ function handleHealth(env) {
 const SHEET_TABS = { kits: '10X Kits', reagents: 'Reagents & Supplies', lots: 'Lots Used' };
 const ID_HEADER = { '10X Kits': 'Catalog #', 'Reagents & Supplies': 'item_id' };
 const ONHAND_HEADER = { '10X Kits': 'On hand (kits)', 'Reagents & Supplies': 'On hand (units)' };
+const RESERVED_HEADER = 'Reserved (experiments)';
 const SHEETS_SCOPE = 'https://www.googleapis.com/auth/spreadsheets';
 
 function colLetter(n) { let s = ''; while (n > 0) { const m = (n - 1) % 26; s = String.fromCharCode(65 + m) + s; n = Math.floor((n - 1) / 26); } return s; }
@@ -168,6 +169,13 @@ async function sheetsUpdateCell(token, sheetId, range, value) {
     { method: 'PUT', headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' }, body: JSON.stringify({ values: [[value]] }) });
   const d = await r.json();
   if (!r.ok) throw new Error('sheets update failed: ' + JSON.stringify(d));
+  return d;
+}
+async function sheetsUpdateValues(token, sheetId, range, values2D) {
+  const r = await fetch('https://sheets.googleapis.com/v4/spreadsheets/' + sheetId + '/values/' + encodeURIComponent(range) + '?valueInputOption=USER_ENTERED',
+    { method: 'PUT', headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' }, body: JSON.stringify({ values: values2D }) });
+  const d = await r.json();
+  if (!r.ok) throw new Error('sheets values update failed: ' + JSON.stringify(d));
   return d;
 }
 async function sheetsAppend(token, sheetId, tab, values) {
@@ -256,6 +264,35 @@ async function handleInventoryPost(request, env) {
         }
       }
       return json({ ok: true, recorded: appendVals.length, deductions: deductions });
+    }
+
+    if (body.action === 'setReserved') {
+      // Write the "Reserved (experiments)" column for each stock tab in one call.
+      // body.reserved is a map { itemId: amount }. Items not in the map get 0,
+      // so stale reservations are cleared.
+      const map = body.reserved || {};
+      let total = 0;
+      for (const tab of [SHEET_TABS.kits, SHEET_TABS.reagents]) {
+        const vr = await sheetsBatchGet(token, id, [tab]);
+        const values = vr[0] ? vr[0].values : [];
+        if (!values || !values.length) continue;
+        const headers = values[0].map((h) => String(h == null ? '' : h).trim());
+        const idCol = headers.indexOf(ID_HEADER[tab]);
+        const resCol = headers.indexOf(RESERVED_HEADER);
+        if (idCol < 0 || resCol < 0) continue;
+        const colVals = [];
+        for (let r = 1; r < values.length; r++) {
+          const row = values[r] || [];
+          const iid = String(row[idCol] == null ? '' : row[idCol]).trim();
+          colVals.push([(iid && map[iid] != null) ? map[iid] : 0]);
+        }
+        if (colVals.length) {
+          const col = colLetter(resCol + 1);
+          await sheetsUpdateValues(token, id, qtab(tab) + '!' + col + '2:' + col + (colVals.length + 1), colVals);
+          total += colVals.length;
+        }
+      }
+      return json({ ok: true, rowsWritten: total });
     }
 
     return json({ error: 'unknown_action', action: body.action }, 400);

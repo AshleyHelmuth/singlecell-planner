@@ -1434,6 +1434,7 @@
         rec.snapshot = buildSnapshot(res);
         Store.saveExperiment(rec);
         exportExperimentToDrive(rec);
+        pushReservedToSheet();
         renderManage();
         updatePlanExpBar();
         flashSaveStatus('Saved \u201c' + rec.name + '\u201d.', true);
@@ -2220,6 +2221,24 @@
     } catch (e) { console.warn('[drive] export error', e); }
   }
 
+  // Write each item's reserved-across-experiments total into the inventory
+  // sheet's "Reserved (experiments)" column (drives the Stock-check colouring).
+  // Debounced so a burst of changes results in one write.
+  let _reservedTimer = null;
+  function pushReservedToSheet() {
+    clearTimeout(_reservedTimer);
+    _reservedTimer = setTimeout(() => {
+      try {
+        const st = computeInventoryState();
+        const map = {};
+        (st.items || []).forEach((i) => { map[i.id] = Math.round((i.reserved || 0) * 1000) / 1000; });
+        fetch('/api/inventory', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'setReserved', reserved: map }) })
+          .then((r) => { if (!r.ok) console.warn('[inventory] reserved write-back', r.status); })
+          .catch((e) => console.warn('[inventory] reserved write-back error', e));
+      } catch (e) { console.warn('[inventory] reserved compute error', e); }
+    }, 400);
+  }
+
   function experimentWorkbookXlsx(id) {
     const rec = Store.getExperiment(id);
     if (!rec || !rec.snapshot) { alert('Open this experiment and Save it after building the plan, then export.'); return; }
@@ -2451,7 +2470,7 @@
       '<td>' + badge(i.status) + '</td>' +
       '<td class="src">' + esc(i.location || i.orderStatus || '') + '</td></tr>';
 
-    const CAT_ORDER = ['10X Kits', 'Reagents', 'Supplies'];
+    const CAT_ORDER = ['Reagents', 'Supplies', '10X Kits'];
     const byCat = {};
     sorted.forEach((i) => { const c = i.category || 'Reagents'; (byCat[c] = byCat[c] || []).push(i); });
     const cats = CAT_ORDER.filter((c) => byCat[c]).concat(Object.keys(byCat).filter((c) => CAT_ORDER.indexOf(c) === -1));
@@ -2518,7 +2537,7 @@
         rec.inventoryApplied = false; rec.status = 'planned'; rec.reserved = true;
         Store.saveExperiment(rec);
       }
-      renderInventory(); renderManage();
+      renderInventory(); renderManage(); pushReservedToSheet();
     }));
     const addBtn = $('#reserveAddBtn');
     if (addBtn) addBtn.addEventListener('click', () => {
@@ -2527,7 +2546,7 @@
       rec.reserved = true;
       if (rec.status === 'completed') { rec.status = 'planned'; rec.inventoryApplied = false; Store.removeTransactionsForExperiment(rec.id); }
       Store.saveExperiment(rec);
-      renderInventory(); renderManage();
+      renderInventory(); renderManage(); pushReservedToSheet();
     });
     inventoryBadge();
   }
@@ -2725,7 +2744,7 @@
       if (act === 'open') openExperiment(id);
       else if (act === 'reschedule') { CURRENT_EXP_ID = id; updatePlanExpBar(); $('.tab[data-tab="scheduling"]').click(); if (window.Scheduling) Scheduling.render($('#schedulingContent')); }
       else if (act === 'inv') recordInventoryUI(id);
-      else if (act === 'del') { const r = Store.getExperiment(id); if (r && confirm('Delete \u201c' + r.name + '\u201d? This cannot be undone.')) { if (CURRENT_EXP_ID === id) { CURRENT_EXP_ID = null; updatePlanExpBar(); } const folder = r.driveFolderId; Store.deleteExperiment(id); if (folder) driveApi({ action: 'trash', id: folder }).catch(() => {}); renderManage(); } }
+      else if (act === 'del') { const r = Store.getExperiment(id); if (r && confirm('Delete \u201c' + r.name + '\u201d? This cannot be undone.')) { if (CURRENT_EXP_ID === id) { CURRENT_EXP_ID = null; updatePlanExpBar(); } const folder = r.driveFolderId; Store.deleteExperiment(id); if (folder) driveApi({ action: 'trash', id: folder }).catch(() => {}); pushReservedToSheet(); renderManage(); } }
       else if (act === 'packet') experimentWorkbookXlsx(id);
       else if (act === 'protocols') openExperimentProtocols(id);
       else if (act === 'labels') { openExperiment(id); generateTubeLabels(); }
