@@ -168,6 +168,7 @@
     var t = (name || '').trim();
     PROJ_CACHE = _proj().filter(function (p) { return (p.name || '') !== t; });
     writeArr(PROJ_KEY, PROJ_CACHE);
+    drivePost({ action: 'deleteProject', name: t });
   }
 
   // ---- Inventory transactions ----------------------------------------------

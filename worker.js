@@ -147,9 +147,9 @@ function handleHealth(env) {
  * Setup: enable the Google Sheets API on the same Cloud project; share the
  * Sheet with the service-account email as Editor; set INVENTORY_SHEET_ID var.
  * =========================================================================== */
-const SHEET_TABS = { kits: '10X Kits', reagents: 'Reagents & Supplies', lots: 'Lots Used' };
-const ID_HEADER = { '10X Kits': 'Catalog #', 'Reagents & Supplies': 'item_id' };
-const ONHAND_HEADER = { '10X Kits': 'On hand (kits)', 'Reagents & Supplies': 'On hand (units)' };
+const SHEET_TABS = { kits: '10X Kits', reagents: 'Reagents & Supplies', oligos: 'Oligos', antibodies: 'Antibodies', lots: 'Lots Used' };
+const ID_HEADER = { '10X Kits': 'Catalog #', 'Reagents & Supplies': 'item_id', 'Oligos': 'item_id', 'Antibodies': 'item_id' };
+const ONHAND_HEADER = { '10X Kits': 'On hand (kits)', 'Reagents & Supplies': 'On hand (units)', 'Oligos': 'On hand (units)', 'Antibodies': 'On hand (units)' };
 const RESERVED_HEADER = 'Reserved (experiments)';
 const SHEETS_SCOPE = 'https://www.googleapis.com/auth/spreadsheets';
 
@@ -198,7 +198,7 @@ function rowsToObjects(values) {
 // Find an item (kit or reagent) by id -> its tab, row, on-hand column & value.
 async function findItem(token, sheetId, itemId) {
   const want = String(itemId).trim();
-  for (const tab of [SHEET_TABS.kits, SHEET_TABS.reagents]) {
+  for (const tab of [SHEET_TABS.kits, SHEET_TABS.reagents, SHEET_TABS.oligos, SHEET_TABS.antibodies]) {
     const vr = await sheetsBatchGet(token, sheetId, [tab]);
     const { headers, items } = rowsToObjects(vr[0] ? vr[0].values : []);
     const idH = ID_HEADER[tab], ohH = ONHAND_HEADER[tab];
@@ -219,12 +219,14 @@ async function handleInventoryGet(env) {
     if (!env.GOOGLE_SA_KEY) return json({ error: 'not_configured', message: 'GOOGLE_SA_KEY not set' }, 503);
     if (!env.INVENTORY_SHEET_ID) return json({ error: 'no_sheet', message: 'INVENTORY_SHEET_ID not set' }, 503);
     const token = await invToken(env);
-    const vr = await sheetsBatchGet(token, env.INVENTORY_SHEET_ID, [SHEET_TABS.kits, SHEET_TABS.reagents, SHEET_TABS.lots]);
+    const vr = await sheetsBatchGet(token, env.INVENTORY_SHEET_ID, [SHEET_TABS.kits, SHEET_TABS.reagents, SHEET_TABS.oligos, SHEET_TABS.antibodies, SHEET_TABS.lots]);
     return json({
       ok: true, configured: true,
       kits: rowsToObjects(vr[0] ? vr[0].values : []).items,
       reagents: rowsToObjects(vr[1] ? vr[1].values : []).items,
-      lots: rowsToObjects(vr[2] ? vr[2].values : []).items
+      oligos: rowsToObjects(vr[2] ? vr[2].values : []).items,
+      antibodies: rowsToObjects(vr[3] ? vr[3].values : []).items,
+      lots: rowsToObjects(vr[4] ? vr[4].values : []).items
     });
   } catch (e) { return json({ error: 'exception', message: (e && e.message) || String(e) }, 500); }
 }
@@ -272,7 +274,7 @@ async function handleInventoryPost(request, env) {
       // so stale reservations are cleared.
       const map = body.reserved || {};
       let total = 0;
-      for (const tab of [SHEET_TABS.kits, SHEET_TABS.reagents]) {
+      for (const tab of [SHEET_TABS.kits, SHEET_TABS.reagents, SHEET_TABS.oligos, SHEET_TABS.antibodies]) {
         const vr = await sheetsBatchGet(token, id, [tab]);
         const values = vr[0] ? vr[0].values : [];
         if (!values || !values.length) continue;
@@ -434,6 +436,15 @@ async function handleExperimentsPost(request, env) {
       return json({ ok: true, project: p.name });
     }
 
+    if (body.action === 'deleteProject') {
+      if (!body.name) return json({ error: 'missing_name' }, 400);
+      const vr = await sheetsBatchGet(token, id, [PROJ_TAB]);
+      const { items } = rowsToObjects(vr[0] ? vr[0].values : []);
+      const it = items.find((o) => String(o['name']).trim() === String(body.name).trim());
+      if (it) await sheetsUpdateRow(token, id, qtab(PROJ_TAB) + '!A' + it.__row + ':E' + it.__row, ['', '', '', '', '']);
+      return json({ ok: true, deletedProject: body.name });
+    }
+
     return json({ error: 'unknown_action', action: body.action }, 400);
   } catch (e) { return json({ error: 'exception', message: (e && e.message) || String(e) }, 500); }
 }
@@ -571,6 +582,15 @@ async function handleDrivePost(request, env) {
       if (!body.id) return json({ error: 'missing_id' }, 400);
       await driveTrash(token, parent, body.id);
       return json({ ok: true, trashed: body.id });
+    }
+    if (body.action === 'trashByName') {
+      // find a folder by name under the parent and move it to _Trash (no create)
+      if (!body.name) return json({ error: 'missing_name' }, 400);
+      const q = "mimeType='" + G_FOLDER + "' and name='" + qEsc(body.name) + "' and '" + parent + "' in parents and trashed=false";
+      const found = await driveFind(token, q);
+      if (!found.length) return json({ ok: true, note: 'folder not found', name: body.name });
+      await driveTrash(token, parent, found[0].id);
+      return json({ ok: true, trashed: found[0].id, name: body.name });
     }
     return json({ error: 'unknown_action', action: body.action }, 400);
   } catch (e) { return json({ error: 'exception', message: (e && e.message) || String(e) }, 500); }

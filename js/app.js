@@ -78,8 +78,22 @@
           reservedForProject: '', lots: '', expiry: '', notes: r2['Notes'] || ''
         };
       }).filter((x) => x.id);
-      if (kits.length || reagents.length) {
-        DATA.liveInventory = kits.concat(reagents);
+      const mapReagentLike = (arr, category) => (arr || []).map((r2) => {
+        const pack = num(r2['Pack size']) || 1;
+        let cu = num(r2['On hand (units)']); const cc = num(r2['On hand (containers)']);
+        if (cu == null && cc != null) cu = cc * pack;
+        return {
+          id: String(r2['item_id'] || '').trim(), name: r2['Item'] || '', category: category,
+          container: r2['Container'] || '', packSize: pack, usageUnit: r2['Unit'] || '', unit: r2['Unit'] || '',
+          currentUnits: cu, currentContainers: (cc != null ? cc : (cu != null && pack ? cu / pack : null)), currentStock: cu,
+          minStock: num(r2['Reorder at']), orderStatus: r2['Order status'] || '', location: r2['Location'] || '',
+          reservedForProject: '', lots: '', expiry: '', notes: r2['Notes'] || ''
+        };
+      }).filter((x) => x.id);
+      const oligos = mapReagentLike(d.oligos, 'Oligos');
+      const antibodies = mapReagentLike(d.antibodies, 'Antibodies');
+      if (kits.length || reagents.length || oligos.length || antibodies.length) {
+        DATA.liveInventory = kits.concat(reagents, oligos, antibodies);
         DATA.inventorySource = 'live';
       }
     } catch (e) { /* keep workbook fallback */ }
@@ -2470,7 +2484,7 @@
       '<td>' + badge(i.status) + '</td>' +
       '<td class="src">' + esc(i.location || i.orderStatus || '') + '</td></tr>';
 
-    const CAT_ORDER = ['Reagents', 'Supplies', '10X Kits'];
+    const CAT_ORDER = ['Reagents', 'Supplies', 'Oligos', 'Antibodies', '10X Kits'];
     const byCat = {};
     sorted.forEach((i) => { const c = i.category || 'Reagents'; (byCat[c] = byCat[c] || []).push(i); });
     const cats = CAT_ORDER.filter((c) => byCat[c]).concat(Object.keys(byCat).filter((c) => CAT_ORDER.indexOf(c) === -1));
