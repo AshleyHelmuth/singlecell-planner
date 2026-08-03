@@ -809,7 +809,7 @@
       unsort: arms.some((a) => a.population === 'unsorted' && a.chem === 'cite5'),
       asap: arms.some((a) => a.chem === 'asap'),
       sort: arms.some((a) => a.population === 'sorted'),
-      vdj: arms.some((a) => (a.libraries || []).some((l) => /VDJ/.test(l))) || arms.some((a) => a.chem === 'cite5' || a.population === 'sorted'),
+      vdj: arms.some((a) => (a.libraries || []).some((l) => /VDJ|TCR|BCR/.test(l))),
       bulk: arms.some((a) => a.chem === 'bulkrna'),
       bulkir: arms.some((a) => a.chem === 'bulktcrbcr')
     };

@@ -100,7 +100,13 @@
     // Sorted scRNA-seq carries ADT (not a separate HTO library), unlike hashed.
     if (chem === 'scrna5' && arm.population === 'sorted') chem = 'scrna5_sorted';
     var libs = ARM_LIBRARIES[chem] ? ARM_LIBRARIES[chem].slice() : ['GEX'];
-    if (arm.vdj) { libs = libs.concat(ARM_LIBRARIES.vdj_tcr, ARM_LIBRARIES.vdj_bcr); }
+    // V(D)J is opt-in per arm and granular: arm.vdj may be falsy (none),
+    // 'tcr', 'bcr', or 'both'/true. Nothing is added unless selected.
+    if (arm.vdj) {
+      var v = (arm.vdj === true) ? 'both' : String(arm.vdj).toLowerCase();
+      if (v === 'tcr' || v === 'both') libs = libs.concat(ARM_LIBRARIES.vdj_tcr);
+      if (v === 'bcr' || v === 'both') libs = libs.concat(ARM_LIBRARIES.vdj_bcr);
+    }
     return libs;
   }
 
