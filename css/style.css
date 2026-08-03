@@ -600,3 +600,21 @@ h3{font-size:15px;margin:22px 0 10px}
 .ptp-prep { background: #e8f1ea; color: #2f7d53; }
 .ptp-safe { color: #2f7d53; font-size: 12px; }
 .ptp-warn { color: #b0331f; font-weight: 700; }
+
+/* Sample batching */
+#sampleBatching { max-width: 1040px; margin: 28px auto 0; padding-top: 18px; border-top: 2px solid var(--border,#d9dee4); }
+.bx-title { margin: 0 0 4px; }
+.bx-row { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; margin: 10px 0; }
+.bx-lbl { font-weight: 600; }
+.bx-chk { font-size: 13px; background: #f4f6f8; padding: 3px 8px; border-radius: 6px; }
+.bx-summary { font-size: 15px; margin: 12px 0; }
+.bx-details { margin-top: 12px; }
+.bx-details summary { cursor: pointer; font-weight: 600; }
+#sampleBatching textarea { border: 1px solid var(--border,#d9dee4); border-radius: 6px; padding: 8px; }
+
+/* Batching per-column role pickers */
+.bx-collabels { margin: 10px 0 4px; }
+.bx-cols { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 6px; }
+.bx-col { display: flex; flex-direction: column; gap: 3px; background: #f4f6f8; padding: 6px 8px; border-radius: 6px; }
+.bx-colname { font-size: 12px; font-weight: 600; color: #2e4a62; }
+.bx-col select { font-size: 12px; }
