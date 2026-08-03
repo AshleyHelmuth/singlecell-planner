@@ -181,6 +181,26 @@
     };
   }
 
+  function compareBatchCounts(samples, spec, opts) {
+    opts = opts || {};
+    var n = samples.length;
+    var target = opts.nBatches || (opts.samplesPerBatch ? Math.max(1, Math.round(n / opts.samplesPerBatch)) : 2);
+    var span = opts.span == null ? 1 : opts.span;
+    var lo = Math.max(1, target - span), hi = Math.min(n, target + span);
+    var out = [];
+    for (var nb = lo; nb <= hi; nb++) {
+      var r = planBatches(samples, spec, Object.assign({}, opts, { nBatches: nb, samplesPerBatch: null }));
+      out.push({
+        nBatches: nb, isTarget: nb === target, sizes: r.sizes,
+        avgSize: Math.round((n / nb) * 10) / 10,
+        total: r.balance.total, worst: r.balance.worst, per: r.balance.per,
+        improvedFrom: r.improvedFrom ? r.improvedFrom.total : null,
+        warnings: r.warnings, result: r
+      });
+    }
+    return { target: target, range: [lo, hi], options: out };
+  }
+
   // Build a human-readable balance report: per confounder, distribution across batches
   function balanceReport(samples, confounders, result, idField) {
     idField = idField || 'sampleId';
@@ -205,7 +225,7 @@
     return report;
   }
 
-  var api = { planBatches: planBatches, balanceReport: balanceReport };
+  var api = { planBatches: planBatches, compareBatchCounts: compareBatchCounts, balanceReport: balanceReport };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   root.Batching = api;
 })(typeof window !== 'undefined' ? window : globalThis);
