@@ -185,8 +185,9 @@
     host.appendChild(sec);
     var projSel = document.getElementById('bxProject');
     refreshProjects(projSel); PROJECT = projSel.value;
+    if (PROJECT && root.setActiveProject) root.setActiveProject(PROJECT);
     projSel.addEventListener('focus', function () { refreshProjects(projSel); });
-    projSel.addEventListener('change', function () { PROJECT = projSel.value; });
+    projSel.addEventListener('change', function () { PROJECT = projSel.value; if (root.setActiveProject) root.setActiveProject(PROJECT); });
     document.getElementById('bxParse').addEventListener('click', function () {
       PARSED = parseTable(document.getElementById('bxPaste').value);
       if (!PARSED) { document.getElementById('bxCols').innerHTML = '<div class="callout warn">Need a header row plus at least one sample row.</div>'; return; }

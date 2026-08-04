@@ -635,3 +635,16 @@ h3{font-size:15px;margin:22px 0 10px}
 .bx-seg { background: #2f5c8f; color: #fff; font-size: 11px; display: flex; align-items: center; justify-content: center; border-radius: 3px; min-width: 18px; }
 .bx-info { color: #2f5c8f; cursor: pointer; font-weight: 600; white-space: nowrap; }
 .bx-infobox { background: #f4f8fc; border: 1px solid #cfe0f0; border-radius: 6px; padding: 10px 12px; margin: 10px 0; font-size: 13px; line-height: 1.4; }
+
+/* Global context bar (Working on: Project > Experiment) */
+.ctx-bar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; max-width: 1040px; margin: 0 auto; padding: 8px 16px; font-size: 13px; }
+.ctx-lead { color: #5a6570; font-weight: 600; }
+.ctx-pill { display: inline-flex; align-items: center; gap: 6px; background: #f1f4f7; border: 1px solid var(--border,#d9dee4); border-radius: 999px; padding: 3px 12px; }
+.ctx-pill .ctx-k { font-size: 10px; text-transform: uppercase; letter-spacing: .04em; color: #8a94a0; }
+.ctx-pill .ctx-v { font-weight: 700; color: #7a8592; }
+.ctx-pill.ctx-set { border-color: #2f5c8f; background: #eaf1fb; }
+.ctx-pill.ctx-set .ctx-v { color: #1c3a5e; }
+.ctx-exp.ctx-set { border-color: #2f7d53; background: #e9f4ed; }
+.ctx-exp.ctx-set .ctx-v { color: #235d3d; }
+.ctx-sep { color: #b7c0ca; font-size: 16px; }
+.ctx-hint { color: #8a94a0; font-style: italic; }

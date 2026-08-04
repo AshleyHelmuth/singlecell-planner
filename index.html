@@ -35,6 +35,14 @@
   <button class="tab" data-tab="scheduling" role="tab" aria-selected="false">Scheduling</button>
 </nav>
 
+<div id="contextBar" class="ctx-bar" aria-live="polite">
+  <span class="ctx-lead">Working on</span>
+  <span class="ctx-pill ctx-proj" id="ctxProject"><span class="ctx-k">Project</span><span class="ctx-v" id="ctxProjectVal">—</span></span>
+  <span class="ctx-sep">›</span>
+  <span class="ctx-pill ctx-exp" id="ctxExperiment"><span class="ctx-k">Experiment</span><span class="ctx-v" id="ctxExperimentVal">—</span></span>
+  <span class="ctx-hint" id="ctxHint">Select a project/experiment on the Project manager tab.</span>
+</div>
+
 <main>
   <!-- ============ PLAN TAB ============ -->
   <section class="panel" id="tab-plan" role="tabpanel">

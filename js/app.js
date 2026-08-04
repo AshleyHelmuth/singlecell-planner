@@ -1893,6 +1893,7 @@
   //  Experiments, projects & inventory
   // ==========================================================================
   let CURRENT_EXP_ID = null;
+  let CURRENT_PROJECT = null;
   let SELECTED_PROJECT = '__all__';
   let EXPANDED_PROJECTS = {};
   let CREATE_EXP_FOR = null;
@@ -2039,6 +2040,7 @@
 
   function updatePlanExpBar() {
     const cur = CURRENT_EXP_ID ? Store.getExperiment(CURRENT_EXP_ID) : null;
+    if (cur && cur.project) CURRENT_PROJECT = cur.project;
     const lbl = $('#currentExpLabel');
     if (lbl) {
       lbl.textContent = cur ? ('Building: ' + (cur.name || 'experiment') + (cur.project ? ' \u00b7 ' + cur.project : '')) : 'No experiment selected';
@@ -2046,7 +2048,24 @@
     }
     const hint = $('#noExpHint'); if (hint) hint.hidden = !!cur;
     const sb = $('#savePlanBtn'); if (sb) sb.disabled = !cur;
+    updateContextBar();
   }
+
+  // Global "Working on: Project > Experiment" bar (always visible under the tabs).
+  function updateContextBar() {
+    const cur = CURRENT_EXP_ID ? Store.getExperiment(CURRENT_EXP_ID) : null;
+    const proj = (cur && cur.project) ? cur.project : CURRENT_PROJECT;
+    const pv = $('#ctxProjectVal'), ev = $('#ctxExperimentVal');
+    const pp = $('#ctxProject'), ep = $('#ctxExperiment'), hint = $('#ctxHint');
+    if (pv) pv.textContent = proj || '\u2014';
+    if (ev) ev.textContent = cur ? (cur.name || 'experiment') : '\u2014';
+    if (pp) pp.classList.toggle('ctx-set', !!proj);
+    if (ep) ep.classList.toggle('ctx-set', !!cur);
+    if (hint) hint.hidden = !!(proj || cur);
+  }
+  function setActiveProject(name) { CURRENT_PROJECT = name || null; updateContextBar(); }
+  window.setActiveProject = setActiveProject;
+  window.updateContextBar = updateContextBar;
 
   // Build a tube-label sheet (one row per physical tube) from the pooling
   // strategy + selected modalities. Columns: Tube, Line 1, Line 2, Line 3.
@@ -2837,6 +2856,7 @@
     });
     renderManage();
     updatePlanExpBar();
+    updateContextBar();
     // keep an open tab in sync with others' changes: re-pull when it regains focus
     let _lastSync = Date.now();
     document.addEventListener('visibilitychange', () => {
