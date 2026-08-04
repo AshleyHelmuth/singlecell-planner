@@ -663,3 +663,11 @@ h3{font-size:15px;margin:22px 0 10px}
 .exp-detail { padding: 10px 12px; }
 .exp-badge.nobuild { background: #eef1f4; color: #6b7682; }
 .exp-badge.unsched { background: #fbefe0; color: #9a6b1f; }
+
+/* Project rollup + batch flags */
+.proj-rollup { display: flex; flex-wrap: wrap; gap: 8px; margin: 6px 0 8px; }
+.proj-rollup .roll { background: #f4f6f8; border-radius: 6px; padding: 4px 10px; font-size: 12px; color: #5a6570; }
+.proj-rollup .roll-n { font-weight: 700; color: #1c3a5e; }
+.exp-badge.batch-ok { background: #e8f1ea; color: #2f7d53; }
+.exp-badge.batch-warn { background: #fbe6df; color: #b0331f; }
+.exp-badge.batch-none { background: #fbefe0; color: #9a6b1f; }

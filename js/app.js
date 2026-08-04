@@ -2688,6 +2688,12 @@
     return '';
   }
 
+  // Read a project's saved batch plan (from the Plan project tab, localStorage).
+  function readBatchPlan(project) {
+    try { const s = JSON.parse(localStorage.getItem('scp:batching:v1') || '{}'); return s[project] || null; }
+    catch (e) { return null; }
+  }
+
   function renderManage() {
     const host = $('#manageContent'); if (!host) return;
     const invState = computeInventoryState();
@@ -2721,8 +2727,24 @@
         + '<div class="head-actions"><button class="btn tiny" data-proj-act="toggle" data-proj="' + escAttr(pname) + '">' + (expanded ? 'Hide' : 'Manage project') + '</button></div></div>'
         + (expanded ? '' : '<ul class="proj-exp-list">' + summ + '</ul>');
       if (expanded) {
-        c += '<div class="proj-detail"><p class="proj-total">' + (isUnfiled ? 'Total' : 'Project total') + ' (built experiments): <strong>' + fmtMoney(total) + '</strong>'
-          + (isUnfiled ? '' : ' \u00b7 Owner: ' + esc(owner || '\u2014')) + '</p>';
+        const built = list.filter((e) => e.snapshot);
+        const done = list.filter((e) => e.status === 'completed');
+        const totSamples = built.reduce((m, e) => m + (e.snapshot.nSamples || 0), 0);
+        const totPools = built.reduce((m, e) => m + (e.snapshot.nPools || 0), 0);
+        const modSet = {}; built.forEach((e) => (e.snapshot.modalities || []).forEach((m) => { modSet[m] = 1; }));
+        const mods = Object.keys(modSet);
+        const bp = isUnfiled ? null : readBatchPlan(pname);
+        c += '<div class="proj-detail"><div class="proj-rollup">'
+          + '<span class="roll"><span class="roll-n">' + list.length + '</span> experiments</span>'
+          + '<span class="roll"><span class="roll-n">' + built.length + '</span> built</span>'
+          + '<span class="roll"><span class="roll-n">' + done.length + '</span> completed</span>'
+          + '<span class="roll"><span class="roll-n">' + totSamples + '</span> samples</span>'
+          + '<span class="roll"><span class="roll-n">' + totPools + '</span> pools</span>'
+          + '<span class="roll"><span class="roll-n">' + fmtMoney(total) + '</span> est. cost</span>'
+          + '</div>'
+          + (mods.length ? '<p class="muted small">Modalities across project: ' + mods.map(esc).join(', ') + '</p>' : '')
+          + (bp ? '<p class="muted small">Batch plan: <strong>' + bp.nBatches + ' batches</strong>' + (bp.plan && bp.plan.sizes ? ' \u00b7 sizes [' + bp.plan.sizes.join(', ') + ']' : '') + ' \u00b7 <a href="#" data-proj-act="openBatch" data-proj="' + escAttr(pname) + '">view on Plan project</a></p>' : (isUnfiled ? '' : '<p class="muted small">No batch plan yet \u2014 make one on the <strong>Plan project</strong> tab.</p>'))
+          + (isUnfiled ? '' : ' <span class="muted small">Owner: ' + esc(owner || '\u2014') + '</span>');
         if (!isUnfiled) {
           if (CREATE_EXP_FOR === pname) {
             c += '<div class="pm-form"><h3>New experiment in ' + esc(pname) + '</h3><div class="save-grid">'
@@ -2738,9 +2760,20 @@
           const s = e.snapshot;
           const info = s ? (s.nSamples + ' samples \u00b7 ' + s.nPools + ' pools \u00b7 est. ' + (s.knownTotal != null ? fmtMoney(s.knownTotal) : '\u2014')) : 'not built yet';
           const expOpen = !!EXPANDED_EXPERIMENTS[e.id];
+          const bpE = isUnfiled ? null : bp;
+          let batchFlag = '';
+          if (bpE) {
+            if (e.batchRef) {
+              const sz = (bpE.plan && bpE.plan.sizes) ? bpE.plan.sizes[e.batchRef - 1] : null;
+              const ok = s && sz != null && s.nSamples === sz;
+              batchFlag = ok ? ' <span class="exp-badge batch-ok">batch ' + e.batchRef + '</span>'
+                             : ' <span class="exp-badge batch-warn">batch ' + e.batchRef + ' \u2014 diverges</span>';
+            } else { batchFlag = ' <span class="exp-badge batch-none">not on batch plan</span>'; }
+          }
           const flags = statusBadge(e.status)
             + (s ? '' : ' <span class="exp-badge nobuild">not built</span>')
-            + (e.scheduledAt ? '' : ' <span class="exp-badge unsched">not scheduled</span>');
+            + (e.scheduledAt ? '' : ' <span class="exp-badge unsched">not scheduled</span>')
+            + batchFlag;
           c += '<div class="exp-card' + (expOpen ? ' is-open' : '') + (CURRENT_EXP_ID === e.id ? ' is-active' : '') + '">'
             + '<div class="exp-card-head"><div class="exp-card-info"><strong>' + esc(e.name) + '</strong> ' + flags
             + '<div class="muted small">' + (e.date ? esc(e.date) + ' \u00b7 ' : '') + info + '</div></div>'
@@ -2750,6 +2783,7 @@
               + '<p class="muted small">planned by ' + esc(e.plannedBy || '\u2014') + '</p>'
               + '<div class="exp-detail-actions">'
               + '<label class="inline-date">Date <input type="date" data-exp-date="' + e.id + '" value="' + escAttr(e.date || '') + '" /></label>'
+              + (bpE && bpE.plan && bpE.plan.sizes ? '<label class="inline-date">Batch <select data-exp-batch="' + e.id + '"><option value="">none</option>' + bpE.plan.sizes.map((sz, i) => '<option value="' + (i + 1) + '"' + (e.batchRef === i + 1 ? ' selected' : '') + '>batch ' + (i + 1) + ' (' + sz + ')</option>').join('') + '</select></label>' : '')
               + '<button class="btn tiny" data-exp-act="open" data-id="' + e.id + '">Open in planner</button>'
               + '<button class="btn tiny" data-exp-act="reschedule" data-id="' + e.id + '">Reschedule</button>'
               + '<button class="btn tiny" data-exp-act="inv" data-id="' + e.id + '">Record inventory</button>'
@@ -2788,6 +2822,7 @@
       else if (act === 'createExp') { CREATE_EXP_FOR = p; EXPANDED_PROJECTS[p] = true; renderManage(); const f = $('#ceName'); if (f) f.focus(); }
       else if (act === 'projReagents') projectReagentXlsx(p);
       else if (act === 'projBatches') projectBatchXlsx(p);
+      else if (act === 'openBatch') { const t = $('.tab[data-tab="planproject"]'); if (t) t.click(); }
       else if (act === 'delProj') {
         if (confirm('Delete project \u201c' + p + '\u201d? Its experiments are kept but become unfiled.')) {
           Store.deleteProject(p);
@@ -2811,6 +2846,11 @@
       const rec = Store.getExperiment(inp.dataset.expDate); if (!rec) return;
       rec.date = inp.value || ''; Store.saveExperiment(rec); renderManage();
       if (window.Scheduling) Scheduling.render($('#schedulingContent'));
+    }));
+
+    host.querySelectorAll('select[data-exp-batch]').forEach((sel) => sel.addEventListener('change', () => {
+      const rec = Store.getExperiment(sel.dataset.expBatch); if (!rec) return;
+      rec.batchRef = sel.value ? Number(sel.value) : null; Store.saveExperiment(rec); renderManage();
     }));
 
     host.querySelectorAll('button[data-exp-act]').forEach((b) => b.addEventListener('click', () => {
