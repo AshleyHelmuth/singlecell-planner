@@ -155,6 +155,19 @@
       '<details class="bx-details"><summary>Sample assignment (' + samples.length + ')</summary>' +
       '<table class="cost-table"><thead><tr><th>Sample</th><th class="num">Batch</th>' + cols.map(function (f) { return '<th>' + esc(f) + '</th>'; }).join('') + '</tr></thead><tbody>' + assignRows + '</tbody></table></details>';
 
+    // Persist the currently-shown plan to the project so the experiment planner
+    // can load it. Auto-saved on view (no separate step); the button re-confirms.
+    function persistPlan() {
+      if (!PROJECT) return false;
+      var st = loadStore();
+      st[PROJECT] = { samples: PARSED.rows, idField: document.getElementById('bxId').value, balance: balance, keepTogether: keep, nBatches: nb, plan: { assignment: res.assignment, sizes: res.sizes, balance: res.balance } };
+      saveStore(st); return true;
+    }
+    var autoSaved = persistPlan();
+    var saveBtn0 = document.getElementById('bxSave');
+    if (saveBtn0 && autoSaved) saveBtn0.textContent = 'Saved to \u201c' + PROJECT + '\u201d \u2713';
+    else if (saveBtn0 && !PROJECT) saveBtn0.textContent = 'Select a project to save';
+
     d.querySelectorAll('[data-bxinfo]').forEach(function (el) { el.addEventListener('click', function (e) { e.stopPropagation(); showInfo(el.getAttribute('data-bxinfo')); }); });
     document.getElementById('bxCsv').addEventListener('click', function () {
       var head = ['sampleId', 'batch'].concat(cols).join(',');
@@ -163,8 +176,8 @@
       var a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'batch_plan_' + (PROJECT || 'project') + '_' + nb + 'batches.csv'; a.click();
     });
     document.getElementById('bxSave').addEventListener('click', function () {
-      var store = loadStore(); store[PROJECT || '(unfiled)'] = { samples: PARSED.rows, idField: document.getElementById('bxId').value, balance: balance, keepTogether: keep, nBatches: nb, plan: { assignment: res.assignment, sizes: res.sizes, balance: res.balance } };
-      saveStore(store); document.getElementById('bxSave').textContent = 'Saved \u2713';
+      if (persistPlan()) document.getElementById('bxSave').textContent = 'Saved to \u201c' + PROJECT + '\u201d \u2713';
+      else alert('Select a project at the top of this tab before saving.');
     });
   }
 
@@ -184,7 +197,12 @@
       '<div id="bxCols"></div><div id="bxOutput"></div>';
     host.appendChild(sec);
     var projSel = document.getElementById('bxProject');
-    refreshProjects(projSel); PROJECT = projSel.value;
+    refreshProjects(projSel);
+    // default to the globally-selected project (from the context bar) so the
+    // saved plan lines up with the experiment's project
+    var ctx = document.getElementById('ctxProjectSel');
+    if (ctx && ctx.value && Array.prototype.some.call(projSel.options, function (o) { return o.value === ctx.value; })) projSel.value = ctx.value;
+    PROJECT = projSel.value;
     if (PROJECT && root.setActiveProject) root.setActiveProject(PROJECT);
     projSel.addEventListener('focus', function () { refreshProjects(projSel); });
     projSel.addEventListener('change', function () { PROJECT = projSel.value; if (root.setActiveProject) root.setActiveProject(PROJECT); });
