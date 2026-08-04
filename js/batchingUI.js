@@ -63,7 +63,9 @@
     worst: 'Worst variable = the single largest association score among your balanced variables. Even if the total looks fine, a high worst value means one variable is poorly balanced. Lower is better.',
     cramersV: "Cramer's V (categorical variables like sex or cohort): measures how strongly a variable's categories are associated with batch assignment, from 0 (evenly spread across batches) to 1 (each category confined to its own batch). Lower = better balanced.",
     eta2: 'Eta-squared (numeric variables like age): the fraction of the variable\u2019s total variance that is explained by which batch a sample is in, from 0 (batch means all equal \u2014 balanced) to 1 (batches completely separate the values). Lower = better balanced.',
-    assoc: 'Association: how related this variable is to batch assignment. For categorical variables this is Cramer\u2019s V; for numeric variables it is eta-squared. In both, 0 = perfectly balanced and 1 = fully confounded with batch.'
+    assoc: 'Association: how related this variable is to batch assignment. For categorical variables this is Cramer\u2019s V; for numeric variables it is eta-squared. In both, 0 = perfectly balanced and 1 = fully confounded with batch.',
+    corr: 'Correlation (r vs batch): correlation between a sample\u2019s batch number and this variable (Omixer-style). Near 0 = not associated with batch (balanced); the sign just reflects direction. Categorical variables are integer-coded, so for multi-level variables the p-value and distribution are more reliable than the sign.',
+    pval: 'p-value: probability of a correlation this large by chance if the variable were unrelated to batch. Omixer keeps layouts where every variable has p > 0.05 (no significant batch association). Higher p = better balanced.'
   };
   function infoTip(key, label) {
     return '<span class="bx-info" data-bxinfo="' + key + '" title="' + esc(INFO[key]) + '" role="button" tabindex="0">' + label + ' \u24d8</span>';
@@ -132,13 +134,16 @@
     var res = opt.result, samples = STATE.samples, cols = STATE.cols, balance = STATE.balance, keep = STATE.keep;
     d.querySelectorAll && document.querySelectorAll('.bx-opt').forEach(function (tr) { tr.classList.toggle('bx-opt-sel', Number(tr.getAttribute('data-nb')) === nb); });
     var rep = balance.length ? root.Batching.balanceReport(samples, balance, res, 'sampleId') : {};
+    var cs = balance.length ? root.Batching.corStats(samples, balance, res, 'sampleId') : {};
     var DOT = ' \u00b7 ';
     var balRows = balance.map(function (f) {
       var r = rep[f]; var cells;
       if (r.type === 'numeric') cells = Object.keys(r.byBatch).map(function (b) { return b + ': mean ' + r.byBatch[b].mean + ' (n=' + r.byBatch[b].n + ')'; }).join(DOT);
       else cells = Object.keys(r.byBatch).map(function (b) { return b + ': ' + Object.keys(r.byBatch[b]).map(function (lv) { return lv + '=' + r.byBatch[b][lv]; }).join(', '); }).join(DOT);
       var statInfo = r.type === 'numeric' ? 'eta2' : 'cramersV';
-      return '<tr><td>' + esc(f) + '</td><td>' + r.type + ' <span class="bx-info" data-bxinfo="' + statInfo + '" title="' + esc(INFO[statInfo]) + '" role="button" tabindex="0">\u24d8</span></td><td class="num">' + r.association.toFixed(3) + '</td><td>' + esc(cells) + '</td></tr>';
+      var c2 = cs[f] || { r: 0, p: 1 };
+      var pcls = c2.p > 0.05 ? 'bx-p-ok' : 'bx-p-bad';
+      return '<tr><td>' + esc(f) + '</td><td>' + r.type + ' <span class="bx-info" data-bxinfo="' + statInfo + '" title="' + esc(INFO[statInfo]) + '" role="button" tabindex="0">\u24d8</span></td><td class="num">' + r.association.toFixed(3) + '</td><td class="num">' + c2.r.toFixed(3) + '</td><td class="num ' + pcls + '">' + c2.p.toFixed(3) + '</td><td>' + esc(cells) + '</td></tr>';
     }).join('');
     // simple stacked size visual
     var totalN = res.sizes.reduce(function (a, x) { return a + x; }, 0) || 1;
@@ -150,7 +155,7 @@
       (keep.length ? '<p class="who">Kept together by <strong>' + keep.map(esc).join(', ') + '</strong> (' + res.groups + ' groups).</p>' : '') +
       sizeBar +
       (res.warnings && res.warnings.length ? '<div class="callout warn">' + res.warnings.map(esc).join('<br>') + '</div>' : '') +
-      (balance.length ? '<table class="cost-table"><thead><tr><th>Balanced variable</th><th>Type</th><th class="num">' + infoTip('assoc', 'Association') + '</th><th>Distribution across batches</th></tr></thead><tbody>' + balRows + '</tbody></table>' : '') +
+      (balance.length ? ((function () { var allok = balance.every(function (f) { return (cs[f] || { p: 0 }).p > 0.05; }); return '<p class="who">Omixer check: ' + (allok ? '<span class="bx-p-ok">all p &gt; 0.05</span> \u2014 no significant batch association' : '<span class="bx-p-bad">some p \u2264 0.05</span> \u2014 a variable is associated with batch; consider another option') + '</p>'; })() + '<table class="cost-table"><thead><tr><th>Balanced variable</th><th>Type</th><th class="num">' + infoTip('assoc', 'Association') + '</th><th class="num">' + infoTip('corr', 'r vs batch') + '</th><th class="num">' + infoTip('pval', 'p-value') + '</th><th>Distribution across batches</th></tr></thead><tbody>' + balRows + '</tbody></table>') : '') +
       '<div class="bx-row"><button id="bxCsv" class="btn ghost">Download assignment CSV</button> <button id="bxSave" class="btn ghost">Save to project</button></div>' +
       '<details class="bx-details"><summary>Sample assignment (' + samples.length + ')</summary>' +
       '<table class="cost-table"><thead><tr><th>Sample</th><th class="num">Batch</th>' + cols.map(function (f) { return '<th>' + esc(f) + '</th>'; }).join('') + '</tr></thead><tbody>' + assignRows + '</tbody></table></details>';

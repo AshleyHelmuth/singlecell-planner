@@ -225,7 +225,68 @@
     return report;
   }
 
-  var api = { planBatches: planBatches, compareBatchCounts: compareBatchCounts, balanceReport: balanceReport };
+  // ---- omixer-style correlation + p-value ----------------------------------
+  // Reports, per variable, the correlation between batch assignment and the
+  // variable plus a two-sided p-value (as Omixer does: it keeps layouts where
+  // all p > 0.05, then minimizes the summed |correlation|). Categorical
+  // variables are integer-coded (as Omixer coerces factors), so a multi-level
+  // variable's correlation depends on level order — the p-value is the robust
+  // signal; the distribution table remains the fullest view of balance.
+  function gammaln(x) {
+    var c = [76.18009172947146, -86.50532032941677, 24.01409824083091, -1.231739572450155, 0.1208650973866179e-2, -0.5395239384953e-5];
+    var y = x, tmp = x + 5.5; tmp -= (x + 0.5) * Math.log(tmp);
+    var ser = 1.000000000190015; for (var j = 0; j < 6; j++) { y++; ser += c[j] / y; }
+    return -tmp + Math.log(2.5066282746310005 * ser / x);
+  }
+  function betacf(a, b, x) {
+    var MAXIT = 200, EPS = 3e-12, FPMIN = 1e-300;
+    var qab = a + b, qap = a + 1, qam = a - 1, c = 1, d = 1 - qab * x / qap;
+    if (Math.abs(d) < FPMIN) d = FPMIN; d = 1 / d; var h = d;
+    for (var m = 1; m <= MAXIT; m++) {
+      var m2 = 2 * m, aa = m * (b - m) * x / ((qam + m2) * (a + m2));
+      d = 1 + aa * d; if (Math.abs(d) < FPMIN) d = FPMIN; c = 1 + aa / c; if (Math.abs(c) < FPMIN) c = FPMIN; d = 1 / d; h *= d * c;
+      aa = -(a + m) * (qab + m) * x / ((a + m2) * (qap + m2));
+      d = 1 + aa * d; if (Math.abs(d) < FPMIN) d = FPMIN; c = 1 + aa / c; if (Math.abs(c) < FPMIN) c = FPMIN; d = 1 / d;
+      var del = d * c; h *= del; if (Math.abs(del - 1) < EPS) break;
+    }
+    return h;
+  }
+  function betai(a, b, x) {
+    if (x <= 0) return 0; if (x >= 1) return 1;
+    var bt = Math.exp(gammaln(a + b) - gammaln(a) - gammaln(b) + a * Math.log(x) + b * Math.log(1 - x));
+    return x < (a + 1) / (a + b + 2) ? bt * betacf(a, b, x) / a : 1 - bt * betacf(b, a, 1 - x) / b;
+  }
+  function corAndP(xs, ys) {
+    var n = xs.length; if (n < 3) return { r: 0, p: 1, n: n };
+    var mx = 0, my = 0, i; for (i = 0; i < n; i++) { mx += xs[i]; my += ys[i]; } mx /= n; my /= n;
+    var sxy = 0, sxx = 0, syy = 0; for (i = 0; i < n; i++) { var dx = xs[i] - mx, dy = ys[i] - my; sxy += dx * dy; sxx += dx * dx; syy += dy * dy; }
+    if (sxx === 0 || syy === 0) return { r: 0, p: 1, n: n };
+    var r = Math.max(-1, Math.min(1, sxy / Math.sqrt(sxx * syy)));
+    var df = n - 2; if (df < 1) return { r: r, p: 1, n: n };
+    if (Math.abs(r) >= 1) return { r: r, p: 0, n: n };
+    var t = r * Math.sqrt(df / (1 - r * r));
+    return { r: r, p: betai(df / 2, 0.5, df / (df + t * t)), n: n };
+  }
+  function corStats(samples, confounders, result, idField) {
+    idField = idField || 'sampleId';
+    var out = {};
+    confounders.forEach(function (f) {
+      var numeric = result.types[f] === 'numeric', codes = {}, ci = 0, xs = [], ys = [];
+      samples.forEach(function (s) {
+        var b = result.assignment[s[idField]]; if (b == null) return;
+        var v = s[f]; if (v == null || v === '') return;
+        var yv;
+        if (numeric) { yv = Number(v); if (!isFinite(yv)) return; }
+        else { var k = String(v); if (!(k in codes)) codes[k] = ci++; yv = codes[k]; }
+        xs.push(b); ys.push(yv);
+      });
+      var rp = corAndP(xs, ys);
+      out[f] = { type: result.types[f], r: Math.round(rp.r * 1000) / 1000, p: Math.round(rp.p * 1000) / 1000, n: rp.n };
+    });
+    return out;
+  }
+
+  var api = { planBatches: planBatches, compareBatchCounts: compareBatchCounts, balanceReport: balanceReport, corStats: corStats };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   root.Batching = api;
 })(typeof window !== 'undefined' ? window : globalThis);

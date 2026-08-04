@@ -671,3 +671,7 @@ h3{font-size:15px;margin:22px 0 10px}
 .exp-badge.batch-ok { background: #e8f1ea; color: #2f7d53; }
 .exp-badge.batch-warn { background: #fbe6df; color: #b0331f; }
 .exp-badge.batch-none { background: #fbefe0; color: #9a6b1f; }
+
+/* Batching correlation/p-value cells */
+.bx-p-ok { color: #2f7d53; font-weight: 700; }
+.bx-p-bad { color: #b0331f; font-weight: 700; }
