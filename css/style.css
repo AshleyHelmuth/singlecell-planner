@@ -648,3 +648,18 @@ h3{font-size:15px;margin:22px 0 10px}
 .ctx-exp.ctx-set .ctx-v { color: #235d3d; }
 .ctx-sep { color: #b7c0ca; font-size: 16px; }
 .ctx-hint { color: #8a94a0; font-style: italic; }
+
+/* Context bar dropdowns + condensed experiment cards */
+.ctx-sel { border: none; background: transparent; font-weight: 700; color: #7a8592; font-size: 13px; cursor: pointer; max-width: 220px; }
+.ctx-pill.ctx-set .ctx-sel { color: #1c3a5e; }
+.ctx-exp.ctx-set .ctx-sel { color: #235d3d; }
+.exp-card { border: 1px solid var(--border,#d9dee4); border-radius: 8px; margin: 8px 0; background: #fff; overflow: hidden; }
+.exp-card.is-active { border-color: #2f7d53; box-shadow: 0 0 0 2px rgba(47,125,83,.12); }
+.exp-card-head { display: flex; align-items: flex-start; gap: 10px; padding: 10px 12px; }
+.exp-card-info { flex: 1; }
+.exp-card-info > strong { font-size: 14px; }
+.exp-card-head .btn { margin-left: auto; }
+.exp-card.is-open .exp-card-head { border-bottom: 1px solid var(--border,#d9dee4); background: #f7f9fb; }
+.exp-detail { padding: 10px 12px; }
+.exp-badge.nobuild { background: #eef1f4; color: #6b7682; }
+.exp-badge.unsched { background: #fbefe0; color: #9a6b1f; }

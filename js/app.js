@@ -1896,6 +1896,7 @@
   let CURRENT_PROJECT = null;
   let SELECTED_PROJECT = '__all__';
   let EXPANDED_PROJECTS = {};
+  let EXPANDED_EXPERIMENTS = {};
   let CREATE_EXP_FOR = null;
 
   function renderAllTabs(res) {
@@ -2055,13 +2056,42 @@
   function updateContextBar() {
     const cur = CURRENT_EXP_ID ? Store.getExperiment(CURRENT_EXP_ID) : null;
     const proj = (cur && cur.project) ? cur.project : CURRENT_PROJECT;
-    const pv = $('#ctxProjectVal'), ev = $('#ctxExperimentVal');
+    const psel = $('#ctxProjectSel'), esel = $('#ctxExperimentSel');
     const pp = $('#ctxProject'), ep = $('#ctxExperiment'), hint = $('#ctxHint');
-    if (pv) pv.textContent = proj || '\u2014';
-    if (ev) ev.textContent = cur ? (cur.name || 'experiment') : '\u2014';
+    if (psel) {
+      const names = Store.allProjects().map((p) => p.name).filter(Boolean);
+      Store.allExperiments().forEach((e) => { if (e.project && names.indexOf(e.project) < 0) names.push(e.project); });
+      names.sort((a, b) => a.toLowerCase() < b.toLowerCase() ? -1 : 1);
+      psel.innerHTML = '<option value="">\u2014 select \u2014</option>' + names.map((n) => '<option value="' + escAttr(n) + '"' + (n === proj ? ' selected' : '') + '>' + esc(n) + '</option>').join('');
+    }
+    if (esel) {
+      const exps = Store.allExperiments().filter((e) => (e.project || '') === (proj || ''));
+      esel.innerHTML = '<option value="">\u2014 select \u2014</option>' + exps.map((e) => '<option value="' + e.id + '"' + (e.id === CURRENT_EXP_ID ? ' selected' : '') + '>' + esc(e.name || 'experiment') + '</option>').join('');
+    }
     if (pp) pp.classList.toggle('ctx-set', !!proj);
     if (ep) ep.classList.toggle('ctx-set', !!cur);
     if (hint) hint.hidden = !!(proj || cur);
+  }
+  // Switching in the context bar back-propagates to the Project manager:
+  // expands the chosen project/experiment, collapses the rest, and opens the tab.
+  function wireContextBar() {
+    const psel = $('#ctxProjectSel'), esel = $('#ctxExperimentSel');
+    if (psel) psel.addEventListener('change', () => {
+      CURRENT_PROJECT = psel.value || null; CURRENT_EXP_ID = null;
+      EXPANDED_PROJECTS = {}; if (CURRENT_PROJECT) EXPANDED_PROJECTS[CURRENT_PROJECT] = true;
+      EXPANDED_EXPERIMENTS = {};
+      updatePlanExpBar(); renderManage();
+      const t = $('.tab[data-tab="projects"]'); if (t) t.click();
+    });
+    if (esel) esel.addEventListener('change', () => {
+      const id = esel.value;
+      if (!id) { CURRENT_EXP_ID = null; updatePlanExpBar(); return; }
+      CURRENT_EXP_ID = id; const r = Store.getExperiment(id); CURRENT_PROJECT = r ? (r.project || CURRENT_PROJECT) : CURRENT_PROJECT;
+      EXPANDED_PROJECTS = {}; if (CURRENT_PROJECT) EXPANDED_PROJECTS[CURRENT_PROJECT] = true;
+      EXPANDED_EXPERIMENTS = {}; EXPANDED_EXPERIMENTS[id] = true;
+      updatePlanExpBar(); renderManage();
+      const t = $('.tab[data-tab="projects"]'); if (t) t.click();
+    });
   }
   function setActiveProject(name) { CURRENT_PROJECT = name || null; updateContextBar(); }
   window.setActiveProject = setActiveProject;
@@ -2707,21 +2737,32 @@
         list.forEach((e) => {
           const s = e.snapshot;
           const info = s ? (s.nSamples + ' samples \u00b7 ' + s.nPools + ' pools \u00b7 est. ' + (s.knownTotal != null ? fmtMoney(s.knownTotal) : '\u2014')) : 'not built yet';
-          c += '<div class="exp-detail"><div class="exp-detail-head"><strong>' + esc(e.name) + '</strong> ' + statusBadge(e.status) + ' ' + roleChipHTML(e, invState) + '</div>'
-            + '<p class="muted small">' + info + ' \u00b7 planned by ' + esc(e.plannedBy || '\u2014') + '</p>'
-            + '<div class="exp-detail-actions">'
-            + '<label class="inline-date">Date <input type="date" data-exp-date="' + e.id + '" value="' + escAttr(e.date || '') + '" /></label>'
-            + '<button class="btn tiny" data-exp-act="open" data-id="' + e.id + '">Open in planner</button>'
-            + '<button class="btn tiny" data-exp-act="reschedule" data-id="' + e.id + '">Reschedule</button>'
-            + '<button class="btn tiny" data-exp-act="inv" data-id="' + e.id + '">Record inventory</button>'
-            + '<button class="btn tiny danger" data-exp-act="del" data-id="' + e.id + '">Delete</button></div>'
-            + '<div class="exp-print"><span class="muted small">Print / save:</span> '
-            + '<button class="btn tiny" data-exp-act="packet" data-id="' + e.id + '">Experiment packet</button>'
-            + '<button class="btn tiny" data-exp-act="protocols" data-id="' + e.id + '">Protocols</button>'
-            + '<button class="btn tiny" data-exp-act="labels" data-id="' + e.id + '">Labels</button>'
-            + '<button class="btn tiny" data-exp-act="pooling" data-id="' + e.id + '">Pooling strategy</button>'
-            + '<button class="btn tiny" data-exp-act="reagents" data-id="' + e.id + '">Reagent checklist</button>'
-            + '</div></div>';
+          const expOpen = !!EXPANDED_EXPERIMENTS[e.id];
+          const flags = statusBadge(e.status)
+            + (s ? '' : ' <span class="exp-badge nobuild">not built</span>')
+            + (e.scheduledAt ? '' : ' <span class="exp-badge unsched">not scheduled</span>');
+          c += '<div class="exp-card' + (expOpen ? ' is-open' : '') + (CURRENT_EXP_ID === e.id ? ' is-active' : '') + '">'
+            + '<div class="exp-card-head"><div class="exp-card-info"><strong>' + esc(e.name) + '</strong> ' + flags
+            + '<div class="muted small">' + (e.date ? esc(e.date) + ' \u00b7 ' : '') + info + '</div></div>'
+            + '<button class="btn tiny" data-exp-act="manage" data-id="' + e.id + '">' + (expOpen ? 'Hide' : 'Manage') + '</button></div>';
+          if (expOpen) {
+            c += '<div class="exp-detail"><div class="exp-detail-head">' + roleChipHTML(e, invState) + '</div>'
+              + '<p class="muted small">planned by ' + esc(e.plannedBy || '\u2014') + '</p>'
+              + '<div class="exp-detail-actions">'
+              + '<label class="inline-date">Date <input type="date" data-exp-date="' + e.id + '" value="' + escAttr(e.date || '') + '" /></label>'
+              + '<button class="btn tiny" data-exp-act="open" data-id="' + e.id + '">Open in planner</button>'
+              + '<button class="btn tiny" data-exp-act="reschedule" data-id="' + e.id + '">Reschedule</button>'
+              + '<button class="btn tiny" data-exp-act="inv" data-id="' + e.id + '">Record inventory</button>'
+              + '<button class="btn tiny danger" data-exp-act="del" data-id="' + e.id + '">Delete</button></div>'
+              + '<div class="exp-print"><span class="muted small">Print / save:</span> '
+              + '<button class="btn tiny" data-exp-act="packet" data-id="' + e.id + '">Experiment packet</button>'
+              + '<button class="btn tiny" data-exp-act="protocols" data-id="' + e.id + '">Protocols</button>'
+              + '<button class="btn tiny" data-exp-act="labels" data-id="' + e.id + '">Labels</button>'
+              + '<button class="btn tiny" data-exp-act="pooling" data-id="' + e.id + '">Pooling strategy</button>'
+              + '<button class="btn tiny" data-exp-act="reagents" data-id="' + e.id + '">Reagent checklist</button>'
+              + '</div></div>';
+          }
+          c += '</div>';
         });
         c += '<div class="row-actions">'
           + (isUnfiled ? '' : '<button class="btn ghost" data-proj-act="projReagents" data-proj="' + escAttr(pname) + '">Export project reagents + cost</button>'
@@ -2774,7 +2815,18 @@
 
     host.querySelectorAll('button[data-exp-act]').forEach((b) => b.addEventListener('click', () => {
       const id = b.dataset.id, act = b.dataset.expAct;
-      if (act === 'open') openExperiment(id);
+      if (act === 'manage') {
+        const wasOpen = !!EXPANDED_EXPERIMENTS[id];
+        EXPANDED_EXPERIMENTS = {};                 // single-open accordion
+        if (!wasOpen) {
+          EXPANDED_EXPERIMENTS[id] = true;
+          CURRENT_EXP_ID = id;
+          const r = Store.getExperiment(id); CURRENT_PROJECT = r ? (r.project || null) : CURRENT_PROJECT;
+          updatePlanExpBar();
+        }
+        renderManage();
+      }
+      else if (act === 'open') openExperiment(id);
       else if (act === 'reschedule') { CURRENT_EXP_ID = id; updatePlanExpBar(); $('.tab[data-tab="scheduling"]').click(); if (window.Scheduling) Scheduling.render($('#schedulingContent')); }
       else if (act === 'inv') recordInventoryUI(id);
       else if (act === 'del') { const r = Store.getExperiment(id); if (r && confirm('Delete \u201c' + r.name + '\u201d? This cannot be undone.')) { if (CURRENT_EXP_ID === id) { CURRENT_EXP_ID = null; updatePlanExpBar(); } const folder = r.driveFolderId; Store.deleteExperiment(id); if (folder) driveApi({ action: 'trash', id: folder }).catch(() => {}); pushReservedToSheet(); renderManage(); } }
@@ -2857,6 +2909,7 @@
     renderManage();
     updatePlanExpBar();
     updateContextBar();
+    wireContextBar();
     // keep an open tab in sync with others' changes: re-pull when it regains focus
     let _lastSync = Date.now();
     document.addEventListener('visibilitychange', () => {
