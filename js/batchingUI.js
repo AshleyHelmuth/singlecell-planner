@@ -169,18 +169,20 @@
   }
 
   function mount() {
-    var tab = document.getElementById('tab-projects');
-    if (!tab || document.getElementById('sampleBatching')) return;
+    var host = document.getElementById('planProjectContent') || document.getElementById('tab-planproject');
+    if (!host || document.getElementById('sampleBatching')) return;
+    var noProj = (root.Store && (root.Store.projects().names || []).length === 0);
     var sec = document.createElement('div');
-    sec.id = 'sampleBatching'; sec.className = 'wrap';
+    sec.id = 'sampleBatching';
     sec.innerHTML =
-      '<h2 class="bx-title">Sample batching</h2>' +
-      '<p class="who">Plan confounder-balanced batches for a whole project before assigning samples to experiments. Paste your sample table (CSV or tab-separated, with a header row), choose the ID column and the variables to balance, and set the number of batches.</p>' +
+      '<h2 class="bx-title">Plan project \u2014 sample batching</h2>' +
+      '<p class="who">Plan confounder-balanced batches for a whole project before assigning samples to experiments. Paste your sample table (CSV or tab-separated, with a header row), choose the ID column and how each column is used, and set the number of batches.</p>' +
+      '<div id="bxNoProj" class="callout warn"' + (noProj ? '' : ' hidden') + '>Select or create a project on the <strong>Project manager</strong> tab before planning batches.</div>' +
       '<div class="bx-row"><label>Project <select id="bxProject"></select></label></div>' +
-      '<textarea id="bxPaste" rows="6" placeholder="sampleId,sex,age,cohort\n1234-d1-001,F,42,A\n..." style="width:100%;font-family:monospace;font-size:12px"></textarea>' +
+      '<textarea id="bxPaste" rows="6" placeholder="sampleId,patientId,sex,age,cohort\n1234-d1-001,1234,F,42,A\n..." style="width:100%;font-family:monospace;font-size:12px"></textarea>' +
       '<div class="bx-row"><button id="bxParse" class="btn">Parse samples</button></div>' +
       '<div id="bxCols"></div><div id="bxOutput"></div>';
-    tab.appendChild(sec);
+    host.appendChild(sec);
     var projSel = document.getElementById('bxProject');
     refreshProjects(projSel); PROJECT = projSel.value;
     projSel.addEventListener('focus', function () { refreshProjects(projSel); });
@@ -190,6 +192,13 @@
       if (!PARSED) { document.getElementById('bxCols').innerHTML = '<div class="callout warn">Need a header row plus at least one sample row.</div>'; return; }
       renderColumnPickers(document.getElementById('bxCols'));
       document.getElementById('bxOutput').innerHTML = '';
+    });
+    // refresh the no-project prompt whenever the tab is shown
+    var tabBtn = document.querySelector('[data-tab="planproject"]');
+    if (tabBtn) tabBtn.addEventListener('click', function () {
+      var np = document.getElementById('bxNoProj');
+      if (np) np.hidden = !(root.Store && (root.Store.projects().names || []).length === 0);
+      refreshProjects(projSel);
     });
   }
 

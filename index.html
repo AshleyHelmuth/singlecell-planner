@@ -25,7 +25,8 @@
 
 <nav class="tabs" role="tablist" aria-label="Sections">
   <button class="tab is-active" data-tab="projects" role="tab" aria-selected="true">Project manager</button>
-  <button class="tab" data-tab="plan" role="tab" aria-selected="false">Plan</button>
+  <button class="tab" data-tab="planproject" role="tab" aria-selected="false">Plan project</button>
+  <button class="tab" data-tab="plan" role="tab" aria-selected="false">Plan experiment</button>
   <button class="tab" data-tab="workflow" role="tab" aria-selected="false">Workflow</button>
   <button class="tab" data-tab="reagents" role="tab" aria-selected="false">Reagents &amp; cost</button>
   <button class="tab" data-tab="protocols" role="tab" aria-selected="false">Protocols</button>
@@ -207,6 +208,10 @@
   <!-- ============ PROJECTS TAB ============ -->
   <section class="panel is-active" id="tab-projects" role="tabpanel">
     <div class="wrap" id="manageContent"></div>
+  </section>
+  <!-- ============ PLAN PROJECT TAB (sample batching) ============ -->
+  <section class="panel" id="tab-planproject" role="tabpanel">
+    <div class="wrap" id="planProjectContent"></div>
   </section>
   <section class="panel" id="tab-inventory" role="tabpanel">
     <div class="wrap" id="inventoryContent"></div>
