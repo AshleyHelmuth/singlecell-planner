@@ -40,6 +40,7 @@
         btn.classList.add('is-active'); btn.setAttribute('aria-selected', 'true');
         $('#tab-' + btn.dataset.tab).classList.add('is-active');
         if (btn.dataset.tab === 'scheduling' && window.Scheduling) Scheduling.render($('#schedulingContent'));
+        if (btn.dataset.tab === 'plan') refreshBatchLoadControl();
         if (btn.dataset.tab === 'inventory') renderInventory();
         if (btn.dataset.tab === 'projects') renderManage();
       });
@@ -878,6 +879,39 @@
       opts.chems[chemKey] = vals;
     });
     return opts;
+  }
+
+  // ---- Load a project batch's samples into the sample grid --------------------
+  // Pulls the samples assigned to batch N in the project's saved batch plan and
+  // fills the sample grid (Sample ID + Patient ID + confounders as columns).
+  // Pooling then proceeds exactly as normal from the loaded samples.
+  function loadBatchIntoGrid(bp, batchNum) {
+    if (!bp || !bp.plan || !bp.samples) return 0;
+    const idF = bp.idField, assign = bp.plan.assignment || {};
+    const rows = bp.samples.filter((r) => Number(assign[r[idF]]) === Number(batchNum));
+    if (!rows.length) return 0;
+    const headers = Object.keys(rows[0]);
+    const patientCol = (bp.keepTogether && bp.keepTogether[0]) || null;
+    const customCols = headers.filter((h) => h !== idF && h !== patientCol);
+    CUSTOM_COLS = customCols.slice();
+    GRID_ROWS = rows.map((r) => {
+      const core = [r[idF] || '', patientCol ? (r[patientCol] || '') : '', '', ''];
+      return core.concat(customCols.map((h) => (r[h] == null ? '' : r[h])));
+    });
+    renderGrid();
+    return rows.length;
+  }
+
+  function refreshBatchLoadControl() {
+    const row = $('#batchLoadRow'); if (!row) return;
+    const cur = CURRENT_EXP_ID ? Store.getExperiment(CURRENT_EXP_ID) : null;
+    const proj = (cur && cur.project) ? cur.project : CURRENT_PROJECT;
+    const bp = proj ? readBatchPlan(proj) : null;
+    if (!bp || !bp.plan || !bp.plan.sizes) { row.hidden = true; return; }
+    row.hidden = false;
+    const sel = $('#batchLoadSel');
+    sel.innerHTML = bp.plan.sizes.map((sz, i) => '<option value="' + (i + 1) + '"' + ((cur && cur.batchRef === i + 1) ? ' selected' : '') + '>Batch ' + (i + 1) + ' (' + sz + ' samples)</option>').join('');
+    const note = $('#batchLoadNote'); if (note) note.textContent = 'from \u201c' + proj + '\u201d';
   }
 
   // ---- Step 2: sample grid ----------------------------------------------------
@@ -2926,6 +2960,17 @@
     $('#addGridRow').addEventListener('click', () => addRow());
     $('#addGridCol').addEventListener('click', () => addColumn());
     $('#clearGrid').addEventListener('click', () => { if (!GRID_ROWS.length || confirm('Clear all samples?')) clearGrid(); });
+    const blBtn = $('#batchLoadBtn');
+    if (blBtn) blBtn.addEventListener('click', () => {
+      const cur = CURRENT_EXP_ID ? Store.getExperiment(CURRENT_EXP_ID) : null;
+      const proj = (cur && cur.project) ? cur.project : CURRENT_PROJECT;
+      const bp = proj ? readBatchPlan(proj) : null;
+      const n = Number($('#batchLoadSel').value);
+      if (!bp) { alert('No batch plan found for this project. Make one on the Plan project tab.'); return; }
+      if (GRID_ROWS.length && !confirm('Replace the current samples with batch ' + n + '?')) return;
+      const loaded = loadBatchIntoGrid(bp, n);
+      const note = $('#batchLoadNote'); if (note) note.textContent = loaded ? ('Loaded ' + loaded + ' samples from batch ' + n) : 'That batch has no samples';
+    });
 
     $('#computePooling').addEventListener('click', () => runComputePooling(true, true));
     $('#downloadPooling').addEventListener('click', downloadPoolingXlsx);
