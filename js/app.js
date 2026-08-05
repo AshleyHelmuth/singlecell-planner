@@ -1755,6 +1755,55 @@
   // ---- Pre-experiment prep (media + buffers) --------------------------------
   function prepProtocol(plan) {
     const nBottles = Math.max(2, Math.ceil((plan.nSamples * 12) / 500) + 1);
+    // Plan-scaled buffer volumes (match the Reagents & cost engine: staining
+    // buffer = 14 mL/pool + 9 mL/super-pool per staining arm; sort adds a 2 mL/pool
+    // wash). BSA is 2% w/v = 0.02 g/mL.
+    const nSuper = (plan.superPools && plan.superPools.length) || 1;
+    const hasUnsort = plan.arms.includes('unsort5');
+    const hasAsap = plan.arms.includes('asap3');
+    const hasSort = plan.arms.includes('sort5');
+    let stainML = 0; const stainParts = [];
+    if (hasUnsort) { stainML += 14 * plan.nPools + 9 * nSuper; stainParts.push('unsort ' + (14 * plan.nPools) + ' mL (14 \u00d7 ' + plan.nPools + ' pools) + ' + (9 * nSuper) + ' mL super-pool'); }
+    if (hasAsap) { stainML += 14 * plan.nPools + 9 * nSuper; stainParts.push('ASAP ' + (14 * plan.nPools) + ' mL + ' + (9 * nSuper) + ' mL super-pool'); }
+    if (hasSort) { stainML += 2 * plan.nPools; stainParts.push('sort wash ' + (2 * plan.nPools) + ' mL (2 \u00d7 ' + plan.nPools + ' pools)'); }
+    const stainPrep = stainML ? Math.ceil(stainML / 5) * 5 : 0;   // round up to 5 mL for prep
+    const stainBSA = Math.round(stainPrep * 0.02 * 100) / 100;    // 2% w/v of the prep volume
+    const stainBox = stainML
+      ? `<div class="recipe-box"><h5>CITE-seq staining / wash buffer (1&times; PBS + 2% BSA) &mdash; prepare ~${stainPrep}&nbsp;mL</h5>
+        <table><tr><th>Component</th><th>Amount</th></tr>
+        <tr><td>BSA (from powder)</td><td class="num">${stainBSA}&nbsp;g (2% w/v)</td></tr>
+        <tr><td>1&times; PBS</td><td class="num">to ${stainPrep}&nbsp;mL, then 0.22&nbsp;µm filter</td></tr></table>
+        <p class="who">${stainML}&nbsp;mL needed for this plan (${stainParts.join('; ')}); prep rounded up to ${stainPrep}&nbsp;mL.</p></div>`
+      : `<div class="recipe-box"><h5>CITE-seq staining / wash buffer (1&times; PBS + 2% BSA)</h5>
+        <table><tr><th>Component</th><th>Amount</th></tr>
+        <tr><td>BSA (from powder)</td><td class="num">10&nbsp;g / 500&nbsp;mL PBS (2% w/v)</td></tr>
+        <tr><td>1&times; PBS</td><td class="num">to 500&nbsp;mL, then 0.22&nbsp;µm filter</td></tr></table></div>`;
+
+    // FACS sort buffer (1x PBS + 10% FBS, ~70 mL/pool) — only when sorting.
+    const facsBox = hasSort ? (function () {
+      const ml = 70 * plan.nPools, prep = Math.ceil(ml / 10) * 10, fbs = Math.round(prep * 0.10), pbs = prep - fbs;
+      return `<div class="recipe-box"><h5>FACS sort buffer (1&times; PBS + 10% FBS) &mdash; prepare ~${prep}&nbsp;mL</h5>
+        <table><tr><th>Component</th><th>Amount</th></tr>
+        <tr><td>1&times; PBS</td><td class="num">${pbs}&nbsp;mL</td></tr>
+        <tr><td>FBS</td><td class="num">${fbs}&nbsp;mL (10%)</td></tr></table>
+        <p class="who">${ml}&nbsp;mL needed (70&nbsp;mL/pool &times; ${plan.nPools} pools); prep rounded up to ${prep}&nbsp;mL.</p></div>`;
+    })() : '';
+
+    // DNase: always dissolve the full 100 mg vial; note how much this plan uses
+    // so the remainder can be frozen. ~1.4 mg/sample (thaw + incubation media).
+    const dnaseMg = Math.round(1.396 * plan.nSamples);
+    const dnaseLeft = Math.max(0, 100 - dnaseMg);
+    const dnaseBox = `<div class="recipe-box"><h5>DNase I (from 100&nbsp;mg vial)</h5>
+        <table><tr><th>Use</th><th>Prep</th></tr>
+        <tr><td>Thaw media (0.1&nbsp;mg/mL)</td><td>10&nbsp;mg/mL stock into warm R10</td></tr>
+        <tr><td>Incubation media (0.025&nbsp;mg/mL)</td><td>125&nbsp;µL 10&nbsp;mg/mL stock per 50&nbsp;mL R10</td></tr></table>
+        <p class="who">Dissolve the whole 100&nbsp;mg vial (no weighing). This experiment (${plan.nSamples} samples) uses ~${dnaseMg}&nbsp;mg &mdash; aliquot and freeze the remaining ~${dnaseLeft}&nbsp;mg of 10&nbsp;mg/mL stock at &minus;20&nbsp;&deg;C for later batches.</p></div>`;
+
+    // ASAP reaction count (for OMNI lysis + wash), from ASAP GEM loads.
+    let nAsapRxns = 0;
+    (plan.laneBreakdown || []).forEach((l) => { if (/asap/i.test(l.key || l.arm || l.label || '')) nAsapRxns += (l.lanes || 0); });
+    if (!nAsapRxns && hasAsap) nAsapRxns = nSuper;
+    const asapNote = hasAsap ? `<p class="who">For ${nAsapRxns} ASAP reaction${nAsapRxns === 1 ? '' : 's'} (100&nbsp;µL lysis + 1&nbsp;mL wash each): need ~${nAsapRxns * 100}&nbsp;µL lysis and ~${nAsapRxns}&nbsp;mL wash. Scale the 2&nbsp;mL recipes below accordingly (make at least one full batch of each).</p>` : '';
     return `
       <p>Prepare media, buffers and stocks 1&ndash;3 days ahead. Filter-sterilize buffers and store at 4&nbsp;&deg;C. Make DNase stock fresh from powder and store aliquots at &minus;20&nbsp;&deg;C.</p>
       <div class="recipe-box"><h5>R10 media (thaw + wash) &mdash; ~${nBottles} &times; 500&nbsp;mL bottles</h5>
@@ -1763,18 +1812,11 @@
         <tr><td>FBS</td><td class="num">50&nbsp;mL</td></tr>
         <tr><td>1&nbsp;M HEPES</td><td class="num">5&nbsp;mL</td></tr>
         <tr><td>100&times; pen-strep</td><td class="num">5&nbsp;mL</td></tr></table></div>
-      <div class="recipe-box"><h5>CITE-seq staining / wash buffer (1&times; PBS + 2% BSA)</h5>
-        <table><tr><th>Component</th><th>Amount</th></tr>
-        <tr><td>BSA (from powder)</td><td class="num">10&nbsp;g / 500&nbsp;mL PBS</td></tr>
-        <tr><td>1&times; PBS</td><td class="num">to 500&nbsp;mL, then 0.22&nbsp;µm filter</td></tr></table></div>
-      <div class="recipe-box"><h5>FACS sort buffer (1&times; PBS + 50% FBS)</h5>
-        <table><tr><th>Component</th><th>Amount</th></tr>
-        <tr><td>1&times; PBS</td><td class="num">50&nbsp;mL</td></tr><tr><td>FBS</td><td class="num">50&nbsp;mL</td></tr></table></div>
-      <div class="recipe-box"><h5>DNase</h5>
-        <table><tr><th>Use</th><th>Prep</th></tr>
-        <tr><td>Thaw media (0.1&nbsp;mg/mL)</td><td>10&nbsp;mg/mL stock into warm R10</td></tr>
-        <tr><td>&ldquo;RPMI-DNase-low&rdquo; (0.025&nbsp;mg/mL)</td><td>125&nbsp;µL 10&nbsp;mg/mL stock per 50&nbsp;mL R10</td></tr></table></div>
+      ${stainBox}
+      ${facsBox}
+      ${dnaseBox}
       <p><strong>ASAP-seq buffers</strong> (make fresh, keep on ice; incubate digitonin at 65&nbsp;&deg;C 10&nbsp;min before use):</p>
+      ${asapNote}
       <div class="recipe-box"><h5>OMNI lysis buffer &mdash; per 2&nbsp;mL (use 100&nbsp;µL/rxn)</h5>
         <table><tr><th>Component (stock)</th><th>Final</th><th>Volume</th></tr>
         <tr><td>1&nbsp;M Tris-HCl pH 7.5</td><td>10&nbsp;mM</td><td class="num">20&nbsp;µL</td></tr>
