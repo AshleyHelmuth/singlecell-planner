@@ -679,3 +679,11 @@ h3{font-size:15px;margin:22px 0 10px}
 /* SOP important-tips callout */
 .sop-tip { background: #fdf6e3; border-left: 3px solid #d9a441; border-radius: 4px; padding: 8px 12px; margin: 8px 0; font-size: 13px; line-height: 1.4; color: #5a4a20; }
 .sop-tip strong { color: #8a5a10; }
+
+/* Protocol step checkboxes + recording tables */
+ol.chk, ul.chk { list-style: none; padding-left: 4px; }
+ol.chk > li, ul.chk > li { margin: 4px 0; }
+ol.chk ol.chk, ol.chk ul.chk { padding-left: 20px; }
+input.stepchk { margin-right: 8px; transform: scale(1.15); vertical-align: middle; cursor: pointer; }
+.recipe-box table td:empty, .recipe-box table td { min-width: 40px; }
+@media print { input.stepchk { -webkit-appearance: none; appearance: none; width: 12px; height: 12px; border: 1.5px solid #333; display: inline-block; vertical-align: middle; } }

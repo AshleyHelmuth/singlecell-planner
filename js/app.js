@@ -1639,6 +1639,25 @@
   // Build a clean, arm-gated SOP as a Word-compatible HTML document, reusing the
   // same number-injected protocol sections shown on the Protocols page. Only the
   // sections relevant to this experiment's arms are included.
+  // Insert a checkbox at the start of every step in a "chk" list (works for the
+  // on-page packet — interactive — and the Word SOP — renders as a checkbox).
+  function stepCheckboxes(html, useChar) {
+    try {
+      const tmp = document.createElement('div');
+      tmp.innerHTML = html;
+      tmp.querySelectorAll('ol.chk > li, ul.chk > li').forEach((li) => {
+        if (useChar) {
+          li.insertBefore(document.createTextNode('\u2610\u00a0\u00a0'), li.firstChild);
+        } else {
+          const cb = document.createElement('input'); cb.type = 'checkbox'; cb.className = 'stepchk';
+          li.insertBefore(document.createTextNode('\u00a0'), li.firstChild);
+          li.insertBefore(cb, li.firstChild);
+        }
+      });
+      return tmp.innerHTML;
+    } catch (e) { return html; }
+  }
+
   let PROTOCOL_PLAN = null;
   function buildSopHtml(plan) {
     const rec = CURRENT_EXP_ID ? Store.getExperiment(CURRENT_EXP_ID) : null;
@@ -1673,6 +1692,7 @@
     // arm-gated batch-day sections, reusing the on-page generators
     let body = '';
     body += sec('A. Experimental design', designTable);
+    body += sec('Preparation checklist — T−3 weeks → batch day', prepChecklists(plan));
     body += sec('Preparation — media & buffers (1–3 days before)', prepProtocol(plan));
     body += sec('B1. PBMC thaw & count', thawProtocol(plan));
     body += sec('B2. PBMC pool & split', poolProtocol(plan));
@@ -1682,6 +1702,7 @@
     if (plan.includeBulk) body += sec('B6. Bulk RNA-seq Trizol isolation', bulkProtocol(plan));
     if (plan.modalities.includes('In vitro stimulation')) body += sec('B7. In vitro stimulation', stimProtocol(plan));
     body += sec('B8. 10X Chromium GEM chip loading', gemLoadProtocol(plan));
+    body = stepCheckboxes(body, true);
 
     const style = `<style>
       body{font-family:Calibri,Arial,sans-serif;font-size:11pt;color:#1a1a1a;line-height:1.35;}
@@ -1692,6 +1713,8 @@
       th{background:#eef2f7;}
       .num{text-align:right;}
       ol,ul{margin:4pt 0 8pt 18pt;} li{margin:2pt 0;}
+      ol.chk,ul.chk{list-style:none;margin-left:2pt;padding-left:2pt;}
+      td{height:18px;}
       .recipe-box{border:1px solid #cbd5e2;border-radius:4px;padding:6px 10px;margin:6pt 0;background:#fafcff;}
       .who,.muted,.pp-source,.pp-meta{color:#5a6570;font-size:9pt;}
       p{margin:4pt 0;}
@@ -1717,6 +1740,66 @@
     a.href = URL.createObjectURL(blob);
     a.download = 'SOP_' + name.replace(/[^a-z0-9_\-]+/gi, '_') + '.doc';
     document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  }
+
+  // Preparation timeline checklists (T-3 weeks -> morning-of), arm-gated with
+  // plan-driven counts. Rendered as checkbox lists.
+  function prepChecklists(plan) {
+    const hasSort = plan.arms.includes('sort5');
+    const hasAsap = plan.arms.includes('asap3');
+    const hasBulk = !!plan.includeBulk;
+    const hasStim = plan.modalities.includes('In vitro stimulation');
+    const nSuper = (plan.superPools && plan.superPools.length) || 1;
+    const modalityTubes = plan.arms.map((a) => ({ unsort5: 'unsort', asap3: 'ASAP', sort5: 'sort' }[a] || a)).join('/');
+    const li = (t) => '<li>' + t + '</li>';
+    return `
+      <div class="recipe-box"><h5>T&minus;3 weeks &mdash; booking &amp; ordering</h5>
+      <ul class="chk">
+        ${li('Book equipment on the shared lab calendar: BSC hoods (3 people first half-day for thawing, 2 second half), centrifuges (\u22651 large; ideally one 25&nbsp;&deg;C + one 4&nbsp;&deg;C, + a benchtop), Chromium X/Xi, Cellaca MX counter, \u22651 PCR thermocycler.')}
+        ${hasSort ? li('Reserve flow-sorter time (Flow Core or Rory in the Annex).') : ''}
+        ${li('Check ALL reagents and consumables; order anything running low (use the Reagents &amp; cost list).')}
+        ${li('Confirm 10X kit lot numbers and expiry are sufficient for ' + plan.nSamples + ' samples / ' + Object.values(plan.lanesByArm || {}).reduce((a, b) => a + b, 0) + ' lanes.')}
+        ${li('If new lyo/HTO panel lots are used, confirm no re-titration is needed.')}
+        ${li('Double-check the labeled cryovials for this batch fit securely into the Thawsome.')}
+      </ul></div>
+
+      <div class="recipe-box"><h5>T&minus;1 week &mdash; design lock</h5>
+      <ul class="chk">
+        ${li('Finalize the sample \u2192 pool assignment table (' + plan.nPools + ' pools; avoid pooling genetically related/too-similar subjects).')}
+        ${li('Run the pipeline calculator with this batch\u2019s sample list to confirm pool sizes, lane/chip counts, and lyo-panel needs.')}
+        ${li('Confirm barcode / dual-index plate assignments for GEX/CSP/TCR/BCR do not collide with any other run sequenced together.')}
+        ${li('Generate the label manifest for this batch (sample ID, pool #, modality arm, date) from the calculator output.')}
+      </ul></div>
+
+      <div class="recipe-box"><h5>1&ndash;3 days before &mdash; labels &amp; buffers</h5>
+      <ul class="chk">
+        ${li('Print labels (lids + tubes) for: thawing tubes, pool tubes, modality-split tubes (' + modalityTubes + ')' + (hasBulk ? ', bulk RNA-seq aliquot tubes' : '') + '. Color-code/flag by pool # and modality arm.')}
+        ${li('Prep fresh buffers (see the scaled recipes in the prep section): staining/wash buffer (PBS + 2% BSA)' + (hasSort ? ', FACS buffer (PBS + 10% FBS)' : '') + ', DNase I stock (10&nbsp;mg/mL).')}
+        ${li('Re-constitute oligos if needed.')}
+        ${li('Confirm cooling blocks are pre-chilled and plenty of ice is available as backup.')}
+        ${li('Assign each participant a fixed station/role.')}
+        ${hasSort ? li('Prep single-color control beads and run controls on the flow sorter (vortex beads, ~15&nbsp;µL into 50&nbsp;µL FACS buffer, add Abs at ~\u00bd conc; L/D via cells or L/D beads).') : ''}
+      </ul></div>
+
+      <div class="recipe-box"><h5>1 day before &mdash; labware &amp; cryovials</h5>
+      <ul class="chk">
+        ${li('Label and set out all tubes: <strong>' + plan.nSamples + ' + ALLCELLS</strong> 15&nbsp;mL conicals for thawing, <strong>' + plan.nPools + '</strong> pool tubes, <strong>' + plan.arms.length + '</strong> modality-split superpool FACS round-bottom tubes' + (hasBulk ? ', <strong>' + plan.nSamples + ' + ALLCELLS</strong> bulk RNA-seq 1.5&nbsp;mL LoBind tubes' : '') + '.')}
+        ${li('Organize sample cryovials into groups (one per thawer); keep at &minus;80&nbsp;&deg;C / LN\u2082 until batch day.')}
+        ${li('Confirm the HTO panel is prepped and located; set aside the HTOs to use (' + plan.nPools + ' unique per modality).')}
+        ${li('Thaw the FBS needed and leave at 4&nbsp;&deg;C.')}
+        ${li('Print pooling and counting worksheets for all personnel.')}
+        ${li('Review the batch-day plan; note what needs to come out of &minus;80/&minus;20&nbsp;&deg;C and when.')}
+      </ul></div>
+
+      <div class="recipe-box"><h5>Morning of &mdash; setup</h5>
+      <ul class="chk">
+        ${li('Clean BSC surfaces with 70% EtOH; UV 15&nbsp;min.')}
+        ${li('Water bath to <strong>37&nbsp;&deg;C</strong>; centrifuge to <strong>25&nbsp;&deg;C</strong> to start.')}
+        ${li('Pre-warm media ingredients at 37&nbsp;&deg;C: RPMI-1640, FBS, DNase I (must warm to activate).')}
+        ${li('Verify the label manifest matches the physical cryovials on hand (scan/check sample #s).')}
+        ${li('Set up each hood: tube rack per thawing batch, waste containers, pipette tips (20/200/1000&nbsp;µL), serological pipettes (2/5/10/25&nbsp;mL) + pipettor \u2014 one set per thawer.')}
+        ${li('Make fresh R10 media + thawing media (R10 + DNase I 0.1&nbsp;mg/mL); aliquot 10&nbsp;mL/tube into ' + plan.nSamples + ' + ALLCELLS 15&nbsp;mL tubes; pre-warm at 37&nbsp;&deg;C.')}
+      </ul></div>`;
   }
 
   function renderProtocols(plan) {
@@ -1746,13 +1829,19 @@
       ST6: gemLoadProtocol(plan)
     };
 
+    const checklistPage = `<article class="protocol-page">
+        <header class="pp-head"><span class="pp-no">Prep</span><h2>Preparation checklist &mdash; T&minus;3 weeks &rarr; batch day</h2></header>
+        <p class="pp-meta"><strong>Source:</strong> Tsang SOP &ldquo;Preparation / Pre-batch checklist&rdquo;</p>
+        ${prepChecklists(plan)}
+      </article>`;
+
     const prepPage = `<article class="protocol-page">
         <header class="pp-head"><span class="pp-no">Protocol 0</span><h2>Pre-experiment preparation &mdash; media &amp; buffers</h2></header>
         <p class="pp-meta"><strong>When:</strong> 1&ndash;3 days before &middot; <strong>Source:</strong> MADI02 batch protocol + CITE-seq batch protocol</p>
         ${prepProtocol(plan)}
       </article>`;
 
-    const pages = prepPage + active.filter((id, i, a) => a.indexOf(id) === i).map((id, idx) => {
+    const pages = stepCheckboxes(checklistPage + prepPage + active.filter((id, i, a) => a.indexOf(id) === i).map((id, idx) => {
       const st = stagesById[id];
       const title = st ? st.name + ' — ' + (st.description || '') : id;
       const body = expanded[id] || placeholderProtocol(st);
@@ -1761,7 +1850,7 @@
         ${st ? `<p class="pp-meta"><strong>When:</strong> ${esc(st.timeWindow || 'TBD')} · <strong>Staffing:</strong> ${esc(st.personnelRule || 'TBD')} · <strong>Source:</strong> ${esc(st.sourceDoc || '—')}</p>` : ''}
         ${body}
       </article>`;
-    }).join('');
+    }).join(''));
 
     $('#protocolsContent').innerHTML = `
       <div class="section-head"><h2>Protocol packet</h2><div><button class="btn ghost" id="dlWordSop">Download Word SOP</button> <button class="btn primary" onclick="window.print()">Print packet</button></div></div>
@@ -1783,7 +1872,7 @@
       <p><strong>Materials:</strong> ${plan.nSamples}× 15 mL pre-labeled conical tubes, ${plan.nSamples}× Thawsome adaptors, counting plates, ${plan.nPools}× FACS tubes.</p>
       <p><strong>Reagents:</strong> Complete RPMI (10 mL × ${plan.nSamples} = ${plan.nSamples * 10} mL), DNase, AOPI cell dye.</p>
       ${sopTip('Be gentle — handle cells slowly and get them into warm media as fast as possible; keep them on ice after the post-thaw incubation. Watch temperature: warm media + RT centrifuge initially, then ice + 4&nbsp;&deg;C centrifuge once pooling. Note any irregularities per sample (pressurized cryovials → poor viability; small pellet → low yield; pink pellet → RBC contamination). Remove supernatant carefully on every spin — accurate counts and cell preservation matter through the whole process.')}
-      <ol>
+      <ol class="chk">
         <li>Warm complete RPMI (37 °C); set centrifuge to room temp. Thaw DNase.</li>
         <li>Prepare RPMI + DNase (0.1 mg/mL): aliquot 10 mL into each pre-labeled 15 mL tube (~${plan.nSamples * 10} mL total; allow 20 min to warm before removing cells from LN₂).</li>
         <li>Centrifuge-thaw: invert cryovial into Thawsome on the 15 mL conical with media. Open frozen vials away from your face. Spin 10 min @ 350g, 25 °C.</li>
@@ -1940,7 +2029,7 @@
     return reagentHeader('ST3', plan, { foot: 'Amounts are drawn straight from the Pre_GEM_Consumables sheet\u2019s CITE-seq column. Each genetic pool gets its own TotalSeq-C hashtag (2&nbsp;µL); the 3-vial lyo panel is used once for the combined batch.' }) + `
       ${sopTip('Completely remove DNase-containing media before staining — residual DNase degrades the DNA-conjugated antibodies. But avoid too many washes, which hurt viability and lose cells. Stain at 4&nbsp;&deg;C on ice; keep cells and reagents cold unless noted.')}
       <p>Staining the six per-pool unsort tubes (unsort5p1&hellip;${plan.nPools}), then combining and staining the surface-protein panel. Keep everything cold; minimise washes to protect viability.</p>
-      <ol>
+      <ol class="chk">
         <li><strong>Wash off media.</strong> Add 2&nbsp;mL CITE staining buffer (1&times; PBS + 2% BSA) to each unsort tube, spin 400g 5&nbsp;min 4&nbsp;&deg;C, pour off leaving ~40&nbsp;µL. Repeat once. (Media DNase degrades the DNA-conjugated antibodies, so it must be removed.)</li>
         <li><strong>HTO hashtag stain.</strong> To each unsort5p tube add <strong>10&nbsp;µL Fc block</strong> + <strong>2&nbsp;µL of a unique TotalSeq-C HTO</strong> (pool 1 &rarr; HTO-1, pool 2 &rarr; HTO-2, &hellip;). Keep total volume &lt;100&nbsp;µL. Spin briefly to collect.</li>
         <li>Incubate 30&nbsp;min on ice, covered. <em>Meanwhile reconstitute the TotalSeq-C lyo panel (see box below).</em></li>
@@ -1952,11 +2041,42 @@
         <li>Final count &rarr; superload the 10x chip (see the GEM loading protocol; ~1.1&ndash;1.2M cells at load).</li>
       </ol>
       ${lyoBox('TotalSeq-C', 'CITE-seq (399905)')}
+      ${recordCounts('unsort pool cell counts', 'Unsort', plan.nPools)}
       <p class="pp-source">Source: CITE-seq batch2 protocol &ldquo;Unsort 5&prime; panel staining&rdquo; + MADI02 batch1.</p>`;
   }
 
   function sopTip(html) {
     return '<div class="sop-tip"><strong>\u2757 Important tips:</strong> ' + html + '</div>';
+  }
+
+  // Blank recording tables (worksheet mode) — filled in at the bench.
+  function recordCounts(label, prefix, n) {
+    const cols = Array.from({ length: n }, (_, i) => '<th>' + prefix + (i + 1) + '</th>').join('');
+    const blanks = (last) => Array.from({ length: n }, () => '<td>&nbsp;</td>').join('') + (last || '<td>&nbsp;</td>');
+    return `<div class="recipe-box"><h5>Record: ${esc(label)}</h5>
+      <table><thead><tr><th></th>${cols}<th>SUPERPOOL</th></tr></thead><tbody>
+      <tr><td>Cell conc (cells/mL)</td>${blanks()}</tr>
+      <tr><td>Vol (mL)</td>${blanks()}</tr>
+      <tr><td>Total cells</td>${blanks()}</tr>
+      <tr><td>Vol pooled</td>${blanks('<td>Vol for 1.5M =</td>')}</tr>
+      </tbody></table></div>`;
+  }
+  function recordSortYield() {
+    const row = (p) => '<tr><td>' + p + '</td><td>&nbsp;</td><td>&nbsp;</td><td>&nbsp;</td><td>&nbsp;</td><td>&nbsp;</td><td>&nbsp;</td></tr>';
+    return `<div class="recipe-box"><h5>Record: sort yield</h5>
+      <table><thead><tr><th>Population</th><th>Sort yield</th><th>Viability</th><th>Viable count (cells/mL)</th><th>Total volume</th><th>Cell #</th><th>Vol for loading</th></tr></thead>
+      <tbody>${['HSC', 'pDC', 'cDC', 'Treg'].map(row).join('')}</tbody></table></div>`;
+  }
+  function recordChipLoad(plan) {
+    const rows = [];
+    if (plan.arms.includes('unsort5')) rows.push("Unsort 5' CITEseq superpool");
+    if (plan.arms.includes('sort5')) ['Sort HSC+pDC', 'Sort cDC', 'Sort Treg'].forEach((r) => rows.push(r));
+    if (plan.arms.includes('asap3')) rows.push('ASAP superpool');
+    if (plan.modalities.includes('In vitro stimulation')) rows.push('Stim superpool');
+    const tr = (r) => '<tr><td>' + r + '</td><td>&nbsp;</td><td>&nbsp;</td><td>&nbsp;</td><td>&nbsp;</td><td>&nbsp;</td></tr>';
+    return `<div class="recipe-box"><h5>Record: final counts &amp; chip-loading plan</h5>
+      <table><thead><tr><th>Modality</th><th># lanes</th><th>Cells·nuclei / lane</th><th>Conc. (cells/mL)</th><th>Vol / lane</th><th>Total vol</th></tr></thead>
+      <tbody>${rows.map(tr).join('')}</tbody></table></div>`;
   }
 
   function lyoBox(type, label) {
@@ -1974,7 +2094,7 @@
     return reagentHeader('ST4', plan, { foot: 'Amounts come from the Pre_GEM_Consumables ASAP-seq column. HTO stain (2&nbsp;µL TotalSeq-A per pool) and the 3-vial TotalSeq-A lyo panel mirror CITE-seq; the fixation/lysis buffer components are per staining batch.' }) + `
       ${sopTip('Same as unsort: fully remove DNase media (interferes with the DNA antibodies) while minimizing washes. Keep cold during staining. Warm digitonin to 65&nbsp;&deg;C before making lysis buffer; make OMNI lysis/wash buffers fresh and keep on ice.')}
       <p>ASAP-seq hashes and surface-stains like CITE-seq, then fixes, lightly lyses to nuclei, and transposes. Based on the CHI ASAP-seq protocol.</p>
-      <ol>
+      <ol class="chk">
         <li><strong>HTO hashtag stain.</strong> To each asap3p tube add <strong>10&nbsp;µL Fc block</strong> + <strong>2&nbsp;µL of a unique TotalSeq-A HTO</strong> (use TotalSeq-<em>A</em>, not C). Incubate 30&nbsp;min on ice with the unsort tubes.</li>
         <li>Wash 3&times; with staining buffer; resuspend in 3&nbsp;mL; count. <strong>Combine</strong> the ${plan.nPools} tubes into &ldquo;asap3p&rdquo; and move <strong>1.5&ndash;2M cells</strong> to &ldquo;asap3p-stain.&rdquo;</li>
         <li>Spin, bring to 75&nbsp;µL, add <strong>75&nbsp;µL TotalSeq-A lyo panel</strong> (150&nbsp;µL total), stain 30&nbsp;min on ice. Wash 3&times;; resuspend in <strong>450&nbsp;µL</strong> 1&times; PBS in a 2&nbsp;mL tube.</li>
@@ -1985,6 +2105,7 @@
         <li><strong>Transposition &amp; GEM (10x ATAC).</strong> During barcoding, spike in <strong>0.5&nbsp;µL/rxn 1&nbsp;µM bridge oligo (BOA)</strong>; add a 40&nbsp;&deg;C 5&nbsp;min anneal step before the standard GEM program (helps tag capture). Store GEMs at 15&nbsp;&deg;C ≤18&nbsp;h or &minus;20&nbsp;&deg;C ≤1&nbsp;week.</li>
         <li><strong>Tag library PCR</strong> (one HTO, one ADT): 50&nbsp;µL 2&times; KAPA HiFi + 2.5&nbsp;µL 3&prime;-ASAP-P5 + 2.5&nbsp;µL RPxx/D7xx index + input, water to 100&nbsp;µL; 14&ndash;16 cycles; 1.6&times; AMPure XP, elute 30&nbsp;µL (~190&nbsp;bp product).</li>
       </ol>
+      ${recordCounts('ASAP pool cell counts', 'ASAP', plan.nPools)}
       <p class="pp-source">Source: CHI ASAP-seq protocol (2022 + Yona&rsquo;s notes) via CITE-seq batch2; MADI02 batch1.</p>`;
   }
 
@@ -1993,7 +2114,7 @@
     return reagentHeader('ST5', plan, { foot: 'From the Pre_GEM_Consumables Sort column. Each sort pool gets the fluorophore antibody cocktail (≈61.5&nbsp;µL) + 5&nbsp;µL of its TotalSeq-C HTO to a 200&nbsp;µL stain.' }) + `
       ${sopTip('Remove DNase media completely but avoid over-washing (viability/loss). Once Live/Dead dye is added, turn the hood lights off and keep tubes covered for the rest of staining — the fluorochromes are light-sensitive.')}
       <p>Live/dead + surface-marker staining of the six sort pools (sort5p1&hellip;${plan.nPools}) for FACS into HSC, pDC, cDC and Treg. Work on ice with the hood lights off once L/D dye is added.</p>
-      <ol>
+      <ol class="chk">
         <li><strong>Pre-wash.</strong> Top up each remaining pool tube with 1&times; PBS (to ~40&nbsp;mL), spin 400g 5&nbsp;min 4&nbsp;&deg;C, pour off, wash once more with PBS. (Removes proteins that interfere with the L/D stain.)</li>
         <li><strong>Live/Dead.</strong> Resuspend each tube in <strong>2&nbsp;mL Zombie Red 1:1000</strong> in PBS (0.5&nbsp;µL dye/tube-equivalent; dilute 1.5&nbsp;µL stock into 1500&nbsp;µL PBS for the batch). Incubate 20&nbsp;min on ice, dark.</li>
         <li>Add 2&nbsp;mL FACS buffer, spin, then resuspend in ~123.5&nbsp;µL FACS buffer. Add <strong>10&nbsp;µL Fc block</strong>, mix, incubate 5&nbsp;min on ice.</li>
@@ -2014,6 +2135,8 @@
         <tr><td>AF647</td><td>CD34</td><td class="num">5</td></tr>
         <tr><td>PE-TexasRed</td><td>L/D (Zombie Red, 1:1000)</td><td class="num">&mdash;</td></tr>
         <tr><td colspan="2"><strong>Total antibody / pool</strong></td><td class="num"><strong>61.5</strong></td></tr></table></div>
+      ${recordCounts('sort pool cell counts', 'Sort', plan.nPools)}
+      ${recordSortYield()}
       <p class="pp-source">Source: MADI02 batch1 &amp; CITE-seq batch2 sort panels.</p>`;
   }
 
@@ -2022,7 +2145,7 @@
     return reagentHeader('ST14', plan, { foot: 'Per-sample TriZol reserve set aside before pooling (100&ndash;500K cells/sample), needed for SNP demultiplexing of the pooled donors.' }) + `
       ${sopTip('Keep samples on ice. TriZol is hazardous — handle only in the fume hood, double-glove, keep TriZol waste (liquid + tips) separate and labeled, and cap tubes as soon as possible. Shock the cells: transfer to &minus;80&nbsp;&deg;C as soon as possible after the brief TriZol incubation (a dry-ice box next to the hood helps).')}
       <p>Reserve 100&ndash;500K cells per sample (before pooling) for bulk RNA-seq. Work under RNA-free conditions; RNA-Away gloves; TriZol in the hood only, kept cold and dark.</p>
-      <ol>
+      <ol class="chk">
         <li>Keep reserved cell aliquots on ice (up to 1&nbsp;mL / up to ~1M cells) in RNA-free 1.5&nbsp;mL tubes.</li>
         <li>Spin 4&nbsp;&deg;C, 400&times;g, 5&nbsp;min; gently remove supernatant (leave a thin layer to avoid disturbing the pellet).</li>
         <li>Add <strong>600&nbsp;µL TriZol</strong> per sample, resuspend thoroughly. Vortex 10&nbsp;s, hold RT 5&nbsp;min.</li>
@@ -2035,7 +2158,7 @@
   function stimProtocol(plan) {
     return reagentHeader('ST13', plan, { foot: 'Per-sample stim reserve set aside at thaw; plate setup and treatments (LPS / IFN-β / IL-15) per the separate stim protocol.' }) + `
       <p>Stim uses cells reserved per sample at thaw. Confirm the plate map and treatment doses with the stim lead before plating; exact volumes depend on cell counts.</p>
-      <ol>
+      <ol class="chk">
         <li>Set the mini-centrifuge to 4&nbsp;&deg;C. Label one 1.5&nbsp;mL tube per sample.</li>
         <li>Transfer the reserved cells (target ~3.2M cells/sample per the batch sheet) into each tube; top up with RPMI to wash; spin 400g 4&nbsp;&deg;C 5&ndash;10&nbsp;min.</li>
         <li>Remove supernatant, resuspend in <strong>880&nbsp;µL RPMI</strong>.</li>
@@ -2048,13 +2171,14 @@
   function gemLoadProtocol(plan) {
     return `
       <p>Super-load the 10x Chromium chip once cells are counted and filtered. Follow the relevant 10x user guide for GEM generation &amp; barcoding.</p>
-      <ol>
+      <ol class="chk">
         <li>At least 30&nbsp;min before loading, thaw the master-mix reagents to RT; take the RT enzyme out only right before use. (GEM-X 5&prime; v3: thaw RT primer &mdash; stored at &minus;80&nbsp;&deg;C with the beads &mdash; RT reagent mix, and additive A.)</li>
         <li><strong>Load target:</strong> GEM-X 5&prime; v3 &mdash; 85,000 cells/lane; dilute to 85,000&nbsp;/&nbsp;77.4&nbsp;µL &asymp; 1.1&times;10⁶ cells/mL in 1&times; PBS; load 77.4&nbsp;µL/lane. (~650&nbsp;µL covers 8 lanes.)</li>
         <li>Filter through a Flowmi strainer immediately before loading.</li>
         <li>For sorted fractions, combine low-yield populations onto shared lanes (e.g. pDC+HSC on one lane; Treg and cDC on their own).</li>
         <li>After GEM generation, proceed to the RT step and library construction in the 10x protocol (GEX / V(D)J / ADT; ATAC path for ASAP).</li>
       </ol>
+      ${recordChipLoad(plan)}
       <p class="pp-source">Source: 10x Chromium GEM-X Single Cell 5&prime; v3 user guide (CG000733) + MADI02 batch1 loading notes.</p>`;
   }
 
