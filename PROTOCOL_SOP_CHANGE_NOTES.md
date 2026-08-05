@@ -90,3 +90,36 @@ This file records the reconciliation between the SOP and the site's current logi
   (≈ total/# pools). Site currently ≈ 61.5 µL/pool — consistent at ~6-8 pools. Leave as is.
 - **DNase/media:** left on the site's current model per decision #2, NOT the SOP's R10-based
   per-sample figure. Flagging that these two models diverge if anyone cross-checks by hand.
+
+## SOP vs current protocol — comparison (071526 detailed SOP)
+
+DONE this round:
+- **Staining/wash buffer volume ADAPTED** from 14 -> **19 mL/pool/modality** (unsort III + ASAP IV),
+  BSA 0.28 -> 0.38 g/pool, per the SOP's "need 19 mL per sample pool per modality" figure.
+  Per-super-pool (9 mL) and the site's per-pool/per-super logic kept. Prep box + workbook both updated.
+
+Differences noted (SOP vs current generated protocol) — for the pending protocol rewrite:
+- **Wash step volumes** (unsort): SOP does 2 mL dilute + 2 mL wash + 3x 3 mL post-HTO = ~13 mL/pool at
+  pool level; site's 14 mL matched the steps, but SOP's stated *need* is 19 mL/pool (now adopted).
+- **Sort FACS washes are larger**: SOP step 7 uses a 15 mL wash (vs small site step volume). Already
+  covered by the 70 mL/pool FACS prep + 10% FBS correction done earlier.
+- **HTO volumes**: unsort 2 uL/pool + 10 uL Fc block; sort 5 uL HTO + 10 uL Fc block + 200 uL sort-Ab
+  cocktail (total/# pools); ASAP 2 uL TotalSeqA/pool. Site matches sort (5 uL) + Fc (10 uL); confirm unsort 2 uL.
+- **Lyo panel**: 3 vials each (TotalSeq-C 399905 unsort, TotalSeq-A 399907 ASAP), 1 vial/~500k cells,
+  1.5M cells stained in 150 uL. Site models lyo panels per super-pool — consistent.
+- **Superpool stain target**: 1.5M cells (unsort + ASAP). ASAP resuspended in exactly 450 uL PBS; unsort
+  700-800 uL. Site's stainTarget = 1.5M — consistent.
+- **ASAP**: 3 libraries (ATAC + ADT + HTO) — kept. OMNI lysis 100 uL/rxn, wash 1 mL/rxn, bridge oligo BOA.
+- **Stim**: #stim pools = #sample pools x 4 conditions; stim wash buffer 1 mL/stim sample + 10 mL/stim pool
+  (STILL PENDING to add to the staining-buffer calc). Stim HTO = 1 uL/pool.
+- **Sequencing ratio**: 5' cDNA:CSP:TCR:BCR = 65:33:1:1 (SOP). Site read-ratio math is per-library reads/cell.
+- **Bulk**: 500k/sample Trizol, 1 tube/sample, no ALLCELLS aliquot — consistent.
+- **DNase**: SOP thaw media 10 mL/sample @0.1 mg/mL + incubation 2 mL/sample @50 U/mL. Site keeps its
+  media-volume-derived DNase (~1.4 mg/sample) per the "keep site calc" decision.
+
+PENDING (large, staged):
+1. Rewrite the generated protocol text to follow the SOP section order + detail (thaw -> pool/split ->
+   unsort+ASAP stain -> sort stain -> ASAP -> bulk -> stim -> GEM load), with injected plan numbers,
+   keeping the prep-buffer list at the top of the Protocols page.
+2. Downloadable **Word (.docx) SOP** with all experiment-adapted numbers filled in (uses the docx skill).
+3. Add the pending **stim wash buffer** (1 mL/stim sample + 10 mL/stim pool) to the staining-buffer calc.

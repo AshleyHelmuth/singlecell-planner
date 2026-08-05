@@ -675,3 +675,7 @@ h3{font-size:15px;margin:22px 0 10px}
 /* Batching correlation/p-value cells */
 .bx-p-ok { color: #2f7d53; font-weight: 700; }
 .bx-p-bad { color: #b0331f; font-weight: 700; }
+
+/* SOP important-tips callout */
+.sop-tip { background: #fdf6e3; border-left: 3px solid #d9a441; border-radius: 4px; padding: 8px 12px; margin: 8px 0; font-size: 13px; line-height: 1.4; color: #5a4a20; }
+.sop-tip strong { color: #8a5a10; }
