@@ -3241,6 +3241,7 @@
       else if (act === 'delProj') {
         if (confirm('Delete project \u201c' + p + '\u201d? Its experiments are kept but become unfiled.')) {
           Store.deleteProject(p);
+          driveApi({ action: 'trashByName', name: p }).catch(() => {});   // move the Drive project folder to trash
           Store.allExperiments().forEach((e) => { if ((e.project || '') === p) { e.project = ''; Store.saveExperiment(e); } });
           renderManage();
         }
@@ -3312,6 +3313,7 @@
       if (!/^[A-Z]{2,3}$/.test(abbrev)) { alert('Enter a 2\u20133 letter Project ID (letters only), e.g. BCP.'); return; }
       if (Store.allProjects().some((p) => (p.abbreviation || '').toUpperCase() === abbrev)) { alert('Project ID \u201c' + abbrev + '\u201d is already used by another project. Choose a different one.'); return; }
       Store.saveProject({ name: name, abbreviation: abbrev, owner: ($('#npOwner').value || '').trim() });
+      driveApi({ action: 'ensurePath', project: name }).catch(() => {});   // create the Drive project folder
       box.innerHTML = ''; EXPANDED_PROJECTS[name] = true; renderManage();
     });
   }

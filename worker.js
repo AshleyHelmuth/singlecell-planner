@@ -412,9 +412,15 @@ async function handleExperimentsGet(env) {
 
 async function findRowById(token, sheetId, tab, id) {
   const vr = await sheetsBatchGet(token, sheetId, [tab]);
-  const { items } = rowsToObjects(vr[0] ? vr[0].values : []);
-  const it = items.find((o) => String(o['id']).trim() === String(id).trim());
-  return it ? it.__row : null;
+  const rows = (vr[0] && vr[0].values) ? vr[0].values : [];
+  // Match on column A (the id is always written to col A by expRow), so this
+  // works regardless of how the sheet's header columns are ordered/labeled.
+  const target = String(id).trim();
+  for (let r = 0; r < rows.length; r++) {
+    const idCell = String((rows[r] || [])[0] || '').trim();
+    if (idCell && idCell.toLowerCase() !== 'id' && idCell === target) return r + 1;
+  }
+  return null;
 }
 
 async function handleExperimentsPost(request, env) {
