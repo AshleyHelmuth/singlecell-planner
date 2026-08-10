@@ -471,12 +471,36 @@ async function handleExperimentsPost(request, env) {
       if (!p.name) return json({ error: 'missing_name' }, 400);
       const now = new Date().toISOString();
       const vr = await sheetsBatchGet(token, id, [PROJ_TAB]);
-      const { items } = rowsToObjects(vr[0] ? vr[0].values : []);
-      const it = items.find((o) => String(o['name']).trim() === String(p.name).trim());
-      const rowVals = [p.name, p.abbreviation || '', p.owner || '', (it ? it['Created'] : now) || now, now, p.notes || ''];
-      if (it) await sheetsUpdateRow(token, id, qtab(PROJ_TAB) + '!A' + it.__row + ':F' + it.__row, rowVals);
-      else await sheetsAppend(token, id, PROJ_TAB, [rowVals]);
-      return json({ ok: true, project: p.name });
+      const values = vr[0] ? vr[0].values : [];
+      const headers = (values[0] || []).map((h) => String(h == null ? '' : h).trim());
+      // map each field to the column with the matching header (robust to column order/additions)
+      const colOf = (names) => { for (const n of names) { const i = headers.indexOf(n); if (i >= 0) return i; } return -1; };
+      const idx = {
+        name: colOf(['name', 'Name']),
+        abbrev: colOf(['Project_Abbreviation', 'Abbreviation', 'Project ID']),
+        owner: colOf(['Owner', 'owner']),
+        created: colOf(['Created', 'created']),
+        updated: colOf(['Updated', 'updated']),
+        notes: colOf(['Notes', 'notes'])
+      };
+      if (idx.name < 0) return json({ error: 'no_name_column', headers }, 409);
+      const { items } = rowsToObjects(values);
+      const it = items.find((o) => String(o['name'] != null ? o['name'] : o['Name']).trim() === String(p.name).trim());
+      const width = headers.length || 6;
+      // start from the existing row (preserve any columns we don't manage) or a blank row
+      const row = new Array(width).fill('');
+      if (it) { const existing = values[it.__row - 1] || []; for (let c = 0; c < width; c++) row[c] = existing[c] != null ? existing[c] : ''; }
+      const set = (i, v) => { if (i >= 0 && i < width) row[i] = v; };
+      set(idx.name, p.name);
+      set(idx.abbrev, p.abbreviation || '');
+      set(idx.owner, p.owner || '');
+      set(idx.created, (it && idx.created >= 0 && row[idx.created]) ? row[idx.created] : now);
+      set(idx.updated, now);
+      set(idx.notes, p.notes || '');
+      const lastCol = colLetter(width);
+      if (it) await sheetsUpdateRow(token, id, qtab(PROJ_TAB) + '!A' + it.__row + ':' + lastCol + it.__row, row);
+      else await sheetsAppend(token, id, PROJ_TAB, [row]);
+      return json({ ok: true, project: p.name, wroteColumns: idx });
     }
 
     if (body.action === 'deleteProject') {
