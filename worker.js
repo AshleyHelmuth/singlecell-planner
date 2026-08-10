@@ -637,11 +637,12 @@ async function handleDrivePost(request, env) {
     if (!env.DRIVE_PARENT_FOLDER_ID) return json({ error: 'no_parent', message: 'DRIVE_PARENT_FOLDER_ID not set' }, 503);
     let body; try { body = await request.json(); } catch (e) { return json({ error: 'bad_json' }, 400); }
     const parent = env.DRIVE_PARENT_FOLDER_ID;
+    const projectsParent = env.DRIVE_PROJECTS_FOLDER_ID || parent;   // project folders nest here
     const token = await driveToken(env);
 
     if (body.action === 'ensurePath') {
       if (!body.project) return json({ error: 'missing_project' }, 400);
-      const projectId = await driveEnsureFolder(token, body.project, parent);
+      const projectId = await driveEnsureFolder(token, body.project, projectsParent);
       let experimentId = null;
       if (body.experiment) experimentId = await driveEnsureFolder(token, body.experiment, projectId);
       return json({ ok: true, projectId: projectId, experimentId: experimentId });
@@ -657,12 +658,12 @@ async function handleDrivePost(request, env) {
       return json({ ok: true, trashed: body.id });
     }
     if (body.action === 'trashByName') {
-      // find a folder by name under the parent and move it to _Trash (no create)
+      // find a project folder by name under the Projects folder and move it to _Trash (no create)
       if (!body.name) return json({ error: 'missing_name' }, 400);
-      const q = "mimeType='" + G_FOLDER + "' and name='" + qEsc(body.name) + "' and '" + parent + "' in parents and trashed=false";
+      const q = "mimeType='" + G_FOLDER + "' and name='" + qEsc(body.name) + "' and '" + projectsParent + "' in parents and trashed=false";
       const found = await driveFind(token, q);
       if (!found.length) return json({ ok: true, note: 'folder not found', name: body.name });
-      await driveTrash(token, parent, found[0].id);
+      await driveTrash(token, projectsParent, found[0].id);
       return json({ ok: true, trashed: found[0].id, name: body.name });
     }
     return json({ error: 'unknown_action', action: body.action }, 400);
