@@ -687,3 +687,7 @@ ol.chk ol.chk, ol.chk ul.chk { padding-left: 20px; }
 input.stepchk { margin-right: 8px; transform: scale(1.15); vertical-align: middle; cursor: pointer; }
 .recipe-box table td:empty, .recipe-box table td { min-width: 40px; }
 @media print { input.stepchk { -webkit-appearance: none; appearance: none; width: 12px; height: 12px; border: 1.5px solid #333; display: inline-block; vertical-align: middle; } }
+
+/* Project abbreviation + experiment ID badges */
+.proj-abbrev { display: inline-block; background: #1f3a5f; color: #fff; font-size: 12px; font-weight: 700; padding: 1px 8px; border-radius: 4px; vertical-align: middle; margin-left: 6px; letter-spacing: .04em; }
+.exp-id { display: inline-block; background: #e7edf5; color: #1f3a5f; font-size: 11px; font-weight: 700; padding: 1px 7px; border-radius: 4px; font-family: ui-monospace, monospace; }

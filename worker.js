@@ -333,7 +333,7 @@ function expRow(rec) {
     arms, mods, (s.knownTotal != null ? s.knownTotal : ''),
     rec.createdAt || '', rec.updatedAt || ''
   ];
-  return meta.concat(chunkJson(JSON.stringify(rec)));
+  return meta.concat(chunkJson(JSON.stringify(rec))).concat([rec.experimentId || '']);
 }
 
 async function sheetsUpdateRow(token, sheetId, rangeA1, valuesRow) {
@@ -342,6 +342,49 @@ async function sheetsUpdateRow(token, sheetId, rangeA1, valuesRow) {
   const d = await r.json();
   if (!r.ok) throw new Error('sheets row update failed: ' + JSON.stringify(d));
   return d;
+}
+
+/* ===========================================================================
+ * LIBRARY SEQUENCING RECORD — append library rows to the shared record sheet.
+ * POST /api/library { rows: [[Project, Experiment, Experiment_ID, Library Type,
+ *   # of Libraries, Indexing Scheme, Storage Location, Requested Depth,
+ *   Service Provider, Sent Date, Status, Flow Cell ID, Data Storage Location], ...],
+ *   experimentId, replace? }
+ * Uses the service account; the record sheet must be shared with it as editor.
+ * ========================================================================= */
+const LIBRARY_TAB = 'Summary';
+async function handleLibraryPost(request, env) {
+  try {
+    if (!env.GOOGLE_SA_KEY) return json({ error: 'not_configured', message: 'GOOGLE_SA_KEY not set' }, 503);
+    if (!env.LIBRARY_RECORD_SHEET_ID) return json({ error: 'no_sheet', message: 'LIBRARY_RECORD_SHEET_ID not set' }, 503);
+    const body = await request.json();
+    const rows = Array.isArray(body.rows) ? body.rows : [];
+    if (!rows.length) return json({ error: 'no_rows' }, 400);
+    const token = await invToken(env);
+    const id = env.LIBRARY_RECORD_SHEET_ID;
+    // Optional: remove existing rows for this experiment (by Experiment_ID in col C) before appending.
+    if (body.replace && body.experimentId) {
+      const vr = await sheetsBatchGet(token, id, [LIBRARY_TAB]);
+      const values = vr[0] ? vr[0].values : [];
+      if (values && values.length > 1) {
+        const kept = [values[0]];
+        for (let r = 1; r < values.length; r++) {
+          const row = values[r] || [];
+          if (String(row[2] || '').trim() !== String(body.experimentId).trim()) kept.push(row);
+        }
+        // rewrite the whole tab (header + kept rows), clearing removed ones
+        const width = Math.max.apply(null, kept.map((r) => r.length).concat([13]));
+        const norm = kept.map((r) => { const c = r.slice(); while (c.length < width) c.push(''); return c; });
+        // clear then write
+        const lastCol = colLetter(width);
+        await sheetsUpdateValues(token, id, qtab(LIBRARY_TAB) + '!A1:' + lastCol + values.length, norm.concat(
+          new Array(Math.max(0, values.length - norm.length)).fill(null).map(() => new Array(width).fill(''))
+        ));
+      }
+    }
+    await sheetsAppend(token, id, LIBRARY_TAB, rows);
+    return json({ ok: true, appended: rows.length });
+  } catch (e) { return json({ error: 'exception', message: (e && e.message) || String(e) }, 500); }
 }
 
 async function handleExperimentsGet(env) {
@@ -362,7 +405,7 @@ async function handleExperimentsGet(env) {
     }
     const projects = rowsToObjects(vr[1] ? vr[1].values : []).items
       .filter((p) => p['name'])
-      .map((p) => ({ name: p['name'], owner: p['Owner'] || '', notes: p['Notes'] || '', createdAt: p['Created'] || '', updatedAt: p['Updated'] || '' }));
+      .map((p) => ({ name: p['name'], abbreviation: p['Project_Abbreviation'] || '', owner: p['Owner'] || '', notes: p['Notes'] || '', createdAt: p['Created'] || '', updatedAt: p['Updated'] || '' }));
     return json({ ok: true, configured: true, experiments: experiments, projects: projects });
   } catch (e) { return json({ error: 'exception', message: (e && e.message) || String(e) }, 500); }
 }
@@ -400,7 +443,7 @@ async function handleExperimentsPost(request, env) {
         if (!cell && firstEmpty < 0) firstEmpty = r + 1;
       }
       if (target < 0) target = (firstEmpty > 0) ? firstEmpty : (rows.length + 1);
-      await sheetsUpdateRow(token, id, qtab(EXP_TAB) + '!A' + target + ':' + colLetter(EXP_WIDTH) + target, row);
+      await sheetsUpdateRow(token, id, qtab(EXP_TAB) + '!A' + target + ':' + colLetter(EXP_WIDTH + 1) + target, row);
       return json({ ok: true, wrote: rec.id, row: target });
     }
 
@@ -418,8 +461,8 @@ async function handleExperimentsPost(request, env) {
       // move to Trash (id, project, name, status, deletedAt, + JSON chunks), then clear the source row
       const trashRow = [found[0], found[1], found[2], found[3], new Date().toISOString()].concat(chunkJson(jsonStr));
       await sheetsAppend(token, id, EXP_TRASH, [trashRow]);
-      const blank = new Array(EXP_WIDTH).fill('');
-      await sheetsUpdateRow(token, id, qtab(EXP_TAB) + '!A' + rowIdx + ':' + colLetter(EXP_WIDTH) + rowIdx, blank);
+      const blank = new Array(EXP_WIDTH + 1).fill('');
+      await sheetsUpdateRow(token, id, qtab(EXP_TAB) + '!A' + rowIdx + ':' + colLetter(EXP_WIDTH + 1) + rowIdx, blank);
       return json({ ok: true, deleted: body.id, trashed: true });
     }
 
@@ -430,8 +473,8 @@ async function handleExperimentsPost(request, env) {
       const vr = await sheetsBatchGet(token, id, [PROJ_TAB]);
       const { items } = rowsToObjects(vr[0] ? vr[0].values : []);
       const it = items.find((o) => String(o['name']).trim() === String(p.name).trim());
-      const rowVals = [p.name, p.owner || '', (it ? it['Created'] : now) || now, now, p.notes || ''];
-      if (it) await sheetsUpdateRow(token, id, qtab(PROJ_TAB) + '!A' + it.__row + ':E' + it.__row, rowVals);
+      const rowVals = [p.name, p.abbreviation || '', p.owner || '', (it ? it['Created'] : now) || now, now, p.notes || ''];
+      if (it) await sheetsUpdateRow(token, id, qtab(PROJ_TAB) + '!A' + it.__row + ':F' + it.__row, rowVals);
       else await sheetsAppend(token, id, PROJ_TAB, [rowVals]);
       return json({ ok: true, project: p.name });
     }
@@ -441,7 +484,7 @@ async function handleExperimentsPost(request, env) {
       const vr = await sheetsBatchGet(token, id, [PROJ_TAB]);
       const { items } = rowsToObjects(vr[0] ? vr[0].values : []);
       const it = items.find((o) => String(o['name']).trim() === String(body.name).trim());
-      if (it) await sheetsUpdateRow(token, id, qtab(PROJ_TAB) + '!A' + it.__row + ':E' + it.__row, ['', '', '', '', '']);
+      if (it) await sheetsUpdateRow(token, id, qtab(PROJ_TAB) + '!A' + it.__row + ':F' + it.__row, ['', '', '', '', '', '']);
       return json({ ok: true, deletedProject: body.name });
     }
 
@@ -612,6 +655,10 @@ export default {
     if (url.pathname === '/api/experiments') {
       if (request.method === 'GET') return handleExperimentsGet(env);
       if (request.method === 'POST') return handleExperimentsPost(request, env);
+      return json({ error: 'method_not_allowed' }, 405);
+    }
+    if (url.pathname === '/api/library') {
+      if (request.method === 'POST') return handleLibraryPost(request, env);
       return json({ error: 'method_not_allowed' }, 405);
     }
     if (url.pathname === '/api/drive') {

@@ -161,8 +161,21 @@
     for (var i = 0; i < arr.length; i++) { if ((arr[i].name || '') === rec.name) { idx = i; break; } }
     if (idx >= 0) arr[idx] = rec; else arr.push(rec);
     writeArr(PROJ_KEY, arr);
-    drivePost({ action: 'saveProject', project: { name: rec.name, owner: rec.owner || '', notes: rec.notes || '' } });
+    drivePost({ action: 'saveProject', project: { name: rec.name, abbreviation: rec.abbreviation || '', owner: rec.owner || '', notes: rec.notes || '' } });
     return rec;
+  }
+  // Next experiment ID for a project: <ABBREV>_<n>, n = 1 + highest existing number.
+  function nextExperimentId(projectName) {
+    var proj = null, ps = _proj();
+    for (var i = 0; i < ps.length; i++) { if ((ps[i].name || '') === projectName) { proj = ps[i]; break; } }
+    var abbrev = (proj && proj.abbreviation) ? proj.abbreviation : (projectName || 'EXP').replace(/[^A-Za-z]/g, '').slice(0, 3).toUpperCase() || 'EXP';
+    var max = 0;
+    _exp().forEach(function (e) {
+      if ((e.project || '') !== projectName) return;
+      var m = (e.experimentId || '').match(/_(\d+)$/);
+      if (m) max = Math.max(max, parseInt(m[1], 10));
+    });
+    return abbrev + '_' + (max + 1);
   }
   function deleteProject(name) {
     var t = (name || '').trim();
@@ -234,7 +247,7 @@
     allExperiments: allExperiments, getExperiment: getExperiment,
     saveExperiment: saveExperiment, deleteExperiment: deleteExperiment,
     projects: projects, experimentsInProject: experimentsInProject,
-    allProjects: allProjects, getProject: getProject, saveProject: saveProject, deleteProject: deleteProject,
+    allProjects: allProjects, getProject: getProject, saveProject: saveProject, deleteProject: deleteProject, nextExperimentId: nextExperimentId,
     allTransactions: allTransactions, transactionsForExperiment: transactionsForExperiment,
     addTransactions: addTransactions, removeTransactionsForExperiment: removeTransactionsForExperiment,
     inventoryNet: inventoryNet,

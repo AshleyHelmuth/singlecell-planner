@@ -1868,19 +1868,34 @@
 
   function thawProtocol(plan) {
     const nThaw = Math.max(1, Math.ceil(plan.nSamples / 18));
+    const nMedia = plan.nSamples + 1;                        // samples + ALLCELLS
+    const samplesPerWorker = Math.ceil(nMedia / nThaw);
+    const thawMediaTable = `<div class="recipe-box"><h5>Thawing media &mdash; R10 + DNase I (0.1&nbsp;mg/mL)</h5>
+      <table><thead><tr><th>Component</th><th class="num">1&times; (per sample)</th><th class="num">&times; ${nMedia} (samples + ALLCELLS)</th></tr></thead><tbody>
+      <tr><td>R10 media</td><td class="num">10&nbsp;mL</td><td class="num">${10 * nMedia}&nbsp;mL</td></tr>
+      <tr><td>DNase I (10&nbsp;mg/mL stock)</td><td class="num">100&nbsp;µL (1:100)</td><td class="num">${(100 * nMedia / 1000).toFixed(1)}&nbsp;mL</td></tr>
+      <tr><td><strong>Total</strong></td><td class="num">10&nbsp;mL</td><td class="num">${10 * nMedia}&nbsp;mL</td></tr>
+      </tbody></table><p class="who">Aliquot 10&nbsp;mL into each pre-labeled 15&nbsp;mL tube; pre-warm at 37&nbsp;&deg;C.</p></div>`;
+    const incMediaTable = `<div class="recipe-box"><h5>Incubation media &mdash; R10 + DNase I (50&nbsp;U/mL &approx; 0.025&nbsp;mg/mL), per worker</h5>
+      <table><thead><tr><th>Component</th><th class="num">1&times; (per sample)</th><th class="num">Per worker (${samplesPerWorker} samples)</th></tr></thead><tbody>
+      <tr><td>R10 media</td><td class="num">2&nbsp;mL</td><td class="num">${2 * samplesPerWorker}&nbsp;mL</td></tr>
+      <tr><td>DNase I (10&nbsp;mg/mL stock)</td><td class="num">5&nbsp;µL</td><td class="num">${5 * samplesPerWorker}&nbsp;µL</td></tr>
+      <tr><td><strong>Total</strong></td><td class="num">2&nbsp;mL</td><td class="num">${2 * samplesPerWorker}&nbsp;mL</td></tr>
+      </tbody></table><p class="who">Make one tube per thawer (${nThaw} thawer${nThaw === 1 ? '' : 's'}). Add 2&nbsp;mL to each sample after the thaw spin.</p></div>`;
     return reagentHeader('ST1', plan, { foot: 'Per-sample amounts from the Pre_GEM_Consumables Thaw column, scaled to the ' + plan.nSamples + ' samples in this plan.' }) + `
-      <p><strong>Materials:</strong> ${plan.nSamples}× 15 mL pre-labeled conical tubes, ${plan.nSamples}× Thawsome adaptors, counting plates, ${plan.nPools}× FACS tubes.</p>
-      <p><strong>Reagents:</strong> Complete RPMI (10 mL × ${plan.nSamples} = ${plan.nSamples * 10} mL), DNase, AOPI cell dye.</p>
+      <p><strong>Materials:</strong> ${nMedia}× 15 mL pre-labeled conical tubes (samples + ALLCELLS), ${nMedia}× Thawsome adaptors, counting plates, ${plan.nPools}× FACS tubes.</p>
       ${sopTip('Be gentle — handle cells slowly and get them into warm media as fast as possible; keep them on ice after the post-thaw incubation. Watch temperature: warm media + RT centrifuge initially, then ice + 4&nbsp;&deg;C centrifuge once pooling. Note any irregularities per sample (pressurized cryovials → poor viability; small pellet → low yield; pink pellet → RBC contamination). Remove supernatant carefully on every spin — accurate counts and cell preservation matter through the whole process.')}
+      ${thawMediaTable}
       <ol class="chk">
-        <li>Warm complete RPMI (37 °C); set centrifuge to room temp. Thaw DNase.</li>
-        <li>Prepare RPMI + DNase (0.1 mg/mL): aliquot 10 mL into each pre-labeled 15 mL tube (~${plan.nSamples * 10} mL total; allow 20 min to warm before removing cells from LN₂).</li>
+        <li>Warm complete R10 media (37 °C); set centrifuge to room temp. Thaw DNase.</li>
+        <li>Prepare thawing media (R10 + DNase 0.1 mg/mL, table above): aliquot 10 mL into each pre-labeled 15 mL tube (${10 * nMedia} mL total; allow 20 min to warm before removing cells from LN₂).</li>
         <li>Centrifuge-thaw: invert cryovial into Thawsome on the 15 mL conical with media. Open frozen vials away from your face. Spin 10 min @ 350g, 25 °C.</li>
-        <li>While spinning, prepare "RPMI-DNase-low" (50 mL RPMI + 125 µL 10 mg/mL DNase = 0.025 mg/mL) — one tube per thawer (${nThaw} thawers).</li>
-        <li>Pour off supernatant, add 2 mL RPMI-DNase-low, resuspend gently. Count 20 µL with AOPI dye.</li>
+        <li>While spinning, prepare the incubation media (R10 + DNase, per-worker table below) — one tube per thawer.</li>
+        <li>Pour off supernatant, add 2 mL incubation media, resuspend gently. Count 20 µL with AOPI dye.</li>
         <li>Incubate 10 min @ 37 °C, then move all tubes to ice for the rest of the experiment.</li>
         <li>Export counts → use the pooling volumes (next protocol) to determine µL/sample.</li>
       </ol>
+      ${incMediaTable}
       <p class="pp-source">Source: handbook "Cell Thawing/PBMC Preparation" + MADI batch protocol.</p>`;
   }
 
@@ -1936,7 +1951,9 @@
 
   // ---- Pre-experiment prep (media + buffers) --------------------------------
   function prepProtocol(plan) {
-    const nBottles = Math.max(2, Math.ceil((plan.nSamples * 12) / 500) + 1);
+    const nMedia = plan.nSamples + 1;              // samples + ALLCELLS control
+    const r10TotalMl = nMedia * 15;                // 15 mL/sample made (12 used: 10 thaw + 2 incubation; +3 margin)
+    const nBottles = Math.max(1, Math.ceil(r10TotalMl / 500));
     // Plan-scaled buffer volumes (match the Reagents & cost engine: staining
     // buffer = 14 mL/pool + 9 mL/super-pool per staining arm; sort adds a 2 mL/pool
     // wash). BSA is 2% w/v = 0.02 g/mL.
@@ -1973,13 +1990,13 @@
 
     // DNase: always dissolve the full 100 mg vial; note how much this plan uses
     // so the remainder can be frozen. ~1.4 mg/sample (thaw + incubation media).
-    const dnaseMg = Math.round(1.396 * plan.nSamples);
+    const dnaseMg = Math.round(1.05 * nMedia);   // thaw (1.0) + incubation (0.05) mg/sample, incl. ALLCELLS
     const dnaseLeft = Math.max(0, 100 - dnaseMg);
     const dnaseBox = `<div class="recipe-box"><h5>DNase I (from 100&nbsp;mg vial)</h5>
         <table><tr><th>Use</th><th>Prep</th></tr>
         <tr><td>Thaw media (0.1&nbsp;mg/mL)</td><td>10&nbsp;mg/mL stock into warm R10</td></tr>
         <tr><td>Incubation media (0.025&nbsp;mg/mL)</td><td>125&nbsp;µL 10&nbsp;mg/mL stock per 50&nbsp;mL R10</td></tr></table>
-        <p class="who">Dissolve the whole 100&nbsp;mg vial (no weighing). This experiment (${plan.nSamples} samples) uses ~${dnaseMg}&nbsp;mg &mdash; aliquot and freeze the remaining ~${dnaseLeft}&nbsp;mg of 10&nbsp;mg/mL stock at &minus;20&nbsp;&deg;C for later batches.</p></div>`;
+        <p class="who">Dissolve the whole 100&nbsp;mg vial (no weighing). This experiment (${nMedia} samples incl. ALLCELLS) uses ~${dnaseMg}&nbsp;mg &mdash; aliquot and freeze the remaining ~${dnaseLeft}&nbsp;mg of 10&nbsp;mg/mL stock at &minus;20&nbsp;&deg;C for later batches.</p></div>`;
 
     // ASAP reaction count (for OMNI lysis + wash), from ASAP GEM loads.
     let nAsapRxns = 0;
@@ -1988,7 +2005,7 @@
     const asapNote = hasAsap ? `<p class="who">For ${nAsapRxns} ASAP reaction${nAsapRxns === 1 ? '' : 's'} (100&nbsp;µL lysis + 1&nbsp;mL wash each): need ~${nAsapRxns * 100}&nbsp;µL lysis and ~${nAsapRxns}&nbsp;mL wash. Scale the 2&nbsp;mL recipes below accordingly (make at least one full batch of each).</p>` : '';
     return `
       <p>Prepare media, buffers and stocks 1&ndash;3 days ahead. Filter-sterilize buffers and store at 4&nbsp;&deg;C. Make DNase stock fresh from powder and store aliquots at &minus;20&nbsp;&deg;C.</p>
-      <div class="recipe-box"><h5>R10 media (thaw + wash) &mdash; ~${nBottles} &times; 500&nbsp;mL bottles</h5>
+      <div class="recipe-box"><h5>R10 media (thaw + wash) &mdash; make ${nBottles} &times; 500&nbsp;mL bottle${nBottles === 1 ? '' : 's'} (${r10TotalMl}&nbsp;mL for ${nMedia} samples incl. ALLCELLS @ 15&nbsp;mL each)</h5>
         <table><tr><th>Component</th><th>Per 500&nbsp;mL bottle</th></tr>
         <tr><td>RPMI 1640 (phenol-free if stim on pregnancy samples)</td><td class="num">440&nbsp;mL</td></tr>
         <tr><td>FBS</td><td class="num">50&nbsp;mL</td></tr>
@@ -2330,6 +2347,7 @@
   function createExperimentUI(meta) {
     const rec = { name: meta.name, project: meta.project || '', date: meta.date || '',
       plannedBy: meta.plannedBy || '', status: 'planned', reserved: true };
+    if (rec.project) rec.experimentId = Store.nextExperimentId(rec.project);
     Store.saveExperiment(rec);
     CURRENT_EXP_ID = rec.id;
     resetPlanEditor();
@@ -2405,57 +2423,150 @@
     if (!calc || !calc.samples.length) { alert('Add samples and compute a pooling strategy first.'); return; }
     const curRec = CURRENT_EXP_ID ? Store.getExperiment(CURRENT_EXP_ID) : null;
     const exp = (curRec && curRec.name) ? curRec.name : 'Experiment';
+    const expId = (curRec && curRec.experimentId) ? curRec.experimentId : '';
     const arms = buildArmInstances(SEL);
     const hasUnsort = arms.some((a) => a.population === 'unsorted' && a.chem === 'cite5');
     const hasAsap = arms.some((a) => a.chem === 'asap');
     const hasSort = arms.some((a) => a.population === 'sorted' || a.laneMode === 'perSortPop');
+    const hasBulk = !!(SEL.bulk && SEL.bulk.on) || arms.some((a) => a.bulk);
+    const vdjOn = (key) => !!(SEL[key] && SEL[key].vdj);
 
-    // pool number per sampleId, and HTO per pool
     const poolOf = {};
     calc.poolRes.pools.forEach((pool, i) => pool.forEach((s) => { poolOf[s.sampleId] = i + 1; }));
     const htoByPool = {}; calc.htoRes.assignments.forEach((x) => { htoByPool[x.pool] = x.hto; });
-    const superPoolByPool = {}; calc.htoRes.superPools.forEach((grp, sp) => grp.forEach((p) => { superPoolByPool[p] = sp; }));
     const htoNum = (i) => { const v = htoByPool[i] || ''; const m = /(\d+)/.exec(v); return m ? m[1] : (i + 1); };
     const nPools = calc.poolRes.nPools;
-    const multiSP = calc.htoRes.superPools.length > 1;
 
-    const header = ['Tube', 'Line 1', 'Line 2', 'Line 3'];
-    const rows = [header];
-    const add = (tube, l1, l2, l3) => rows.push([tube, l1 == null ? '' : String(l1), l2 == null ? '' : String(l2), l3 == null ? '' : String(l3)]);
+    // per-arm lane counts (drive the cDNA/library tube labels)
+    const lanes = laneOverridesFromCost(calc.samples.length, nPools, calc.samples) || { unsort: 0, asap: 0, sort: 0 };
 
-    // 1) original sample tubes: Line1 = sample number, Line2 = pool number, Line3 = sample name / patient
+    // ===== Sheet 1: sample prep + FACS + controls + sort output + bulk =====
+    const rows1 = [['Tube', 'Line 1', 'Line 2', 'Line 3']];
+    const a1 = (t, l1, l2, l3) => rows1.push([t, l1 == null ? '' : String(l1), l2 == null ? '' : String(l2), l3 == null ? '' : String(l3)]);
+
     calc.samples.forEach((s, idx) => {
-      const name = s.sampleId + (s.patientId && s.patientId !== s.sampleId ? ' / ' + s.patientId : '');
-      add('Sample', idx + 1, 'pool ' + (poolOf[s.sampleId] || '?'), name);
+      a1('Sample (15mL)', 'pool ' + (poolOf[s.sampleId] || '?'), idx + 1, (idx + 1) + ' / ' + s.sampleId);
     });
+    for (let i = 0; i < nPools; i++) {
+      if (hasSort) a1('Pool (50 mL)', 'TotalSeq-C HTO ' + htoNum(i), 'sort' + (i + 1), 'remainder from pool ' + (i + 1));
+      else a1('Pool (50 mL)', 'pool ' + (i + 1), '50 mL pool', exp);
+    }
+    if (hasUnsort) for (let i = 0; i < nPools; i++) a1("5' unsort (FACS)", 'TotalSeq-C HTO ' + htoNum(i), 'unsort' + (i + 1), '1.2M from pool ' + (i + 1));
+    if (hasAsap) for (let i = 0; i < nPools; i++) a1('ASAP (FACS)', 'TotalSeq-A HTO ' + htoNum(i), 'asap' + (i + 1), '1.2M from pool ' + (i + 1));
+    if (hasUnsort) a1('Super-pool (FACS)', '', 'unsort super-pool', '');
+    if (hasAsap) a1('Super-pool (FACS)', '', 'asap super-pool', '');
+    if (hasSort) a1('Super-pool (FACS)', '', 'sort super-pool', '');
+    a1('Unstain control (FACS)', '', '', '');
+    a1('L/D control (FACS)', '', '', '');
+    if (hasSort) ['HSC', 'pDC', 'cDC', 'Treg'].forEach((p) => a1('Sort output (FACS)', '', p, ''));
+    if (hasBulk) calc.samples.forEach((s, idx) => a1('BulkRNA (1.5mL tube)', 'Bulk RNA', idx + 1, (idx + 1) + ' / ' + s.sampleId));
 
-    // 2) one 50 mL tube per pool: "pool N"
-    for (let i = 0; i < nPools; i++) add('Pool (50 mL)', 'pool ' + (i + 1), '50 mL pool', exp);
+    // ===== Sheet 2: GEM-RT + cDNA + library tubes (scale by lanes) =====
+    const rows2 = [['Tube', 'Line 1', 'Line 2', 'Line 3']];
+    const a2 = (t, l1, l2, l3) => rows2.push([t, l1 == null ? '' : String(l1), l2 == null ? '' : String(l2), l3 == null ? '' : String(l3)]);
+    const idTag = expId ? (expId + ' · ' + exp) : exp;
 
-    // 3) FACS tubes per pool per modality branch + HTO # and type
-    const facs = (label, prefix, htoType, note) => {
-      for (let i = 0; i < nPools; i++) {
-        add(label, prefix + (i + 1), htoType + ' HTO ' + htoNum(i), note);
-      }
-    };
-    if (hasUnsort) facs("FACS 5' unsort", 'unsort5p', 'TotalSeq-C', '1.2M from pool');
-    if (hasAsap) facs('FACS ASAP', 'asap3p', 'TotalSeq-A', '1.2M from pool');
-    if (hasSort) facs("FACS 5' sort", 'sort5p', 'TotalSeq-C', 'remainder from pool');
+    // unsort: U1..Un ; cDNA U{n}-P (pellet->GEX/VDJ) + U{n}-S (supernatant->CSP) ; libraries GEX, ADT (+VDJ)
+    for (let i = 1; i <= lanes.unsort; i++) a2('GEM-RT strip', 'U' + i, "unsort 5'", idTag);
+    for (let i = 1; i <= lanes.unsort; i++) {
+      a2('cDNA strip', 'U' + i + '-P', 'pellet \u2192 GEX' + (vdjOn('unsorted') ? '/VDJ' : ''), idTag);
+      a2('cDNA strip', 'U' + i + '-S', 'supernatant \u2192 CSP (ADT)', idTag);
+    }
+    for (let i = 1; i <= lanes.unsort; i++) {
+      a2('Library', 'U' + i + '-GEX', 'GEX library', idTag);
+      a2('Library', 'U' + i + '-ADT', 'CSP/ADT library', idTag);
+      if (vdjOn('unsorted')) { a2('Library', 'U' + i + '-TCR', 'TCR library', idTag); a2('Library', 'U' + i + '-BCR', 'BCR library', idTag); }
+    }
+    // asap: A{chip}-{lane}; libraries ATAC, ADT, HTO
+    for (let i = 0; i < lanes.asap; i++) { const chip = Math.floor(i / 2) + 1, ln = (i % 2) + 1; a2('GEM-RT strip', 'A' + chip + '-' + ln, 'ASAP', idTag); }
+    for (let i = 0; i < lanes.asap; i++) { const chip = Math.floor(i / 2) + 1, ln = (i % 2) + 1; a2('cDNA strip', 'A' + chip + '-' + ln, 'ASAP transposed', idTag); }
+    for (let i = 0; i < lanes.asap; i++) {
+      const chip = Math.floor(i / 2) + 1, ln = (i % 2) + 1, tag = 'A' + chip + '-' + ln;
+      a2('Library', tag + '-ATAC', 'ATAC library', idTag);
+      a2('Library', tag + '-ADT', 'CSP/ADT library', idTag);
+      a2('Library', tag + '-HTO', 'HTO library', idTag);
+    }
+    // sort: S1..Sn ; cDNA S{n}-P (->GEX/VDJ) + S{n}-S (->CSP) ; libraries GEX, ADT (+VDJ/TCR)
+    for (let i = 1; i <= lanes.sort; i++) a2('GEM-RT strip', 'S' + i, "sort 5'", idTag);
+    for (let i = 1; i <= lanes.sort; i++) {
+      a2('cDNA strip', 'S' + i + '-P', 'pellet \u2192 GEX' + (vdjOn('sorted') ? '/VDJ' : ''), idTag);
+      a2('cDNA strip', 'S' + i + '-S', 'supernatant \u2192 CSP (ADT)', idTag);
+    }
+    for (let i = 1; i <= lanes.sort; i++) {
+      a2('Library', 'S' + i + '-GEX', 'GEX library', idTag);
+      a2('Library', 'S' + i + '-ADT', 'CSP/ADT library', idTag);
+      if (vdjOn('sorted')) a2('Library', 'S' + i + '-TCR', 'TCR library', idTag);
+    }
 
-    // 4) super-pool tubes: one per modality (per super-pool group if >1)
-    const superLabel = (base) => {
-      if (!multiSP) { add('Super-pool', base + ' super-pool', exp, ''); return; }
-      calc.htoRes.superPools.forEach((grp, sp) => add('Super-pool', base + ' super-pool ' + (sp + 1), exp, 'pools ' + grp.map((p) => p + 1).join(',')));
-    };
-    if (hasUnsort) superLabel('unsort5p');
-    if (hasAsap) superLabel('asap3p');
-    if (hasSort) superLabel('sort5p');
+    const wb = XLSX.utils.book_new();
+    const ws1 = XLSX.utils.aoa_to_sheet(rows1); ws1['!cols'] = [{ wch: 20 }, { wch: 18 }, { wch: 18 }, { wch: 30 }];
+    XLSX.utils.book_append_sheet(wb, ws1, 'Sample & FACS labels');
+    const ws2 = XLSX.utils.aoa_to_sheet(rows2); ws2['!cols'] = [{ wch: 14 }, { wch: 14 }, { wch: 24 }, { wch: 26 }];
+    XLSX.utils.book_append_sheet(wb, ws2, 'cDNA & library labels');
+    XLSX.writeFile(wb, 'tube_labels_' + (expId || exp).replace(/[^A-Za-z0-9._-]+/g, '_') + '.xlsx');
+  }
+
+  // Library Sequencing Record — one row per library type, counts = lanes,
+  // matching the shared record's columns (rest left blank to fill in later).
+  function generateLibraryRecord() {
+    const calc = computePooling();
+    if (!calc || !calc.samples.length) { alert('Add samples and compute a pooling strategy first.'); return; }
+    const curRec = CURRENT_EXP_ID ? Store.getExperiment(CURRENT_EXP_ID) : null;
+    const exp = (curRec && curRec.name) ? curRec.name : 'Experiment';
+    const expId = (curRec && curRec.experimentId) ? curRec.experimentId : '';
+    const project = (curRec && curRec.project) ? curRec.project : '';
+    const arms = buildArmInstances(SEL);
+    const hasUnsort = arms.some((a) => a.population === 'unsorted' && a.chem === 'cite5');
+    const hasAsap = arms.some((a) => a.chem === 'asap');
+    const hasSort = arms.some((a) => a.population === 'sorted' || a.laneMode === 'perSortPop');
+    const vdjOn = (key) => !!(SEL[key] && SEL[key].vdj);
+    const lanes = laneOverridesFromCost(calc.samples.length, calc.poolRes.nPools, calc.samples) || { unsort: 0, asap: 0, sort: 0 };
+
+    const header = ['Project', 'Experiment', 'Experiment_ID', 'Library Type', '# of Libraries', 'Indexing Scheme', 'Storage Location', 'Requested Sequencing Depth', 'Service Provider', 'Sent Date', 'Sequencing Status', 'Flow Cell ID', 'Data Storage Location'];
+    const rows = [header];
+    const add = (libType, n) => { if (n > 0) rows.push([project, exp, expId, libType, n, '', '', '', '', '', '', '', '']); };
+    if (hasUnsort) { add("5' unsort GEX", lanes.unsort); add("5' unsort CSP (ADT)", lanes.unsort); if (vdjOn('unsorted')) { add("5' unsort TCR", lanes.unsort); add("5' unsort BCR", lanes.unsort); } }
+    if (hasAsap) { add('ASAP ATAC', lanes.asap); add('ASAP CSP (ADT)', lanes.asap); add('ASAP HTO', lanes.asap); }
+    if (hasSort) { add("5' sort GEX", lanes.sort); add("5' sort CSP (ADT)", lanes.sort); if (vdjOn('sorted')) add("5' sort TCR", lanes.sort); }
 
     const ws = XLSX.utils.aoa_to_sheet(rows);
-    ws['!cols'] = [{ wch: 16 }, { wch: 14 }, { wch: 20 }, { wch: 26 }];
+    ws['!cols'] = header.map((h) => ({ wch: Math.max(12, h.length + 2) }));
     const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, 'Tube labels');
-    XLSX.writeFile(wb, 'tube_labels_' + exp.replace(/[^A-Za-z0-9._-]+/g, '_') + '.xlsx');
+    XLSX.utils.book_append_sheet(wb, ws, 'Library record');
+    XLSX.writeFile(wb, 'library_record_' + (expId || exp).replace(/[^A-Za-z0-9._-]+/g, '_') + '.xlsx');
+  }
+
+  // Build the library rows (data only, no header) for the current experiment.
+  function buildLibraryRows() {
+    const calc = computePooling();
+    if (!calc || !calc.samples.length) return null;
+    const curRec = CURRENT_EXP_ID ? Store.getExperiment(CURRENT_EXP_ID) : null;
+    const exp = (curRec && curRec.name) ? curRec.name : 'Experiment';
+    const expId = (curRec && curRec.experimentId) ? curRec.experimentId : '';
+    const project = (curRec && curRec.project) ? curRec.project : '';
+    const arms = buildArmInstances(SEL);
+    const hasUnsort = arms.some((a) => a.population === 'unsorted' && a.chem === 'cite5');
+    const hasAsap = arms.some((a) => a.chem === 'asap');
+    const hasSort = arms.some((a) => a.population === 'sorted' || a.laneMode === 'perSortPop');
+    const vdjOn = (key) => !!(SEL[key] && SEL[key].vdj);
+    const lanes = laneOverridesFromCost(calc.samples.length, calc.poolRes.nPools, calc.samples) || { unsort: 0, asap: 0, sort: 0 };
+    const rows = [];
+    const add = (libType, n) => { if (n > 0) rows.push([project, exp, expId, libType, n, '', '', '', '', '', '', '', '']); };
+    if (hasUnsort) { add("5' unsort GEX", lanes.unsort); add("5' unsort CSP (ADT)", lanes.unsort); if (vdjOn('unsorted')) { add("5' unsort TCR", lanes.unsort); add("5' unsort BCR", lanes.unsort); } }
+    if (hasAsap) { add('ASAP ATAC', lanes.asap); add('ASAP CSP (ADT)', lanes.asap); add('ASAP HTO', lanes.asap); }
+    if (hasSort) { add("5' sort GEX", lanes.sort); add("5' sort CSP (ADT)", lanes.sort); if (vdjOn('sorted')) add("5' sort TCR", lanes.sort); }
+    return { rows: rows, experimentId: expId, exp: exp };
+  }
+
+  function sendLibraryToSheet() {
+    const built = buildLibraryRows();
+    if (!built || !built.rows.length) { alert('Add samples and compute a pooling strategy first.'); return; }
+    if (!confirm('Add ' + built.rows.length + ' library rows for "' + built.exp + '" to the shared Library Sequencing Record? Existing rows for this experiment will be replaced.')) return;
+    fetch('/api/library', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ rows: built.rows, experimentId: built.experimentId, replace: true }) })
+      .then((r) => r.json())
+      .then((d) => { if (d && d.ok) alert('Added ' + d.appended + ' library rows to the record sheet.'); else alert('Could not write to the library record: ' + (d && d.message ? d.message : JSON.stringify(d))); })
+      .catch((e) => alert('Library record write failed: ' + e));
   }
 
   function openExperiment(id) {
@@ -3022,7 +3133,8 @@
       const summ = list.length
         ? list.map((e) => '<li>' + esc(e.name) + (e.date ? ' <span class="muted">\u2014 ' + esc(e.date) + '</span>' : '') + ' ' + statusBadge(e.status) + '</li>').join('')
         : '<li class="muted">No experiments yet.</li>';
-      let c = '<div class="proj-card"><div class="proj-card-head"><div><h3>' + esc(isUnfiled ? 'Unfiled experiments' : pname) + '</h3>'
+      const projAbbrev = isUnfiled ? '' : (function () { const pr = Store.allProjects().find((p) => p.name === pname); return pr && pr.abbreviation ? pr.abbreviation : ''; })();
+      let c = '<div class="proj-card"><div class="proj-card-head"><div><h3>' + esc(isUnfiled ? 'Unfiled experiments' : pname) + (projAbbrev ? ' <span class="proj-abbrev">' + esc(projAbbrev) + '</span>' : '') + '</h3>'
         + '<p class="muted small">' + (isUnfiled ? (list.length + ' experiment' + (list.length === 1 ? '' : 's'))
           : ('Owner: ' + esc(owner || '\u2014') + ' \u00b7 ' + list.length + ' experiment' + (list.length === 1 ? '' : 's'))) + '</p></div>'
         + '<div class="head-actions"><button class="btn tiny" data-proj-act="toggle" data-proj="' + escAttr(pname) + '">' + (expanded ? 'Hide' : 'Manage project') + '</button></div></div>'
@@ -3076,7 +3188,7 @@
             + (e.scheduledAt ? '' : ' <span class="exp-badge unsched">not scheduled</span>')
             + batchFlag;
           c += '<div class="exp-card' + (expOpen ? ' is-open' : '') + (CURRENT_EXP_ID === e.id ? ' is-active' : '') + '">'
-            + '<div class="exp-card-head"><div class="exp-card-info"><strong>' + esc(e.name) + '</strong> ' + flags
+            + '<div class="exp-card-head"><div class="exp-card-info"><strong>' + esc(e.name) + '</strong> ' + (e.experimentId ? '<span class="exp-id">' + esc(e.experimentId) + '</span> ' : '') + flags
             + '<div class="muted small">' + (e.date ? esc(e.date) + ' \u00b7 ' : '') + info + '</div></div>'
             + '<button class="btn tiny" data-exp-act="manage" data-id="' + e.id + '">' + (expOpen ? 'Hide' : 'Manage') + '</button></div>';
           if (expOpen) {
@@ -3093,6 +3205,8 @@
               + '<button class="btn tiny" data-exp-act="packet" data-id="' + e.id + '">Experiment packet</button>'
               + '<button class="btn tiny" data-exp-act="protocols" data-id="' + e.id + '">Protocols</button>'
               + '<button class="btn tiny" data-exp-act="labels" data-id="' + e.id + '">Labels</button>'
+              + '<button class="btn tiny" data-exp-act="libRecord" data-id="' + e.id + '">Library record</button>'
+              + '<button class="btn tiny" data-exp-act="libSend" data-id="' + e.id + '">\u2192 Library sheet</button>'
               + '<button class="btn tiny" data-exp-act="pooling" data-id="' + e.id + '">Pooling strategy</button>'
               + '<button class="btn tiny" data-exp-act="reagents" data-id="' + e.id + '">Reagent checklist</button>'
               + '</div></div>';
@@ -3174,6 +3288,8 @@
       else if (act === 'packet') experimentWorkbookXlsx(id);
       else if (act === 'protocols') openExperimentProtocols(id);
       else if (act === 'labels') { openExperiment(id); generateTubeLabels(); }
+      else if (act === 'libRecord') { openExperiment(id); generateLibraryRecord(); }
+      else if (act === 'libSend') { openExperiment(id); sendLibraryToSheet(); }
       else if (act === 'pooling') { openExperiment(id); downloadPoolingXlsx(); }
       else if (act === 'reagents') experimentReagentChecklist(id);
     }));
@@ -3185,13 +3301,17 @@
     const box = $('#pmForms'); if (!box) return;
     box.innerHTML = '<div class="pm-form"><h3>New project</h3><div class="save-grid">'
       + '<label>Project name<input type="text" id="npName" placeholder="e.g. MADI dyads" /></label>'
+      + '<label>Project ID (2&ndash;3 letters)<input type="text" id="npAbbrev" maxlength="3" placeholder="e.g. BCP" style="text-transform:uppercase" /></label>'
       + '<label>Owner<input type="text" id="npOwner" placeholder="e.g. Ashley" /></label>'
       + '</div><div class="row-actions"><button class="btn primary" id="npCreate">Create project</button><button class="btn ghost" id="npCancel">Cancel</button></div></div>';
     $('#npCancel').addEventListener('click', () => { box.innerHTML = ''; });
     $('#npCreate').addEventListener('click', () => {
       const name = ($('#npName').value || '').trim();
       if (!name) { alert('Enter a project name.'); return; }
-      Store.saveProject({ name: name, owner: ($('#npOwner').value || '').trim() });
+      const abbrev = ($('#npAbbrev').value || '').trim().toUpperCase();
+      if (!/^[A-Z]{2,3}$/.test(abbrev)) { alert('Enter a 2\u20133 letter Project ID (letters only), e.g. BCP.'); return; }
+      if (Store.allProjects().some((p) => (p.abbreviation || '').toUpperCase() === abbrev)) { alert('Project ID \u201c' + abbrev + '\u201d is already used by another project. Choose a different one.'); return; }
+      Store.saveProject({ name: name, abbreviation: abbrev, owner: ($('#npOwner').value || '').trim() });
       box.innerHTML = ''; EXPANDED_PROJECTS[name] = true; renderManage();
     });
   }
