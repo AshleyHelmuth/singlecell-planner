@@ -2464,47 +2464,32 @@
     if (hasSort) ['HSC', 'pDC', 'cDC', 'Treg'].forEach((p) => a1('Sort output (FACS)', '', p, ''));
     if (hasBulk) calc.samples.forEach((s, idx) => a1('BulkRNA (1.5mL tube)', 'Bulk RNA', idx + 1, (idx + 1) + ' / ' + s.sampleId));
 
-    // ===== Sheet 2: GEM-RT + cDNA + library tubes (scale by lanes) =====
-    const rows2 = [['Tube', 'Line 1', 'Line 2', 'Line 3']];
-    const a2 = (t, l1, l2, l3) => rows2.push([t, l1 == null ? '' : String(l1), l2 == null ? '' : String(l2), l3 == null ? '' : String(l3)]);
-    const idTag = expId ? (expId + ' · ' + exp) : exp;
+    // ===== Sheet 2: GEM-RT + cDNA + library tubes (Sheet1 naming convention) =====
+    // Base ID = {U/A/S}{lane-within-chip}; append -{chip} only when that modality
+    // uses more than one chip. GEM-RT tubes get a -GEM suffix. Line 1 = experiment
+    // ID, Line 2 = short tube name, Line 3 = batch date (YYMMDD).
+    const rows2 = [['Tube', 'Modality', 'Type', 'Line 1 (Experiment ID)', 'Line 2', 'Line 3']];
+    const dateYY = (function () { const d = (curRec && curRec.date) ? curRec.date : ''; const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(d); return m ? (m[1].slice(2) + m[2] + m[3]) : ''; })();
+    const a2 = (tube, modality, type, name) => rows2.push([tube, modality, type, expId || exp, name, dateYY]);
+    const baseName = (letter, g, perChip, total) => { const nChips = Math.ceil(total / perChip); const chip = Math.floor(g / perChip) + 1; const lane = (g % perChip) + 1; return letter + lane + (nChips > 1 ? '-' + chip : ''); };
 
-    // unsort: U1..Un ; cDNA U{n}-P (pellet->GEX/VDJ) + U{n}-S (supernatant->CSP) ; libraries GEX, ADT (+VDJ)
-    for (let i = 1; i <= lanes.unsort; i++) a2('GEM-RT strip', 'U' + i, "unsort 5'", idTag);
-    for (let i = 1; i <= lanes.unsort; i++) {
-      a2('cDNA strip', 'U' + i + '-P', 'pellet \u2192 GEX' + (vdjOn('unsorted') ? '/VDJ' : ''), idTag);
-      a2('cDNA strip', 'U' + i + '-S', 'supernatant \u2192 CSP (ADT)', idTag);
-    }
-    for (let i = 1; i <= lanes.unsort; i++) {
-      a2('Library', 'U' + i + '-GEX', 'GEX library', idTag);
-      a2('Library', 'U' + i + '-ADT', 'CSP/ADT library', idTag);
-      if (vdjOn('unsorted')) { a2('Library', 'U' + i + '-TCR', 'TCR library', idTag); a2('Library', 'U' + i + '-BCR', 'BCR library', idTag); }
-    }
-    // asap: A{chip}-{lane}; libraries ATAC, ADT, HTO
-    for (let i = 0; i < lanes.asap; i++) { const chip = Math.floor(i / 2) + 1, ln = (i % 2) + 1; a2('GEM-RT strip', 'A' + chip + '-' + ln, 'ASAP', idTag); }
-    for (let i = 0; i < lanes.asap; i++) { const chip = Math.floor(i / 2) + 1, ln = (i % 2) + 1; a2('cDNA strip', 'A' + chip + '-' + ln, 'ASAP transposed', idTag); }
-    for (let i = 0; i < lanes.asap; i++) {
-      const chip = Math.floor(i / 2) + 1, ln = (i % 2) + 1, tag = 'A' + chip + '-' + ln;
-      a2('Library', tag + '-ATAC', 'ATAC library', idTag);
-      a2('Library', tag + '-ADT', 'CSP/ADT library', idTag);
-      a2('Library', tag + '-HTO', 'HTO library', idTag);
-    }
-    // sort: S1..Sn ; cDNA S{n}-P (->GEX/VDJ) + S{n}-S (->CSP) ; libraries GEX, ADT (+VDJ/TCR)
-    for (let i = 1; i <= lanes.sort; i++) a2('GEM-RT strip', 'S' + i, "sort 5'", idTag);
-    for (let i = 1; i <= lanes.sort; i++) {
-      a2('cDNA strip', 'S' + i + '-P', 'pellet \u2192 GEX' + (vdjOn('sorted') ? '/VDJ' : ''), idTag);
-      a2('cDNA strip', 'S' + i + '-S', 'supernatant \u2192 CSP (ADT)', idTag);
-    }
-    for (let i = 1; i <= lanes.sort; i++) {
-      a2('Library', 'S' + i + '-GEX', 'GEX library', idTag);
-      a2('Library', 'S' + i + '-ADT', 'CSP/ADT library', idTag);
-      if (vdjOn('sorted')) a2('Library', 'S' + i + '-TCR', 'TCR library', idTag);
-    }
+    // unsort 5' (8 lanes/chip)
+    for (let i = 0; i < lanes.unsort; i++) a2('GEM-RT strip', "Unsort 5'", 'GEM RT output', baseName('U', i, 8, lanes.unsort) + '-GEM');
+    for (let i = 0; i < lanes.unsort; i++) { const b = baseName('U', i, 8, lanes.unsort); a2('cDNA strip', "Unsort 5'", 'pellet \u2192 GEX' + (vdjOn('unsorted') ? '/VDJ' : ''), b + '-P'); a2('cDNA strip', "Unsort 5'", 'supernatant \u2192 CSP (ADT)', b + '-S'); }
+    for (let i = 0; i < lanes.unsort; i++) { const b = baseName('U', i, 8, lanes.unsort); a2('Library', "Unsort 5'", 'GEX library', b + '-GEX'); a2('Library', "Unsort 5'", 'CSP/ADT library', b + '-ADT'); if (vdjOn('unsorted')) { a2('Library', "Unsort 5'", 'TCR library', b + '-TCR'); a2('Library', "Unsort 5'", 'BCR library', b + '-BCR'); } }
+    // ASAP (2 lanes/chip); cDNA is the transposed nuclei (no pellet/supernatant split)
+    for (let i = 0; i < lanes.asap; i++) a2('GEM-RT strip', 'ASAP', 'GEM RT output', baseName('A', i, 2, lanes.asap) + '-GEM');
+    for (let i = 0; i < lanes.asap; i++) a2('cDNA strip', 'ASAP', 'ASAP transposed', baseName('A', i, 2, lanes.asap));
+    for (let i = 0; i < lanes.asap; i++) { const b = baseName('A', i, 2, lanes.asap); a2('Library', 'ASAP', 'ATAC library', b + '-ATAC'); a2('Library', 'ASAP', 'CSP/ADT library', b + '-ADT'); a2('Library', 'ASAP', 'HTO library', b + '-HTO'); }
+    // sort 5' (8 lanes/chip)
+    for (let i = 0; i < lanes.sort; i++) a2('GEM-RT strip', "Sort 5'", 'GEM RT output', baseName('S', i, 8, lanes.sort) + '-GEM');
+    for (let i = 0; i < lanes.sort; i++) { const b = baseName('S', i, 8, lanes.sort); a2('cDNA strip', "Sort 5'", 'pellet \u2192 GEX' + (vdjOn('sorted') ? '/VDJ' : ''), b + '-P'); a2('cDNA strip', "Sort 5'", 'supernatant \u2192 CSP (ADT)', b + '-S'); }
+    for (let i = 0; i < lanes.sort; i++) { const b = baseName('S', i, 8, lanes.sort); a2('Library', "Sort 5'", 'GEX library', b + '-GEX'); a2('Library', "Sort 5'", 'CSP/ADT library', b + '-ADT'); if (vdjOn('sorted')) a2('Library', "Sort 5'", 'TCR library', b + '-TCR'); }
 
     const wb = XLSX.utils.book_new();
     const ws1 = XLSX.utils.aoa_to_sheet(rows1); ws1['!cols'] = [{ wch: 20 }, { wch: 18 }, { wch: 18 }, { wch: 30 }];
     XLSX.utils.book_append_sheet(wb, ws1, 'Sample & FACS labels');
-    const ws2 = XLSX.utils.aoa_to_sheet(rows2); ws2['!cols'] = [{ wch: 14 }, { wch: 14 }, { wch: 24 }, { wch: 26 }];
+    const ws2 = XLSX.utils.aoa_to_sheet(rows2); ws2['!cols'] = [{ wch: 14 }, { wch: 12 }, { wch: 22 }, { wch: 18 }, { wch: 12 }, { wch: 10 }];
     XLSX.utils.book_append_sheet(wb, ws2, 'cDNA & library labels');
     XLSX.writeFile(wb, 'tube_labels_' + (expId || exp).replace(/[^A-Za-z0-9._-]+/g, '_') + '.xlsx');
   }
