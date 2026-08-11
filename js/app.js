@@ -1998,11 +1998,12 @@
         <tr><td>Incubation media (0.025&nbsp;mg/mL)</td><td>125&nbsp;µL 10&nbsp;mg/mL stock per 50&nbsp;mL R10</td></tr></table>
         <p class="who">Dissolve the whole 100&nbsp;mg vial (no weighing). This experiment (${nMedia} samples incl. ALLCELLS) uses ~${dnaseMg}&nbsp;mg &mdash; aliquot and freeze the remaining ~${dnaseLeft}&nbsp;mg of 10&nbsp;mg/mL stock at &minus;20&nbsp;&deg;C for later batches.</p></div>`;
 
-    // ASAP reaction count (for OMNI lysis + wash), from ASAP GEM loads.
-    let nAsapRxns = 0;
-    (plan.laneBreakdown || []).forEach((l) => { if (/asap/i.test(l.key || l.arm || l.label || '')) nAsapRxns += (l.lanes || 0); });
-    if (!nAsapRxns && hasAsap) nAsapRxns = nSuper;
-    const asapNote = hasAsap ? `<p class="who">For ${nAsapRxns} ASAP reaction${nAsapRxns === 1 ? '' : 's'} (100&nbsp;µL lysis + 1&nbsp;mL wash each): need ~${nAsapRxns * 100}&nbsp;µL lysis and ~${nAsapRxns}&nbsp;mL wash. Scale the 2&nbsp;mL recipes below accordingly (make at least one full batch of each).</p>` : '';
+    // OMNI lysis + wash are prepared once on the bulk ASAP superpool (resuspend the
+    // pellet in 100 µL lysis, add 1 mL wash), BEFORE the nuclei are counted and split
+    // across GEM lanes at loading. So these buffers scale by the number of ASAP
+    // super-pools, NOT by the ASAP GEM-lane count.
+    const nAsapSuper = hasAsap ? nSuper : 0;
+    const asapNote = hasAsap ? `<p class="who">Prepare OMNI lysis + wash for ${nAsapSuper} ASAP super-pool${nAsapSuper === 1 ? '' : 's'} (100&nbsp;µL lysis + 1&nbsp;mL wash each, done on the bulk super-pool before splitting across GEM lanes at loading): need ~${nAsapSuper * 100}&nbsp;µL lysis and ~${nAsapSuper}&nbsp;mL wash. The 2&nbsp;mL recipes below make one full batch of each (enough for a super-pool with margin).</p>` : '';
     return `
       <p>Prepare media, buffers and stocks 1&ndash;3 days ahead. Filter-sterilize buffers and store at 4&nbsp;&deg;C. Make DNase stock fresh from powder and store aliquots at &minus;20&nbsp;&deg;C.</p>
       <div class="recipe-box"><h5>R10 media (thaw + wash) &mdash; make ${nBottles} &times; 500&nbsp;mL bottle${nBottles === 1 ? '' : 's'} (${r10TotalMl}&nbsp;mL for ${nMedia} samples incl. ALLCELLS @ 15&nbsp;mL each)</h5>
@@ -2282,6 +2283,7 @@
 
   function buildSnapshot(res) {
     const plan = res.plan, cost = res.cost;
+    const scen = readScenarioAssumptions();
     const customCols = CUSTOM_COLS.slice();
     const htoByPool = {}; (plan.htoAssignments || []).forEach((a) => { htoByPool[a.pool] = a.hto; });
     const superByPool = {}; (plan.superPools || []).forEach((grp, spi) => grp.forEach((p) => { superByPool[p] = spi; }));
@@ -2301,6 +2303,7 @@
     return {
       nSamples: plan.nSamples, nPools: plan.nPools, arms: (plan.arms || []).slice(), modalities: (plan.modalities || []).slice(),
       knownTotal: cost.knownTotal, reagents, lineItems, customCols, batches, warnings: (plan.warnings || []).slice(),
+      cellsPerSample: scen.cellsPerSample, unsortAmt: scen.unsortAmt, asapAmt: scen.asapAmt,
       laneBreakdown: (cost.laneBreakdown || []).map((l) => ({
         arm: l.arm || l.key, chem: l.chem, population: l.population, laneChem: l.laneChem, lanes: l.lanes,
         vdj: !!l.vdj, libraries: (l.libraries || []).slice(), label: l.label
@@ -2755,6 +2758,155 @@
     priceRows.push([]); priceRows.push(['', '', '', '', '', 'TOTAL', s.knownTotal != null ? Math.round(s.knownTotal * 100) / 100 : '']);
     const wsC = XLSX.utils.aoa_to_sheet(priceRows); wsC['!cols'] = [{ wch: 24 }, { wch: 34 }, { wch: 9 }, { wch: 13 }, { wch: 12 }, { wch: 13 }, { wch: 12 }];
     XLSX.utils.book_append_sheet(wb, wsC, 'Pricing');
+
+    // ---- lanes per arm from the snapshot -----------------------------------
+    const lanes = { unsort: 0, asap: 0, sort: 0 };
+    (s.laneBreakdown || []).forEach((l) => {
+      if (l.chem === 'asap') lanes.asap += (l.lanes || 0);
+      else if (l.population === 'sorted') lanes.sort += (l.lanes || 0);
+      else if (l.population === 'unsorted' && l.laneChem === "5'") lanes.unsort += (l.lanes || 0);
+    });
+    const armVdj = {};
+    (s.laneBreakdown || []).forEach((l) => { if (l.vdj) { if (l.population === 'sorted') armVdj.sort = true; else if (l.chem !== 'asap') armVdj.unsort = true; } });
+
+    // ---- Samples tab (storage metadata + pool assignment) ------------------
+    const sampHeader = ['Sample #', 'Sample ID (for experiment)', 'Pool (assigned)', 'Room', 'Freezer', 'Rack', 'Box', 'Position', 'Donor ID', 'Type', 'Source', 'Collection Date', 'Isolation Date', 'Vol (ml)', 'Lineage'].concat(cc);
+    const sampRows = [['How to use: metadata about each sample + storage details, for retrieving samples on batch day.'], [], sampHeader];
+    let sIx = 0;
+    (s.batches || []).forEach((b) => b.samples.forEach((sm) => {
+      sIx += 1;
+      sampRows.push([sIx, sm.sampleId, b.pool, '', '', '', '', '', sm.patientId || '', '', '', '', '', '', sm.lineage || ''].concat(cc.map((c) => (sm.confounders && sm.confounders[c]) || '')));
+    }));
+    const wsSamp = XLSX.utils.aoa_to_sheet(sampRows);
+    wsSamp['!cols'] = [{ wch: 8 }, { wch: 24 }, { wch: 12 }, { wch: 10 }, { wch: 12 }, { wch: 8 }, { wch: 8 }, { wch: 10 }, { wch: 22 }, { wch: 8 }, { wch: 16 }, { wch: 14 }, { wch: 14 }, { wch: 8 }, { wch: 12 }].concat(cc.map(() => ({ wch: 14 })));
+    XLSX.utils.book_append_sheet(wb, wsSamp, 'Samples');
+
+    // ---- Cell count tab (grouped by pool; live formulas) -------------------
+    // Pool volume (uL) = ROUNDUP(cells pooled per sample / live cells-per-mL * 1000, 0).
+    // Cells for a modality per sample = pool modality aliquot * (this sample's cells / pool total cells).
+    const poolMap = {};
+    (s.batches || []).forEach((b) => { (poolMap[b.pool] = poolMap[b.pool] || []).push.apply(poolMap[b.pool], b.samples); });
+    const poolKeys = Object.keys(poolMap);
+    const spp = poolKeys.length ? Math.round(s.nSamples / poolKeys.length) : 0;
+    const hasUnsortArm = lanes.unsort > 0, hasAsapArm = lanes.asap > 0, hasSortArm = lanes.sort > 0;
+    const cpsDefault = s.cellsPerSample != null ? s.cellsPerSample : 2000000;   // pool contribution / sample (from planner)
+    const unsDefault = s.unsortAmt != null ? s.unsortAmt : 1200000;             // unsort cells / pool (after split)
+    const asaDefault = s.asapAmt != null ? s.asapAmt : 1200000;                 // ASAP cells / pool (after split)
+    const cc2 = [];
+    const rowNo = () => cc2.length + 1;
+    cc2.push(['How to use this sheet:']);
+    cc2.push(['Fill the bolded DESIGN INPUTS below. On batch day, enter Live %, Live Cells/mL, and the dilution volume for each sample \u2014 pooling and aliquot volumes autofill. Sort input is whatever is left in each pool after the unsort/ASAP aliquots are removed.']);
+    cc2.push([]);
+    cc2.push(['# samples', s.nSamples, '', '# pools', poolKeys.length, '', '# samples / pool', spp]);
+    cc2.push([]);
+    cc2.push(['DESIGN INPUTS (prefilled from the planner \u2014 edit if needed):']);
+    const cpsRow = rowNo(); cc2.push(['Cells pooled per sample', cpsDefault]);
+    const unsRow = rowNo(); cc2.push(['Cells aliquoted from pool for unsort 5\u2032 (CITE-seq)', unsDefault]);
+    const asaRow = rowNo(); cc2.push(['Cells aliquoted from pool for ASAP-seq', asaDefault]);
+    const cpsRef = '$B$' + cpsRow, unsRef = '$B$' + unsRow, asaRef = '$B$' + asaRow;
+    cc2.push([]);
+    const hdr = ['#', 'Original ID (cryovial)', 'Sample ID', 'Thawer', 'Pool', 'Live %', 'Live Cells/mL', 'Vol. dilute for count (mL)', 'Total viable cells', 'Cells pooled', 'Pool volume (uL)'];
+    if (hasUnsortArm) hdr.push('Cells for unsort', 'Vol for unsort (uL)');
+    if (hasAsapArm) hdr.push('Cells for ASAP', 'Vol for ASAP (uL)');
+    if (hasSortArm) hdr.push('Cells to sort (leftover)');
+    let nC = 0;
+    poolKeys.forEach((pk) => {
+      cc2.push([]);
+      cc2.push(['POOL ' + pk]);
+      cc2.push(hdr.slice());
+      const dataRows = [];
+      poolMap[pk].forEach((sm) => {
+        nC += 1; const r = rowNo(); dataRows.push(r);
+        cc2.push([nC, sm.patientId || '', sm.sampleId, '', pk, '', '', '',
+          { t: 'n', f: 'G' + r + '*H' + r },
+          { t: 'n', f: cpsRef },
+          { t: 'n', f: 'IFERROR(ROUNDUP(J' + r + '/G' + r + '*1000,0),"")' }]);
+      });
+      const totRow = rowNo();
+      const firstR = dataRows[0], lastR = dataRows[dataRows.length - 1];
+      dataRows.forEach((r) => {
+        const row = cc2[r - 1]; let col = 11;
+        if (hasUnsortArm) { row[col++] = { t: 'n', f: 'IFERROR(' + unsRef + '*(J' + r + '/$J$' + totRow + '),"")' }; row[col++] = ''; }
+        if (hasAsapArm) { row[col++] = { t: 'n', f: 'IFERROR(' + asaRef + '*(J' + r + '/$J$' + totRow + '),"")' }; row[col++] = ''; }
+      });
+      const tot = ['', '', '', '', 'POOL ' + pk + ' TOTAL', '', '', '',
+        { t: 'n', f: 'SUM(I' + firstR + ':I' + lastR + ')' },
+        { t: 'n', f: 'SUM(J' + firstR + ':J' + lastR + ')' },
+        { t: 'n', f: 'SUM(K' + firstR + ':K' + lastR + ')' }];
+      if (hasUnsortArm) tot.push({ t: 'n', f: unsRef }, { t: 'n', f: 'IFERROR(ROUNDUP(' + unsRef + '/K' + totRow + ',1),"")' });
+      if (hasAsapArm) tot.push({ t: 'n', f: asaRef }, { t: 'n', f: 'IFERROR(ROUNDUP(' + asaRef + '/K' + totRow + ',1),"")' });
+      if (hasSortArm) tot.push({ t: 'n', f: 'J' + totRow + (hasUnsortArm ? '-' + unsRef : '') + (hasAsapArm ? '-' + asaRef : '') }); // leftover = pool total - unsort - asap
+      cc2.push(tot);
+    });
+    const wsCC = XLSX.utils.aoa_to_sheet(cc2);
+    wsCC['!cols'] = [{ wch: 5 }, { wch: 24 }, { wch: 22 }, { wch: 8 }, { wch: 8 }, { wch: 8 }, { wch: 13 }, { wch: 12 }, { wch: 14 }, { wch: 12 }, { wch: 13 }, { wch: 12 }, { wch: 14 }, { wch: 12 }, { wch: 14 }];
+    XLSX.utils.book_append_sheet(wb, wsCC, 'Cell count');
+
+    // ---- 10X Library Tubes tab (naming grid, per reference) ----------------
+    const lt = [['10X Chip Output Tube Strips: for GEM-RT Incubation + storage'], ['indicate how you are labeling your tube strip'], ['Modality Source', 1, 2, 3, 4, 5, 6, 7, 8]];
+    const laneRow = (label, names) => { const r = [label]; for (let i = 0; i < 8; i++) r.push(names[i] || ''); lt.push(r); };
+    for (let c = 0; c < Math.ceil(lanes.unsort / 8 || 0); c++) { const names = []; for (let i = 0; i < 8 && c * 8 + i < lanes.unsort; i++) names.push('U' + (c * 8 + i + 1)); laneRow("unsort 5' chip " + (c + 1), names); }
+    for (let c = 0; c < Math.ceil(lanes.asap / 2 || 0); c++) { const names = ['A' + (c + 1) + '-1']; if (c * 2 + 1 < lanes.asap) names.push('A' + (c + 1) + '-2'); laneRow('asap chip ' + (c + 1), names); }
+    for (let c = 0; c < Math.ceil(lanes.sort / 8 || 0); c++) { const names = []; for (let i = 0; i < 8 && c * 8 + i < lanes.sort; i++) names.push('S' + (c * 8 + i + 1)); laneRow("sort 5' chip " + (c + 1), names); }
+    lt.push([]); lt.push(['cDNA Tube Strips']); lt.push(['indicate how you are labeling your tube strip']); lt.push(['Modality Source', 1, 2, 3, 4, 5, 6, 7, 8, 'Note']);
+    const cdnaRow = (label, names, note) => { const r = [label]; for (let i = 0; i < 8; i++) r.push(names[i] || ''); r.push(note || ''); lt.push(r); };
+    for (let c = 0; c < Math.ceil(lanes.unsort / 8 || 0); c++) {
+      const pp = [], sp = []; for (let i = 0; i < 8 && c * 8 + i < lanes.unsort; i++) { pp.push('U' + (c * 8 + i + 1) + '-P'); sp.push('U' + (c * 8 + i + 1) + '-S'); }
+      cdnaRow("unsort 5' chip " + (c + 1), pp, 'cDNA from pellet --> GEX' + (armVdj.unsort ? '/VDJ' : '') + ' libraries');
+      cdnaRow("unsort 5' chip " + (c + 1), sp, 'cDNA from supernatent --> CSP libraries');
+    }
+    for (let c = 0; c < Math.ceil(lanes.asap / 2 || 0); c++) { const names = ['A' + (c + 1) + '-1']; if (c * 2 + 1 < lanes.asap) names.push('A' + (c + 1) + '-2'); cdnaRow('asap chip ' + (c + 1), names, ''); }
+    for (let c = 0; c < Math.ceil(lanes.sort / 8 || 0); c++) {
+      const pp = [], sp = []; for (let i = 0; i < 8 && c * 8 + i < lanes.sort; i++) { pp.push('S' + (c * 8 + i + 1) + '-P'); sp.push('S' + (c * 8 + i + 1) + '-S'); }
+      cdnaRow("sort 5' chip " + (c + 1), pp, 'cDNA from pellet --> GEX' + (armVdj.sort ? '/VDJ' : '') + ' libraries');
+      cdnaRow("sort 5' chip " + (c + 1), sp, 'cDNA from supernatent --> CSP libraries');
+    }
+    const wsLT = XLSX.utils.aoa_to_sheet(lt);
+    wsLT['!cols'] = [{ wch: 20 }].concat(Array.from({ length: 8 }, () => ({ wch: 8 })), [{ wch: 42 }]);
+    XLSX.utils.book_append_sheet(wb, wsLT, '10X Library Tubes');
+
+    // ---- 10X Chip Layout (per-modality well diagram, printable) ------------
+    const cl = [['How to use this sheet:'], ['Annotate each lane with the pool / super-pool loaded, then print for records.'], []];
+    const chipDiagram = (title, kit, kitDoc, chipDesc, wells, count, perChip, namer) => {
+      for (let c = 0; c < Math.ceil(count / perChip || 0); c++) {
+        cl.push([title]); cl.push(['Loader', '']); cl.push(['Kit', kit, kitDoc]); cl.push(['Chip', chipDesc]);
+        const laneHdr = []; for (let i = 0; i < perChip; i++) laneHdr.push(i + 1); laneHdr.push('unused wells: 50% glycerol'); cl.push(laneHdr);
+        const tubeRow = []; for (let i = 0; i < perChip; i++) { const g = c * perChip + i; tubeRow.push(g < count ? namer(g) : ''); } cl.push(tubeRow);
+        wells.forEach((w) => cl.push([w[0], w[1]])); cl.push([]);
+      }
+    };
+    chipDiagram("Unsort 5' CITEseq (5' HT v2)", "5' HT v2", 'CG000424 | Rev D', 'Next GEM Chip N + Chromium X Chip Holder (black)',
+      [['3A: Oil (140ul)', '140ul'], ['2A: Sample (MM + cells) (140ul)', '140ul'], ['1: Gel beads (130ul)', '130ul'], ['2B: Sample (MM + cells) (140ul)', '140ul'], ['3B: Oil (140ul)', '140ul']],
+      lanes.unsort, 8, (g) => 'U' + (g + 1));
+    chipDiagram('ASAPseq (ATAC v2)', 'ATAC v2', 'CG000496 | Rev B', 'Next GEM Chip H + Chromium Next GEM Chip Holder (silver)',
+      [['3: Oil (40ul)', '40ul'], ['2: Gel beads (50ul)', '50ul'], ['1: Sample (MM + nuclei: 70ul)', '70ul'], ['NO FILL - GEM RECOVERY', 'DO NOT ADD']],
+      lanes.asap, 8, (g) => 'A' + (Math.floor(g / 2) + 1) + '-' + ((g % 2) + 1));
+    chipDiagram("Sort 5' scRNAseq w/ HTO (5' v3)", "5' v3", 'CG000734 | Rev A', "GEM-X 5' Chip + Chromium X/iX Chip Holder (black)",
+      [['3A: Oil (140ul)', '140ul'], ['2A: Sample (MM + cells) (140ul)', '140ul'], ['1: Gel beads (130ul)', '130ul'], ['2B: Sample (MM + cells) (140ul)', '140ul'], ['3B: Oil (140ul)', '140ul']],
+      lanes.sort, 8, (g) => 'S' + (g + 1));
+    const wsCL = XLSX.utils.aoa_to_sheet(cl);
+    wsCL['!cols'] = [{ wch: 32 }].concat(Array.from({ length: 8 }, () => ({ wch: 11 })));
+    XLSX.utils.book_append_sheet(wb, wsCL, '10X Chip Layout');
+
+    // ---- Sort panel + Stim plan tabs (manual design for now) ---------------
+    if (hasSortArm) {
+      const sp = [['Sort panel'], ['Design the sort flow panel manually for now (this tool does not yet generate it).'], [],
+        ['Populations to sort (from plan): HSC, pDC, cDC, Treg'], [],
+        ['Marker', 'Fluorophore', 'Clone', 'Vendor / Cat #', 'Dilution', 'Notes']];
+      for (let i = 0; i < 20; i++) sp.push(['', '', '', '', '', '']);
+      const wsSP = XLSX.utils.aoa_to_sheet(sp);
+      wsSP['!cols'] = [{ wch: 16 }, { wch: 16 }, { wch: 12 }, { wch: 20 }, { wch: 10 }, { wch: 30 }];
+      XLSX.utils.book_append_sheet(wb, wsSP, 'Sort panel');
+    }
+    if ((s.modalities || []).indexOf('In vitro stimulation') >= 0) {
+      const stp = [['Stim plan'], ['Design the stimulation plate plan manually for now (this tool does not yet generate it).'], [],
+        ['Condition', 'Stimulant', 'Concentration', 'Duration', 'Wells / plate position', 'Notes']];
+      for (let i = 0; i < 20; i++) stp.push(['', '', '', '', '', '']);
+      const wsST = XLSX.utils.aoa_to_sheet(stp);
+      wsST['!cols'] = [{ wch: 16 }, { wch: 18 }, { wch: 14 }, { wch: 12 }, { wch: 20 }, { wch: 30 }];
+      XLSX.utils.book_append_sheet(wb, wsST, 'Stim plan');
+    }
+
 
     return wb;
   }
