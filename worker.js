@@ -323,67 +323,6 @@ function chunkJson(str) {
   return out.slice(0, EXP_CHUNK);
 }
 
-// Field -> possible header names (so the sheet's column order/labels drive placement)
-const EXP_FIELD_HEADERS = {
-  id: ['id'],
-  project: ['Project', 'project'],
-  abbreviation: ['Project_Abbreviation', 'Abbreviation'],
-  name: ['Experiment', 'name', 'Name'],
-  experimentId: ['Experiment_ID', 'Experiment ID'],
-  status: ['Status', 'status'],
-  nSamples: ['Samples', '#samples', 'nSamples', '# samples'],
-  nPools: ['Pools', '#pools', 'nPools', '# pools'],
-  arms: ['Arms', 'arms'],
-  mods: ['Modalities', 'mods', 'Modality'],
-  knownTotal: ['Est. cost ($)', 'Est cost', 'Cost', 'knownTotal'],
-  createdAt: ['Created', 'createdAt'],
-  updatedAt: ['Updated', 'updatedAt'],
-  json: ['record_json', '_data', 'json', 'JSON']
-};
-function mapExpCols(headers) {
-  const h = (headers || []).map((x) => String(x == null ? '' : x).trim());
-  const idx = {};
-  for (const f in EXP_FIELD_HEADERS) {
-    idx[f] = -1;
-    for (const name of EXP_FIELD_HEADERS[f]) { const i = h.indexOf(name); if (i >= 0) { idx[f] = i; break; } }
-  }
-  return { idx: idx, headerWidth: h.length };
-}
-
-// Build a full row placing each field at its header-matched column; JSON chunks
-// start at the record_json column (or right after the meta block if absent).
-function buildExpRow(rec, abbreviation, headers, existingRow) {
-  const s = rec.snapshot || {};
-  const arms = Array.isArray(s.arms) ? s.arms.join(', ') : '';
-  const mods = Array.isArray(s.modalities) ? s.modalities.join(', ') : '';
-  const m = mapExpCols(headers);
-  const idx = m.idx;
-  const jsonCol = idx.json >= 0 ? idx.json : (m.headerWidth || EXP_META);
-  const chunks = chunkJson(JSON.stringify(rec));
-  let width = Math.max(m.headerWidth, jsonCol + chunks.length);
-  for (const f in idx) if (idx[f] >= 0) width = Math.max(width, idx[f] + 1);
-  const row = new Array(width).fill('');
-  if (existingRow) for (let c = 0; c < width; c++) row[c] = existingRow[c] != null ? existingRow[c] : '';
-  const set = (f, v) => { if (idx[f] >= 0) row[idx[f]] = v; };
-  set('id', rec.id || ''); set('project', rec.project || ''); set('abbreviation', abbreviation || '');
-  set('name', rec.name || ''); set('experimentId', rec.experimentId || ''); set('status', rec.status || '');
-  set('nSamples', s.nSamples != null ? s.nSamples : ''); set('nPools', s.nPools != null ? s.nPools : '');
-  set('arms', arms); set('mods', mods); set('knownTotal', s.knownTotal != null ? s.knownTotal : '');
-  set('createdAt', rec.createdAt || ''); set('updatedAt', rec.updatedAt || '');
-  for (let i = 0; i < chunks.length; i++) row[jsonCol + i] = chunks[i];
-  return { row: row, jsonCol: jsonCol, width: width };
-}
-// Extract the stored JSON from a row: prefer the record_json column, fall back
-// to the legacy fixed block for rows written before the header-aware change.
-function extractExpJson(row, headers) {
-  const m = mapExpCols(headers);
-  const jsonCol = m.idx.json >= 0 ? m.idx.json : EXP_META;
-  let jsonStr = row.slice(jsonCol).join('');
-  if (!jsonStr) jsonStr = row.slice(EXP_META, EXP_WIDTH).join('');
-  if (jsonStr && jsonStr[0] !== '{') { const legacy = row.slice(EXP_META, EXP_WIDTH).join(''); if (legacy && legacy[0] === '{') jsonStr = legacy; }
-  return jsonStr;
-}
-
 function expRow(rec) {
   const s = rec.snapshot || {};
   const arms = Array.isArray(s.arms) ? s.arms.join(', ') : '';
@@ -455,15 +394,12 @@ async function handleExperimentsGet(env) {
     const token = await invToken(env);
     const vr = await sheetsBatchGet(token, env.EXPERIMENTS_SHEET_ID, [EXP_TAB, PROJ_TAB]);
     const rows = (vr[0] && vr[0].values) ? vr[0].values : [];
-    const headers = rows[0] || [];
-    const im = mapExpCols(headers);
-    const idCol = im.idx.id >= 0 ? im.idx.id : 0;
     const experiments = [];
-    for (let r = 1; r < rows.length; r++) {           // row 0 is the header
+    for (let r = 0; r < rows.length; r++) {           // find data rows by content, not position
       const row = rows[r] || [];
-      const idCell = String(row[idCol] || '').trim();
-      if (!idCell || idCell.toLowerCase() === 'id') continue;   // skip blanks and stray header rows
-      const jsonStr = extractExpJson(row, headers);
+      const idCell = String(row[0] || '').trim();
+      if (!idCell || idCell.toLowerCase() === 'id') continue;   // skip blanks and the header row
+      const jsonStr = row.slice(EXP_META, EXP_WIDTH).join('');
       if (!jsonStr) continue;
       try { experiments.push(JSON.parse(jsonStr)); } catch (e) { /* skip malformed */ }
     }
@@ -498,58 +434,41 @@ async function handleExperimentsPost(request, env) {
     if (body.action === 'upsert') {
       const rec = body.record;
       if (!rec || !rec.id) return json({ error: 'missing_record_or_id' }, 400);
-      const vr = await sheetsBatchGet(token, id, [EXP_TAB, PROJ_TAB]);
+      const row = expRow(rec);
+      const vr = await sheetsBatchGet(token, id, [EXP_TAB]);
       const rows = (vr[0] && vr[0].values) ? vr[0].values : [];
-      const headers = rows[0] || [];
-      const im = mapExpCols(headers);
-      const idCol = im.idx.id >= 0 ? im.idx.id : 0;
-      // find the header row (the row whose id-column cell reads "id")
       let hdr = -1;
-      for (let r = 0; r < rows.length; r++) { if (String((rows[r] || [])[idCol] || '').trim().toLowerCase() === 'id') { hdr = r; break; } }
+      for (let r = 0; r < rows.length; r++) { if (String((rows[r] || [])[0] || '').trim().toLowerCase() === 'id') { hdr = r; break; } }
       if (hdr < 0) {
-        return json({ error: 'no_header', message: 'Experiments tab is missing its "id" header. Restore the header row and retry.' }, 409);
-      }
-      // look up the project's abbreviation from the Projects tab
-      let abbreviation = '';
-      const pRows = (vr[1] && vr[1].values) ? vr[1].values : [];
-      if (pRows.length) {
-        const { items } = rowsToObjects(pRows);
-        const p = items.find((o) => String(o['name'] != null ? o['name'] : o['Name']).trim() === String(rec.project || '').trim());
-        if (p) abbreviation = p['Project_Abbreviation'] || p['Abbreviation'] || '';
+        return json({ error: 'no_header', message: 'Experiments tab is missing its "id" header in column A. Refusing to write so the sheet is not clobbered. Restore the header row (id | Project | Experiment | ...) and retry.' }, 409);
       }
       let target = -1, firstEmpty = -1;
-      for (let r = hdr + 1; r < rows.length; r++) {
-        const cell = String((rows[r] || [])[idCol] || '').trim();
+      for (let r = (hdr >= 0 ? hdr + 1 : 0); r < rows.length; r++) {
+        const cell = String((rows[r] || [])[0] || '').trim();
         if (cell === String(rec.id).trim()) { target = r + 1; break; }
         if (!cell && firstEmpty < 0) firstEmpty = r + 1;
       }
       if (target < 0) target = (firstEmpty > 0) ? firstEmpty : (rows.length + 1);
-      const existing = target > 0 && rows[target - 1] ? rows[target - 1] : null;
-      const built = buildExpRow(rec, abbreviation, headers, existing);
-      await sheetsUpdateRow(token, id, qtab(EXP_TAB) + '!A' + target + ':' + colLetter(built.width) + target, built.row);
-      return json({ ok: true, wrote: rec.id, row: target, columns: im.idx });
+      await sheetsUpdateRow(token, id, qtab(EXP_TAB) + '!A' + target + ':' + colLetter(EXP_WIDTH + 1) + target, row);
+      return json({ ok: true, wrote: rec.id, row: target });
     }
 
     if (body.action === 'delete') {
       if (!body.id) return json({ error: 'missing_id' }, 400);
       const vr = await sheetsBatchGet(token, id, [EXP_TAB]);
       const rows = (vr[0] && vr[0].values) ? vr[0].values : [];
-      const headers = rows[0] || [];
-      const im = mapExpCols(headers);
-      const idCol = im.idx.id >= 0 ? im.idx.id : 0;
       let rowIdx = -1, found = null;
-      for (let r = 1; r < rows.length; r++) {
-        const idCell = String((rows[r] || [])[idCol] || '').trim();
+      for (let r = 0; r < rows.length; r++) {
+        const idCell = String((rows[r] || [])[0] || '').trim();
         if (idCell && idCell.toLowerCase() !== 'id' && idCell === String(body.id).trim()) { rowIdx = r + 1; found = rows[r]; break; }
       }
       if (!found) return json({ ok: true, deleted: body.id, note: 'not found (already gone)' });
-      const jsonStr = extractExpJson(found, headers);
-      const nameCol = im.idx.name >= 0 ? im.idx.name : 2, projCol = im.idx.project >= 0 ? im.idx.project : 1, statCol = im.idx.status >= 0 ? im.idx.status : 3;
-      const trashRow = [found[idCol] || '', found[projCol] || '', found[nameCol] || '', found[statCol] || '', new Date().toISOString()].concat(chunkJson(jsonStr));
+      const jsonStr = found.slice(EXP_META, EXP_WIDTH).join('');
+      // move to Trash (id, project, name, status, deletedAt, + JSON chunks), then clear the source row
+      const trashRow = [found[0], found[1], found[2], found[3], new Date().toISOString()].concat(chunkJson(jsonStr));
       await sheetsAppend(token, id, EXP_TRASH, [trashRow]);
-      const width = Math.max(found.length, headers.length, EXP_WIDTH + 1);
-      const blank = new Array(width).fill('');
-      await sheetsUpdateRow(token, id, qtab(EXP_TAB) + '!A' + rowIdx + ':' + colLetter(width) + rowIdx, blank);
+      const blank = new Array(EXP_WIDTH + 1).fill('');
+      await sheetsUpdateRow(token, id, qtab(EXP_TAB) + '!A' + rowIdx + ':' + colLetter(EXP_WIDTH + 1) + rowIdx, blank);
       return json({ ok: true, deleted: body.id, trashed: true });
     }
 
