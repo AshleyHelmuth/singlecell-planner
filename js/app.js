@@ -2873,6 +2873,54 @@
     wsCL['!cols'] = [{ wch: 32 }].concat(Array.from({ length: 8 }, () => ({ wch: 11 })));
     XLSX.utils.book_append_sheet(wb, wsCL, '10X Chip Layout');
 
+    // ---- Library indexes tab (labels + recommended indexes + kits) --------
+    // Base ID {U/A/S}{lane}, -{chip} only when >1 chip (matches the tube labels).
+    const bn = (letter, g, perChip, total) => { const nChips = Math.ceil(total / perChip); const chip = Math.floor(g / perChip) + 1; const lane = (g % perChip) + 1; return letter + lane + (nChips > 1 ? '-' + chip : ''); };
+    // Recommended index kit per library type (from the lab's 10X inventory + ASAP oligos).
+    const IDX = {
+      gex:     { type: 'Dual Index TT Set A', cat: '1000215', gen: 'plate' },
+      csp:     { type: 'Dual Index TN Set A', cat: '1000250', gen: 'plate' },
+      vdj:     { type: 'Dual Index TT Set A (VDJ plate)', cat: '1000215', gen: 'plate' },
+      atac:    { type: 'Single Index N Set A', cat: '1000212', gen: 'plate' },
+      asapAdt: { type: 'RPI oligos (ASAP ADT)', cat: 'OL016\u2013031', gen: 'rpi' },
+      asapHto: { type: 'D7xx oligos (ASAP HTO)', cat: 'OL004\u2013015', gen: 'd7xx' }
+    };
+    const ctr = {};
+    const idxId = (key) => {
+      const n = (ctr[key] = (ctr[key] || 0) + 1) - 1;
+      const gen = IDX[key].gen;
+      if (gen === 'rpi') return 'RPI' + (n + 1);
+      if (gen === 'd7xx') return 'D7' + String(n + 1).padStart(2, '0');   // D701..D712
+      return String.fromCharCode(65 + Math.floor(n / 12)) + (n % 12 + 1);   // A1..A12,B1..
+    };
+    const li2 = [['How to use: recommended 10X indexes + tube labels for every library in this experiment. Print with the packet; record any index/label changes by hand.'], [],
+      ['Tube label', 'Modality', 'Library type', 'Index type (kit)', 'Kit catalog #', 'Index ID', 'Index sequence', 'Notes / changes']];
+    const idxRow = (label, modality, libType, key) => li2.push([label, modality, libType, IDX[key].type, IDX[key].cat, idxId(key), '', '']);
+    // 5' unsort
+    for (let i = 0; i < lanes.unsort; i++) idxRow(bn('U', i, 8, lanes.unsort) + '-GEX', "Unsort 5'", 'GEX', 'gex');
+    for (let i = 0; i < lanes.unsort; i++) idxRow(bn('U', i, 8, lanes.unsort) + '-ADT', "Unsort 5'", 'CSP/ADT', 'csp');
+    if (armVdj.unsort) for (let i = 0; i < lanes.unsort; i++) { const b = bn('U', i, 8, lanes.unsort); idxRow(b + '-TCR', "Unsort 5'", 'TCR', 'vdj'); idxRow(b + '-BCR', "Unsort 5'", 'BCR', 'vdj'); }
+    // ASAP
+    for (let i = 0; i < lanes.asap; i++) idxRow(bn('A', i, 2, lanes.asap) + '-ATAC', 'ASAP', 'ATAC', 'atac');
+    for (let i = 0; i < lanes.asap; i++) idxRow(bn('A', i, 2, lanes.asap) + '-ADT', 'ASAP', 'CSP/ADT', 'asapAdt');
+    for (let i = 0; i < lanes.asap; i++) idxRow(bn('A', i, 2, lanes.asap) + '-HTO', 'ASAP', 'HTO', 'asapHto');
+    // sort 5'
+    for (let i = 0; i < lanes.sort; i++) idxRow(bn('S', i, 8, lanes.sort) + '-GEX', "Sort 5'", 'GEX', 'gex');
+    for (let i = 0; i < lanes.sort; i++) idxRow(bn('S', i, 8, lanes.sort) + '-ADT', "Sort 5'", 'CSP/ADT', 'csp');
+    if (armVdj.sort) for (let i = 0; i < lanes.sort; i++) idxRow(bn('S', i, 8, lanes.sort) + '-TCR', "Sort 5'", 'TCR', 'vdj');
+    // Kits-to-use summary + rxns-used space
+    li2.push([]); li2.push(['KITS TO USE \u2014 record how many indexes/rxns you actually used, then update the planning website after the experiment.']);
+    li2.push(['Index type (kit)', 'Kit catalog #', 'Indexes needed', 'Index IDs (from \u2192 to)', '# rxns actually used', 'Lot # used', 'Notes']);
+    Object.keys(ctr).forEach((key) => {
+      const n = ctr[key]; if (!n) return;
+      // recompute first/last id for display
+      const save = ctr[key]; ctr[key] = 0; const first = idxId(key); ctr[key] = n - 1; const last = idxId(key); ctr[key] = save;
+      li2.push([IDX[key].type, IDX[key].cat, n, first + ' \u2192 ' + last, '', '', '']);
+    });
+    const wsLI = XLSX.utils.aoa_to_sheet(li2);
+    wsLI['!cols'] = [{ wch: 12 }, { wch: 12 }, { wch: 14 }, { wch: 26 }, { wch: 13 }, { wch: 12 }, { wch: 18 }, { wch: 22 }];
+    XLSX.utils.book_append_sheet(wb, wsLI, 'Library indexes');
+
     // ---- Sort panel + Stim plan tabs (manual design for now) ---------------
     if (hasSortArm) {
       const sp = [['Sort panel'], ['Design the sort flow panel manually for now (this tool does not yet generate it).'], [],
