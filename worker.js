@@ -195,10 +195,12 @@ function rowsToObjects(values) {
   });
   return { headers: headers, items: items };
 }
-// Find an item (kit or reagent) by id -> its tab, row, on-hand column & value.
+// Find an item by id -> its tab, row, on-hand column & value. Kits are excluded:
+// they are formula-driven in _Condensed and adjusted per-box via deductKitBoxes,
+// so on-hand writes must never target the kits tab.
 async function findItem(token, sheetId, itemId) {
   const want = String(itemId).trim();
-  for (const tab of [SHEET_TABS.kits, SHEET_TABS.reagents, SHEET_TABS.oligos, SHEET_TABS.antibodies]) {
+  for (const tab of [SHEET_TABS.reagents, SHEET_TABS.oligos, SHEET_TABS.antibodies]) {
     const vr = await sheetsBatchGet(token, sheetId, [tab]);
     const { headers, items } = rowsToObjects(vr[0] ? vr[0].values : []);
     const idH = ID_HEADER[tab], ohH = ONHAND_HEADER[tab];
@@ -266,6 +268,41 @@ async function handleInventoryPost(request, env) {
         }
       }
       return json({ ok: true, recorded: appendVals.length, deductions: deductions });
+    }
+
+    if (body.action === 'deductKitBoxes') {
+      // Deduct rxns / index wells from specific boxes in 10X Kits_All (by Kit ID).
+      // body.items = [{ kitId, rxnsUsed, indexesUsed }]. Writes remaining (col D)
+      // and Indexes Used (col F); the _Condensed rollup updates via its formulas.
+      const items = Array.isArray(body.items) ? body.items : [];
+      const ALL_TAB = '10X Kits_All';
+      const vr = await sheetsBatchGet(token, id, [ALL_TAB]);
+      const values = (vr[0] && vr[0].values) ? vr[0].values : [];
+      if (!values.length) return json({ error: 'no_all_tab' }, 409);
+      const headers = values[0].map((h) => String(h == null ? '' : h).trim());
+      const kidCol = headers.indexOf('Kit ID');
+      const remCol = headers.indexOf('Rxns/Indexes Remaining');
+      const usedCol = headers.indexOf('Indexes Used');
+      if (kidCol < 0 || remCol < 0) return json({ error: 'missing_columns', headers }, 409);
+      const results = [];
+      for (const it of items) {
+        const want = String(it.kitId || '').trim();
+        if (!want) continue;
+        let rowIdx = -1;
+        for (let r = 1; r < values.length; r++) { if (String((values[r] || [])[kidCol] || '').trim() === want) { rowIdx = r; break; } }
+        if (rowIdx < 0) { results.push({ kitId: want, error: 'not_found' }); continue; }
+        const row = values[rowIdx];
+        const usedRxns = (Number(it.rxnsUsed) || 0) + (Number(it.indexesUsed) || 0);
+        const curRem = Number(row[remCol]) || 0;
+        const newRem = curRem - usedRxns;
+        await sheetsUpdateCell(token, id, qtab(ALL_TAB) + '!' + colLetter(remCol + 1) + (rowIdx + 1), newRem);
+        if (usedCol >= 0 && (Number(it.indexesUsed) || 0) > 0) {
+          const curUsed = Number(row[usedCol]) || 0;
+          await sheetsUpdateCell(token, id, qtab(ALL_TAB) + '!' + colLetter(usedCol + 1) + (rowIdx + 1), curUsed + (Number(it.indexesUsed) || 0));
+        }
+        results.push({ kitId: want, newRemaining: newRem });
+      }
+      return json({ ok: true, results: results });
     }
 
     if (body.action === 'setReserved') {

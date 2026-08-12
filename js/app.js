@@ -2557,6 +2557,53 @@
       .catch((e) => alert('Library record write failed: ' + e));
   }
 
+  // Post-experiment: record the exact kit boxes / index wells actually used, save
+  // to the experiment record, and deduct from those boxes in 10X Kits_All.
+  function recordUsageUI(id) {
+    const rec = Store.getExperiment(id); if (!rec) return;
+    const existing = rec.actualUsage || { items: [], notes: '' };
+    const rowHtml = (it) => '<tr>'
+      + '<td><input class="u-kit" value="' + esc(it.kitId || '') + '" placeholder="e.g. 1000215-001" /></td>'
+      + '<td><input class="u-rxn" type="number" min="0" value="' + (it.rxnsUsed != null ? it.rxnsUsed : '') + '" /></td>'
+      + '<td><input class="u-idx" type="number" min="0" value="' + (it.indexesUsed != null ? it.indexesUsed : '') + '" /></td>'
+      + '<td><button class="btn tiny u-del" title="remove">\u00d7</button></td></tr>';
+    const startRows = (existing.items && existing.items.length ? existing.items : [{ kitId: '', rxnsUsed: '', indexesUsed: '' }]);
+    const ov = document.createElement('div'); ov.className = 'usage-overlay';
+    ov.innerHTML = '<div class="usage-modal"><h3>Record actual usage &mdash; ' + esc(rec.name || '') + (rec.experimentId ? ' <span class="exp-id">' + esc(rec.experimentId) + '</span>' : '') + '</h3>'
+      + '<p class="muted">Enter the exact kit boxes (Kit ID from <strong>10X Kits_All</strong>) and how many rxns / index wells you used. Saving records this on the experiment and deducts from those boxes.</p>'
+      + '<table class="usage-tbl"><thead><tr><th>Kit ID (box)</th><th>Rxns used</th><th>Index wells used</th><th></th></tr></thead><tbody id="uBody">' + startRows.map(rowHtml).join('') + '</tbody></table>'
+      + '<button class="btn ghost" id="uAdd">+ Add box</button>'
+      + '<label style="display:block;margin-top:10px">Notes<textarea id="uNotes" rows="2">' + esc(existing.notes || '') + '</textarea></label>'
+      + '<div class="row-actions" style="margin-top:10px"><button class="btn primary" id="uSave">Save &amp; deduct</button><button class="btn ghost" id="uCancel">Cancel</button></div>'
+      + '<div id="uStatus" class="muted" style="margin-top:8px"></div></div>';
+    document.body.appendChild(ov);
+    const close = () => { if (ov.parentNode) document.body.removeChild(ov); };
+    ov.addEventListener('click', (e) => {
+      if (e.target === ov || e.target.id === 'uCancel') { close(); return; }
+      if (e.target.id === 'uAdd') { ov.querySelector('#uBody').insertAdjacentHTML('beforeend', rowHtml({ kitId: '', rxnsUsed: '', indexesUsed: '' })); return; }
+      if (e.target.classList.contains('u-del')) { const tr = e.target.closest('tr'); if (tr) tr.remove(); return; }
+      if (e.target.id === 'uSave') {
+        const items = [];
+        ov.querySelectorAll('#uBody tr').forEach((tr) => {
+          const kit = tr.querySelector('.u-kit').value.trim();
+          if (!kit) return;
+          items.push({ kitId: kit, rxnsUsed: Number(tr.querySelector('.u-rxn').value) || 0, indexesUsed: Number(tr.querySelector('.u-idx').value) || 0 });
+        });
+        rec.actualUsage = { items: items, notes: ov.querySelector('#uNotes').value, recordedAt: new Date().toISOString() };
+        Store.saveExperiment(rec);
+        const st = ov.querySelector('#uStatus');
+        if (!items.length) { st.textContent = 'Saved to the experiment (no kit boxes entered to deduct).'; return; }
+        st.textContent = 'Saved. Deducting from inventory\u2026';
+        fetch('/api/inventory', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'deductKitBoxes', items: items }) })
+          .then((r) => r.json()).then((d) => {
+            if (d && d.ok) { const errs = (d.results || []).filter((x) => x.error); st.textContent = errs.length ? ('Saved, but these Kit IDs were not found: ' + errs.map((x) => x.kitId).join(', ')) : ('Saved and deducted from ' + (d.results || []).length + ' box(es).'); }
+            else { st.textContent = 'Saved to the experiment, but deduction failed: ' + (d && d.message ? d.message : JSON.stringify(d)); }
+          })
+          .catch((err) => { st.textContent = 'Saved to the experiment, but the deduction request failed: ' + err; });
+      }
+    });
+  }
+
   function openExperiment(id) {
     const rec = Store.getExperiment(id);
     if (!rec) return;
@@ -3393,6 +3440,7 @@
               + '<button class="btn tiny" data-exp-act="libRecord" data-id="' + e.id + '">Library record</button>'
               + '<button class="btn tiny" data-exp-act="libSend" data-id="' + e.id + '">\u2192 Library sheet</button>'
               + '<button class="btn tiny" data-exp-act="pooling" data-id="' + e.id + '">Pooling strategy</button>'
+              + '<button class="btn tiny" data-exp-act="recordUsage" data-id="' + e.id + '">Record usage</button>'
               + '<button class="btn tiny" data-exp-act="reagents" data-id="' + e.id + '">Reagent checklist</button>'
               + '</div></div>';
           }
@@ -3477,6 +3525,7 @@
       else if (act === 'libRecord') { openExperiment(id); generateLibraryRecord(); }
       else if (act === 'libSend') { openExperiment(id); sendLibraryToSheet(); }
       else if (act === 'pooling') { openExperiment(id); downloadPoolingXlsx(); }
+      else if (act === 'recordUsage') recordUsageUI(id);
       else if (act === 'reagents') experimentReagentChecklist(id);
     }));
 
