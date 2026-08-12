@@ -706,6 +706,34 @@ function b64ToBytes(b64) {
   for (let i = 0; i < bin.length; i++) u[i] = bin.charCodeAt(i);
   return u;
 }
+// Apply clean formatting to a converted Google Sheet: frozen bold header row,
+// auto-sized columns, and subtle alternating-row banding (best-effort).
+async function formatSpreadsheet(token, ssId) {
+  const metaR = await fetch('https://sheets.googleapis.com/v4/spreadsheets/' + ssId + '?fields=sheets(properties(sheetId,gridProperties(columnCount)))',
+    { headers: { Authorization: 'Bearer ' + token } });
+  const meta = await metaR.json();
+  if (!meta || !meta.sheets) return;
+  const reqs = [];
+  for (const sh of meta.sheets) {
+    const sid = sh.properties.sheetId;
+    const cols = (sh.properties.gridProperties && sh.properties.gridProperties.columnCount) || 12;
+    reqs.push({ updateSheetProperties: { properties: { sheetId: sid, gridProperties: { frozenRowCount: 1 } }, fields: 'gridProperties.frozenRowCount' } });
+    reqs.push({ repeatCell: { range: { sheetId: sid, startRowIndex: 0, endRowIndex: 1 },
+      cell: { userEnteredFormat: { backgroundColor: { red: 0.122, green: 0.227, blue: 0.372 }, verticalAlignment: 'MIDDLE', wrapStrategy: 'WRAP', textFormat: { bold: true, foregroundColor: { red: 1, green: 1, blue: 1 } } } },
+      fields: 'userEnteredFormat(backgroundColor,verticalAlignment,wrapStrategy,textFormat)' } });
+    reqs.push({ autoResizeDimensions: { dimensions: { sheetId: sid, dimension: 'COLUMNS', startIndex: 0, endIndex: cols } } });
+  }
+  await fetch('https://sheets.googleapis.com/v4/spreadsheets/' + ssId + ':batchUpdate',
+    { method: 'POST', headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' }, body: JSON.stringify({ requests: reqs }) });
+  // banding is separate + best-effort (fails harmlessly if a band already exists on re-format)
+  try {
+    const bands = meta.sheets.map((sh) => ({ addBanding: { bandedRange: { range: { sheetId: sh.properties.sheetId, startRowIndex: 1 },
+      rowProperties: { headerColor: { red: 0.122, green: 0.227, blue: 0.372 }, firstBandColor: { red: 1, green: 1, blue: 1 }, secondBandColor: { red: 0.949, green: 0.965, blue: 0.980 } } } } }));
+    await fetch('https://sheets.googleapis.com/v4/spreadsheets/' + ssId + ':batchUpdate',
+      { method: 'POST', headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' }, body: JSON.stringify({ requests: bands }) });
+  } catch (e) { /* banding optional */ }
+}
+
 async function driveUpload(token, name, folderId, base64, sourceMime, targetMime) {
   const q = "name='" + qEsc(name) + "' and '" + folderId + "' in parents and trashed=false";
   const existing = await driveFind(token, q);
@@ -771,6 +799,7 @@ async function handleDrivePost(request, env) {
     if (body.action === 'upload') {
       if (!body.name || !body.folderId || !body.base64 || !body.sourceMime) return json({ error: 'missing_fields' }, 400);
       const d = await driveUpload(token, body.name, body.folderId, body.base64, body.sourceMime, body.targetMime || null);
+      if (d && d.id && /spreadsheet/i.test(body.targetMime || '')) { try { await formatSpreadsheet(token, d.id); } catch (e) { /* formatting best-effort */ } }
       return json({ ok: true, id: d.id, name: d.name });
     }
     if (body.action === 'trash') {

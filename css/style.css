@@ -719,3 +719,30 @@ input.stepchk { margin-right: 8px; transform: scale(1.15); vertical-align: middl
 .exp-sec > p, .exp-sec > .sec-actions { padding: 0 12px; }
 .exp-sec > p.small { margin: 2px 0 8px; }
 .sec-actions { display: flex; flex-wrap: wrap; gap: 6px; padding-bottom: 12px; align-items: center; }
+
+/* Protocol modality colour-coding — bar at top of each section + tinted header */
+.protocol-page { border-top-width: 7px; border-top-style: solid; }
+.protocol-page.pp-blue   { border-top-color: #3b7dd8; }
+.protocol-page.pp-green  { border-top-color: #4a9a52; }
+.protocol-page.pp-purple { border-top-color: #7b5ea7; }
+.protocol-page.pp-orange { border-top-color: #e08a3c; }
+.protocol-page.pp-yellow { border-top-color: #e0b81e; }
+.protocol-page.pp-pink   { border-top-color: #d46a9c; }
+.protocol-page.pp-slate  { border-top-color: #64748b; }
+.protocol-page .pp-head { border-bottom: none; margin: -26px -30px 16px; padding: 12px 30px; border-radius: 12px 12px 0 0; }
+.pp-blue   .pp-head { background: #eaf1fb; }
+.pp-green  .pp-head { background: #e9f4ec; }
+.pp-purple .pp-head { background: #f0ebf6; }
+.pp-orange .pp-head { background: #fbeede; }
+.pp-yellow .pp-head { background: #fbf3d4; }
+.pp-pink   .pp-head { background: #f9e8f0; }
+.pp-slate  .pp-head { background: #eef1f5; }
+.pp-blue   .pp-no { color: #2c62b0; } .pp-green  .pp-no { color: #3a7a42; }
+.pp-purple .pp-no { color: #63499a; } .pp-orange .pp-no { color: #b96a20; }
+.pp-yellow .pp-no { color: #9a7d10; } .pp-pink   .pp-no { color: #b04a80; }
+.pp-slate  .pp-no { color: #4a5568; }
+.pp-head h2 { color: #1f2b3a; }
+@media print {
+  .protocol-page .pp-head { margin: 0 0 10px; padding: 8px 10px; border-radius: 0; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  .protocol-page { border-top-width: 6px; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+}

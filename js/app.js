@@ -1845,7 +1845,11 @@
       const st = stagesById[id];
       const title = st ? st.name + ' — ' + (st.description || '') : id;
       const body = expanded[id] || placeholderProtocol(st);
-      return `<article class="protocol-page">
+      // Modality colour coding: blue thaw/split, green 5' unsort+stain, purple sort,
+      // orange ATAC/ASAP, yellow bulk RNA, pink stim, blue 10x chip loading.
+      const STAGE_COLOR = { ST1: 'blue', ST2: 'blue', ST3: 'green', ST5: 'purple', ST4: 'orange', ST14: 'yellow', ST13: 'pink', ST6: 'blue', ST8: 'slate', ST15: 'slate' };
+      const color = STAGE_COLOR[id] || 'slate';
+      return `<article class="protocol-page pp-${color}">
         <header class="pp-head"><span class="pp-no">Protocol ${idx + 1}</span><h2>${esc(title)}</h2></header>
         ${st ? `<p class="pp-meta"><strong>When:</strong> ${esc(st.timeWindow || 'TBD')} · <strong>Staffing:</strong> ${esc(st.personnelRule || 'TBD')} · <strong>Source:</strong> ${esc(st.sourceDoc || '—')}</p>` : ''}
         ${body}
@@ -2468,28 +2472,51 @@
     // Base ID = {U/A/S}{lane-within-chip}; append -{chip} only when that modality
     // uses more than one chip. GEM-RT tubes get a -GEM suffix. Line 1 = experiment
     // ID, Line 2 = short tube name, Line 3 = batch date (YYMMDD).
-    const rows2 = [['Tube', 'Modality', 'Type', 'Line 1 (Experiment ID)', 'Line 2', 'Line 3']];
+    const rows2 = [['Strip #', 'Tube', 'Modality', 'Type', 'Line 1 (Experiment ID)', 'Line 2', 'Line 3']];
     const dateYY = (function () { const d = (curRec && curRec.date) ? curRec.date : ''; const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(d); return m ? (m[1].slice(2) + m[2] + m[3]) : ''; })();
-    const a2 = (tube, modality, type, name) => rows2.push([tube, modality, type, expId || exp, name, dateYY]);
     const baseName = (letter, g, perChip, total) => { const nChips = Math.ceil(total / perChip); const chip = Math.floor(g / perChip) + 1; const lane = (g % perChip) + 1; return letter + lane + (nChips > 1 ? '-' + chip : ''); };
-
-    // unsort 5' (8 lanes/chip)
-    for (let i = 0; i < lanes.unsort; i++) a2('GEM-RT strip', "Unsort 5'", 'GEM RT output', baseName('U', i, 8, lanes.unsort) + '-GEM');
-    for (let i = 0; i < lanes.unsort; i++) { const b = baseName('U', i, 8, lanes.unsort); a2('cDNA strip', "Unsort 5'", 'pellet \u2192 GEX' + (vdjOn('unsorted') ? '/VDJ' : ''), b + '-P'); a2('cDNA strip', "Unsort 5'", 'supernatant \u2192 CSP (ADT)', b + '-S'); }
-    for (let i = 0; i < lanes.unsort; i++) { const b = baseName('U', i, 8, lanes.unsort); a2('Library', "Unsort 5'", 'GEX library', b + '-GEX'); a2('Library', "Unsort 5'", 'CSP/ADT library', b + '-ADT'); if (vdjOn('unsorted')) { a2('Library', "Unsort 5'", 'TCR library', b + '-TCR'); a2('Library', "Unsort 5'", 'BCR library', b + '-BCR'); } }
-    // ASAP (2 lanes/chip); cDNA is the transposed nuclei (no pellet/supernatant split)
-    for (let i = 0; i < lanes.asap; i++) a2('GEM-RT strip', 'ASAP', 'GEM RT output', baseName('A', i, 2, lanes.asap) + '-GEM');
-    for (let i = 0; i < lanes.asap; i++) a2('cDNA strip', 'ASAP', 'ASAP transposed', baseName('A', i, 2, lanes.asap));
-    for (let i = 0; i < lanes.asap; i++) { const b = baseName('A', i, 2, lanes.asap); a2('Library', 'ASAP', 'ATAC library', b + '-ATAC'); a2('Library', 'ASAP', 'CSP/ADT library', b + '-ADT'); a2('Library', 'ASAP', 'HTO library', b + '-HTO'); }
-    // sort 5' (8 lanes/chip)
-    for (let i = 0; i < lanes.sort; i++) a2('GEM-RT strip', "Sort 5'", 'GEM RT output', baseName('S', i, 8, lanes.sort) + '-GEM');
-    for (let i = 0; i < lanes.sort; i++) { const b = baseName('S', i, 8, lanes.sort); a2('cDNA strip', "Sort 5'", 'pellet \u2192 GEX' + (vdjOn('sorted') ? '/VDJ' : ''), b + '-P'); a2('cDNA strip', "Sort 5'", 'supernatant \u2192 CSP (ADT)', b + '-S'); }
-    for (let i = 0; i < lanes.sort; i++) { const b = baseName('S', i, 8, lanes.sort); a2('Library', "Sort 5'", 'GEX library', b + '-GEX'); a2('Library', "Sort 5'", 'CSP/ADT library', b + '-ADT'); if (vdjOn('sorted')) a2('Library', "Sort 5'", 'TCR library', b + '-TCR'); }
+    const rangeN = (n) => Array.from({ length: n }, (_, i) => i);
+    // Build groups; each group prints on its own tube strip(s) of 8 (no mixing types/modalities).
+    const groups = [];
+    const grp = (tube, modality, type, names) => { if (names.length) groups.push({ tube: tube, modality: modality, type: type, names: names }); };
+    // unsort 5'
+    grp('GEM-RT strip', "Unsort 5'", 'GEM RT output', rangeN(lanes.unsort).map((i) => baseName('U', i, 8, lanes.unsort) + '-GEM'));
+    grp('cDNA strip', "Unsort 5'", 'pellet \u2192 GEX' + (vdjOn('unsorted') ? '/VDJ' : ''), rangeN(lanes.unsort).map((i) => baseName('U', i, 8, lanes.unsort) + '-P'));
+    grp('cDNA strip', "Unsort 5'", 'supernatant \u2192 CSP (ADT)', rangeN(lanes.unsort).map((i) => baseName('U', i, 8, lanes.unsort) + '-S'));
+    grp('Library', "Unsort 5'", 'GEX library', rangeN(lanes.unsort).map((i) => baseName('U', i, 8, lanes.unsort) + '-GEX'));
+    grp('Library', "Unsort 5'", 'CSP/ADT library', rangeN(lanes.unsort).map((i) => baseName('U', i, 8, lanes.unsort) + '-ADT'));
+    if (vdjOn('unsorted')) { grp('Library', "Unsort 5'", 'TCR library', rangeN(lanes.unsort).map((i) => baseName('U', i, 8, lanes.unsort) + '-TCR')); grp('Library', "Unsort 5'", 'BCR library', rangeN(lanes.unsort).map((i) => baseName('U', i, 8, lanes.unsort) + '-BCR')); }
+    // ASAP
+    grp('GEM-RT strip', 'ASAP', 'GEM RT output', rangeN(lanes.asap).map((i) => baseName('A', i, 2, lanes.asap) + '-GEM'));
+    grp('cDNA strip', 'ASAP', 'ASAP transposed', rangeN(lanes.asap).map((i) => baseName('A', i, 2, lanes.asap)));
+    grp('Library', 'ASAP', 'ATAC library', rangeN(lanes.asap).map((i) => baseName('A', i, 2, lanes.asap) + '-ATAC'));
+    grp('Library', 'ASAP', 'CSP/ADT library', rangeN(lanes.asap).map((i) => baseName('A', i, 2, lanes.asap) + '-ADT'));
+    grp('Library', 'ASAP', 'HTO library', rangeN(lanes.asap).map((i) => baseName('A', i, 2, lanes.asap) + '-HTO'));
+    // sort 5'
+    grp('GEM-RT strip', "Sort 5'", 'GEM RT output', rangeN(lanes.sort).map((i) => baseName('S', i, 8, lanes.sort) + '-GEM'));
+    grp('cDNA strip', "Sort 5'", 'pellet \u2192 GEX' + (vdjOn('sorted') ? '/VDJ' : ''), rangeN(lanes.sort).map((i) => baseName('S', i, 8, lanes.sort) + '-P'));
+    grp('cDNA strip', "Sort 5'", 'supernatant \u2192 CSP (ADT)', rangeN(lanes.sort).map((i) => baseName('S', i, 8, lanes.sort) + '-S'));
+    grp('Library', "Sort 5'", 'GEX library', rangeN(lanes.sort).map((i) => baseName('S', i, 8, lanes.sort) + '-GEX'));
+    grp('Library', "Sort 5'", 'CSP/ADT library', rangeN(lanes.sort).map((i) => baseName('S', i, 8, lanes.sort) + '-ADT'));
+    if (vdjOn('sorted')) grp('Library', "Sort 5'", 'TCR library', rangeN(lanes.sort).map((i) => baseName('S', i, 8, lanes.sort) + '-TCR'));
+    // Flatten into strips of 8, padding each group with "blank tube" spacers.
+    let stripNo = 0;
+    groups.forEach((gp) => {
+      const nStrips = Math.ceil(gp.names.length / 8);
+      for (let sIdx = 0; sIdx < nStrips; sIdx++) {
+        stripNo += 1;
+        for (let j = 0; j < 8; j++) {
+          const idx = sIdx * 8 + j;
+          if (idx < gp.names.length) rows2.push([stripNo, gp.tube, gp.modality, gp.type, expId || exp, gp.names[idx], dateYY]);
+          else rows2.push([stripNo, 'blank tube', '', '', '', '', '']);
+        }
+      }
+    });
 
     const wb = XLSX.utils.book_new();
     const ws1 = XLSX.utils.aoa_to_sheet(rows1); ws1['!cols'] = [{ wch: 20 }, { wch: 18 }, { wch: 18 }, { wch: 30 }];
     XLSX.utils.book_append_sheet(wb, ws1, 'Sample & FACS labels');
-    const ws2 = XLSX.utils.aoa_to_sheet(rows2); ws2['!cols'] = [{ wch: 14 }, { wch: 12 }, { wch: 22 }, { wch: 18 }, { wch: 12 }, { wch: 10 }];
+    const ws2 = XLSX.utils.aoa_to_sheet(rows2); ws2['!cols'] = [{ wch: 7 }, { wch: 14 }, { wch: 12 }, { wch: 22 }, { wch: 18 }, { wch: 12 }, { wch: 10 }];
     XLSX.utils.book_append_sheet(wb, ws2, 'cDNA & library labels');
     return { wb: wb, name: 'tube_labels_' + (expId || exp).replace(/[^A-Za-z0-9._-]+/g, '_') };
   }
