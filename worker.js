@@ -147,9 +147,9 @@ function handleHealth(env) {
  * Setup: enable the Google Sheets API on the same Cloud project; share the
  * Sheet with the service-account email as Editor; set INVENTORY_SHEET_ID var.
  * =========================================================================== */
-const SHEET_TABS = { kits: '10X Kits', reagents: 'Reagents & Supplies', oligos: 'Oligos', antibodies: 'Antibodies', lots: 'Lots Used' };
-const ID_HEADER = { '10X Kits': 'Catalog #', 'Reagents & Supplies': 'item_id', 'Oligos': 'item_id', 'Antibodies': 'item_id' };
-const ONHAND_HEADER = { '10X Kits': 'On hand (kits)', 'Reagents & Supplies': 'On hand (units)', 'Oligos': 'On hand (units)', 'Antibodies': 'On hand (units)' };
+const SHEET_TABS = { kits: '10X Kits_Condensed', reagents: 'Reagents & Supplies', oligos: 'Oligos', antibodies: 'Antibodies', lots: 'Lots Used' };
+const ID_HEADER = { '10X Kits_Condensed': 'Catalog #', 'Reagents & Supplies': 'item_id', 'Oligos': 'item_id', 'Antibodies': 'item_id' };
+const ONHAND_HEADER = { '10X Kits_Condensed': 'On hand (kits)', 'Reagents & Supplies': 'On hand (units)', 'Oligos': 'On hand (units)', 'Antibodies': 'On hand (units)' };
 const RESERVED_HEADER = 'Reserved (experiments)';
 const SHEETS_SCOPE = 'https://www.googleapis.com/auth/spreadsheets';
 
