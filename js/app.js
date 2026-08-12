@@ -2562,72 +2562,85 @@
   function recordUsageUI(id) {
     const rec = Store.getExperiment(id); if (!rec) return;
     const existing = rec.actualUsage || { items: [], notes: '', deducted: {} };
-    const prevDeducted = existing.deducted || {};
-    const anyDeducted = Object.keys(prevDeducted).length > 0;
+    // migrate: deducted may be {kitId:{rxns,indexes}} (old) or {kitId:number} (new)
+    const baseline = {};   // kitId -> amount already deducted (mutable; advances after each apply)
+    Object.keys(existing.deducted || {}).forEach((k) => {
+      const v = existing.deducted[k];
+      baseline[k] = (typeof v === 'object' && v) ? ((Number(v.rxns) || 0) + (Number(v.indexes) || 0)) : (Number(v) || 0);
+    });
+    const usedOf = (it) => (it.used != null ? it.used : (it.rxnsUsed != null || it.indexesUsed != null ? Math.max(Number(it.rxnsUsed) || 0, Number(it.indexesUsed) || 0) : ''));
     const rowHtml = (it) => {
-      const d = prevDeducted[it.kitId];
-      const badge = d ? '<span class="u-applied" title="already deducted">\u2713 ' + (d.rxns || 0) + ' rxn' + ((d.indexes || 0) ? ' / ' + d.indexes + ' idx' : '') + '</span>' : '';
+      const applied = baseline[it.kitId];
+      const badge = (applied != null && applied !== 0) ? '<span class="u-applied" title="already deducted">\u2713 ' + applied + ' used</span>' : '';
       return '<tr>'
         + '<td><input class="u-kit" value="' + esc(it.kitId || '') + '" placeholder="e.g. 1000215-001" /></td>'
-        + '<td><input class="u-rxn" type="number" min="0" value="' + (it.rxnsUsed != null ? it.rxnsUsed : '') + '" /></td>'
-        + '<td><input class="u-idx" type="number" min="0" value="' + (it.indexesUsed != null ? it.indexesUsed : '') + '" /></td>'
+        + '<td><input class="u-used" type="number" min="0" value="' + (usedOf(it) === '' ? '' : usedOf(it)) + '" /></td>'
         + '<td class="u-appliedcell">' + badge + '</td>'
         + '<td><button class="btn tiny u-del" title="remove">\u00d7</button></td></tr>';
     };
-    const startRows = (existing.items && existing.items.length ? existing.items : [{ kitId: '', rxnsUsed: '', indexesUsed: '' }]);
-    const banner = anyDeducted
-      ? '<div class="u-banner">Already applied to inventory' + (existing.recordedAt ? ' (last on ' + esc(existing.recordedAt.slice(0, 10)) + ')' : '') + '. Re-saving deducts only the <strong>change</strong> since last save \u2014 clicking again with the same numbers does nothing.</div>'
-      : '';
+    const startRows = (existing.items && existing.items.length ? existing.items : [{ kitId: '', used: '' }]);
     const ov = document.createElement('div'); ov.className = 'usage-overlay';
+    const bannerHtml = () => (Object.keys(baseline).some((k) => baseline[k]))
+      ? '<div class="u-banner" id="uBanner">Already applied to inventory' + (existing.recordedAt ? ' (last on ' + esc(existing.recordedAt.slice(0, 10)) + ')' : '') + '. Saving deducts only the <strong>change</strong> since last save.</div>'
+      : '<div id="uBanner"></div>';
     ov.innerHTML = '<div class="usage-modal"><h3>Material usage &mdash; ' + esc(rec.name || '') + (rec.experimentId ? ' <span class="exp-id">' + esc(rec.experimentId) + '</span>' : '') + '</h3>'
-      + banner
-      + '<p class="muted">Enter the exact kit boxes (Kit ID from <strong>10X Kits_All</strong>) and how many rxns / index wells you used. Saving records this on the experiment and deducts the net change from those boxes.</p>'
-      + '<table class="usage-tbl"><thead><tr><th>Kit ID (box)</th><th>Rxns used</th><th>Index wells used</th><th>Applied</th><th></th></tr></thead><tbody id="uBody">' + startRows.map(rowHtml).join('') + '</tbody></table>'
+      + bannerHtml()
+      + '<p class="muted">Enter the exact kit boxes (Kit ID from <strong>10X Kits_All</strong>) and one number for how many <strong>rxns / lanes / index wells</strong> you used from each. Saving deducts the net change from those boxes.</p>'
+      + '<table class="usage-tbl"><thead><tr><th>Kit ID (box)</th><th>Rxns / lanes / indexes used</th><th>Applied</th><th></th></tr></thead><tbody id="uBody">' + startRows.map(rowHtml).join('') + '</tbody></table>'
       + '<button class="btn ghost" id="uAdd">+ Add box</button>'
       + '<label style="display:block;margin-top:10px">Notes<textarea id="uNotes" rows="2">' + esc(existing.notes || '') + '</textarea></label>'
-      + '<div class="row-actions" style="margin-top:10px"><button class="btn primary" id="uSave">Save &amp; apply changes</button><button class="btn ghost" id="uCancel">Cancel</button></div>'
+      + '<div class="row-actions" style="margin-top:10px"><button class="btn primary" id="uSave">Save &amp; apply changes</button><button class="btn ghost" id="uCancel">Close</button></div>'
       + '<div id="uStatus" class="muted" style="margin-top:8px"></div></div>';
     document.body.appendChild(ov);
     const close = () => { if (ov.parentNode) document.body.removeChild(ov); };
+    // refresh the per-row "Applied" badges from the current baseline
+    const refreshBadges = () => {
+      ov.querySelectorAll('#uBody tr').forEach((tr) => {
+        const kit = tr.querySelector('.u-kit').value.trim();
+        const applied = baseline[kit];
+        tr.querySelector('.u-appliedcell').innerHTML = (applied != null && applied !== 0) ? '<span class="u-applied">\u2713 ' + applied + ' used</span>' : '';
+      });
+    };
     ov.addEventListener('click', (e) => {
       if (e.target === ov || e.target.id === 'uCancel') { close(); return; }
-      if (e.target.id === 'uAdd') { ov.querySelector('#uBody').insertAdjacentHTML('beforeend', rowHtml({ kitId: '', rxnsUsed: '', indexesUsed: '' })); return; }
+      if (e.target.id === 'uAdd') { ov.querySelector('#uBody').insertAdjacentHTML('beforeend', rowHtml({ kitId: '', used: '' })); return; }
       if (e.target.classList.contains('u-del')) { const tr = e.target.closest('tr'); if (tr) tr.remove(); return; }
       if (e.target.id === 'uSave') {
         const items = [];
         ov.querySelectorAll('#uBody tr').forEach((tr) => {
           const kit = tr.querySelector('.u-kit').value.trim();
           if (!kit) return;
-          items.push({ kitId: kit, rxnsUsed: Number(tr.querySelector('.u-rxn').value) || 0, indexesUsed: Number(tr.querySelector('.u-idx').value) || 0 });
+          items.push({ kitId: kit, used: Number(tr.querySelector('.u-used').value) || 0 });
         });
-        // compute net change vs what was already deducted (handles edits AND removed rows -> restore)
-        const newTotals = {}; items.forEach((it) => { newTotals[it.kitId] = { rxns: it.rxnsUsed, indexes: it.indexesUsed }; });
-        const kitset = {}; Object.keys(prevDeducted).forEach((k) => { kitset[k] = 1; }); Object.keys(newTotals).forEach((k) => { kitset[k] = 1; });
+        const newTotals = {}; items.forEach((it) => { newTotals[it.kitId] = it.used; });
+        const kitset = {}; Object.keys(baseline).forEach((k) => { kitset[k] = 1; }); Object.keys(newTotals).forEach((k) => { kitset[k] = 1; });
         const deltas = [];
         Object.keys(kitset).forEach((kit) => {
-          const p = prevDeducted[kit] || { rxns: 0, indexes: 0 }, n = newTotals[kit] || { rxns: 0, indexes: 0 };
-          const dR = (n.rxns || 0) - (p.rxns || 0), dI = (n.indexes || 0) - (p.indexes || 0);
-          if (dR || dI) deltas.push({ kitId: kit, rxnsUsed: dR, indexesUsed: dI });
+          const d = (newTotals[kit] || 0) - (baseline[kit] || 0);
+          if (d) deltas.push({ kitId: kit, used: d });
         });
         const st = ov.querySelector('#uStatus');
-        // persist the recorded usage immediately
-        rec.actualUsage = { items: items, notes: ov.querySelector('#uNotes').value, recordedAt: new Date().toISOString(), deducted: Object.assign({}, prevDeducted) };
-        if (!deltas.length) { Store.saveExperiment(rec); st.textContent = 'Saved. No inventory change (nothing new to deduct).'; return; }
+        rec.actualUsage = { items: items, notes: ov.querySelector('#uNotes').value, recordedAt: new Date().toISOString(), deducted: Object.assign({}, baseline) };
+        if (!deltas.length) { Store.saveExperiment(rec); st.textContent = 'Saved. No inventory change (nothing new to deduct).'; refreshBadges(); return; }
         st.textContent = 'Saving and applying net change to inventory\u2026';
+        const saveBtn = ov.querySelector('#uSave'); saveBtn.disabled = true;
         fetch('/api/inventory', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'deductKitBoxes', items: deltas }) })
           .then((r) => r.json()).then((d) => {
-            const finalDeducted = Object.assign({}, prevDeducted);
+            saveBtn.disabled = false;
             const errs = [];
             (d && d.results ? d.results : []).forEach((res) => {
               if (res.error) { errs.push(res.kitId); return; }
-              if (newTotals[res.kitId]) finalDeducted[res.kitId] = newTotals[res.kitId]; else delete finalDeducted[res.kitId];
+              // advance the baseline for successfully-applied boxes so a second click is a no-op
+              if (newTotals[res.kitId] != null) baseline[res.kitId] = newTotals[res.kitId]; else delete baseline[res.kitId];
             });
-            rec.actualUsage.deducted = finalDeducted; Store.saveExperiment(rec);
-            if (d && d.ok) st.textContent = errs.length ? ('Applied changes, but these Kit IDs were not found (fix and re-save): ' + errs.join(', ')) : ('Applied. Net change deducted from ' + (d.results || []).length + ' box(es). You can close this.');
+            rec.actualUsage.deducted = Object.assign({}, baseline); Store.saveExperiment(rec);
+            refreshBadges();
+            const b = ov.querySelector('#uBanner'); if (b && Object.keys(baseline).some((k) => baseline[k])) b.outerHTML = bannerHtml();
+            if (d && d.ok) st.textContent = errs.length ? ('Applied, but these Kit IDs were not found (fix and re-save): ' + errs.join(', ')) : ('Applied. Net change deducted from ' + (d.results || []).length + ' box(es). Clicking Save again now does nothing.');
             else st.textContent = 'Saved to the experiment, but the deduction failed: ' + (d && d.message ? d.message : JSON.stringify(d));
             renderManage();
           })
-          .catch((err) => { Store.saveExperiment(rec); st.textContent = 'Saved to the experiment, but the deduction request failed: ' + err; });
+          .catch((err) => { saveBtn.disabled = false; Store.saveExperiment(rec); st.textContent = 'Saved to the experiment, but the deduction request failed: ' + err; });
       }
     });
   }

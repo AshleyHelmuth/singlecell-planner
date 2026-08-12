@@ -283,6 +283,7 @@ async function handleInventoryPost(request, env) {
       const kidCol = headers.indexOf('Kit ID');
       const remCol = headers.indexOf('Rxns/Indexes Remaining');
       const usedCol = headers.indexOf('Indexes Used');
+      const descCol = headers.indexOf('Description');
       if (kidCol < 0 || remCol < 0) return json({ error: 'missing_columns', headers }, 409);
       const results = [];
       for (const it of items) {
@@ -292,13 +293,15 @@ async function handleInventoryPost(request, env) {
         for (let r = 1; r < values.length; r++) { if (String((values[r] || [])[kidCol] || '').trim() === want) { rowIdx = r; break; } }
         if (rowIdx < 0) { results.push({ kitId: want, error: 'not_found' }); continue; }
         const row = values[rowIdx];
-        const usedRxns = (Number(it.rxnsUsed) || 0) + (Number(it.indexesUsed) || 0);
+        // one number = rxns / lanes / index wells used (may be negative for a correction)
+        const usedAmt = (it.used != null) ? (Number(it.used) || 0) : ((Number(it.rxnsUsed) || 0) + (Number(it.indexesUsed) || 0));
         const curRem = Number(row[remCol]) || 0;
-        const newRem = curRem - usedRxns;
+        const newRem = curRem - usedAmt;
         await sheetsUpdateCell(token, id, qtab(ALL_TAB) + '!' + colLetter(remCol + 1) + (rowIdx + 1), newRem);
-        if (usedCol >= 0 && (Number(it.indexesUsed) || 0) > 0) {
+        // for index kits, also track cumulative wells consumed in "Indexes Used"
+        if (usedCol >= 0 && descCol >= 0 && /index/i.test(String(row[descCol] || ''))) {
           const curUsed = Number(row[usedCol]) || 0;
-          await sheetsUpdateCell(token, id, qtab(ALL_TAB) + '!' + colLetter(usedCol + 1) + (rowIdx + 1), curUsed + (Number(it.indexesUsed) || 0));
+          await sheetsUpdateCell(token, id, qtab(ALL_TAB) + '!' + colLetter(usedCol + 1) + (rowIdx + 1), curUsed + usedAmt);
         }
         results.push({ kitId: want, newRemaining: newRem });
       }
