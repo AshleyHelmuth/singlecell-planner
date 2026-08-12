@@ -702,3 +702,9 @@ input.stepchk { margin-right: 8px; transform: scale(1.15); vertical-align: middl
 .usage-tbl input { width: 100%; box-sizing: border-box; border: 1px solid #cbd5e2; border-radius: 3px; padding: 3px 5px; }
 .usage-modal textarea { width: 100%; box-sizing: border-box; border: 1px solid #cbd5e2; border-radius: 4px; padding: 5px; }
 .u-del { background: #f3d6d6; color: #8a2020; }
+
+/* Material-usage delta tracking */
+.u-banner { background: #eaf5ea; border-left: 3px solid #4a9a52; border-radius: 4px; padding: 8px 12px; margin: 8px 0; font-size: 13px; color: #2a5a30; }
+.u-applied { color: #2a7a34; font-size: 12px; font-weight: 600; white-space: nowrap; }
+.u-appliedcell { text-align: center; }
+.exp-badge.usage-ok { background: #e0f0e2; color: #2a6a34; }

@@ -2561,20 +2561,31 @@
   // to the experiment record, and deduct from those boxes in 10X Kits_All.
   function recordUsageUI(id) {
     const rec = Store.getExperiment(id); if (!rec) return;
-    const existing = rec.actualUsage || { items: [], notes: '' };
-    const rowHtml = (it) => '<tr>'
-      + '<td><input class="u-kit" value="' + esc(it.kitId || '') + '" placeholder="e.g. 1000215-001" /></td>'
-      + '<td><input class="u-rxn" type="number" min="0" value="' + (it.rxnsUsed != null ? it.rxnsUsed : '') + '" /></td>'
-      + '<td><input class="u-idx" type="number" min="0" value="' + (it.indexesUsed != null ? it.indexesUsed : '') + '" /></td>'
-      + '<td><button class="btn tiny u-del" title="remove">\u00d7</button></td></tr>';
+    const existing = rec.actualUsage || { items: [], notes: '', deducted: {} };
+    const prevDeducted = existing.deducted || {};
+    const anyDeducted = Object.keys(prevDeducted).length > 0;
+    const rowHtml = (it) => {
+      const d = prevDeducted[it.kitId];
+      const badge = d ? '<span class="u-applied" title="already deducted">\u2713 ' + (d.rxns || 0) + ' rxn' + ((d.indexes || 0) ? ' / ' + d.indexes + ' idx' : '') + '</span>' : '';
+      return '<tr>'
+        + '<td><input class="u-kit" value="' + esc(it.kitId || '') + '" placeholder="e.g. 1000215-001" /></td>'
+        + '<td><input class="u-rxn" type="number" min="0" value="' + (it.rxnsUsed != null ? it.rxnsUsed : '') + '" /></td>'
+        + '<td><input class="u-idx" type="number" min="0" value="' + (it.indexesUsed != null ? it.indexesUsed : '') + '" /></td>'
+        + '<td class="u-appliedcell">' + badge + '</td>'
+        + '<td><button class="btn tiny u-del" title="remove">\u00d7</button></td></tr>';
+    };
     const startRows = (existing.items && existing.items.length ? existing.items : [{ kitId: '', rxnsUsed: '', indexesUsed: '' }]);
+    const banner = anyDeducted
+      ? '<div class="u-banner">Already applied to inventory' + (existing.recordedAt ? ' (last on ' + esc(existing.recordedAt.slice(0, 10)) + ')' : '') + '. Re-saving deducts only the <strong>change</strong> since last save \u2014 clicking again with the same numbers does nothing.</div>'
+      : '';
     const ov = document.createElement('div'); ov.className = 'usage-overlay';
-    ov.innerHTML = '<div class="usage-modal"><h3>Record actual usage &mdash; ' + esc(rec.name || '') + (rec.experimentId ? ' <span class="exp-id">' + esc(rec.experimentId) + '</span>' : '') + '</h3>'
-      + '<p class="muted">Enter the exact kit boxes (Kit ID from <strong>10X Kits_All</strong>) and how many rxns / index wells you used. Saving records this on the experiment and deducts from those boxes.</p>'
-      + '<table class="usage-tbl"><thead><tr><th>Kit ID (box)</th><th>Rxns used</th><th>Index wells used</th><th></th></tr></thead><tbody id="uBody">' + startRows.map(rowHtml).join('') + '</tbody></table>'
+    ov.innerHTML = '<div class="usage-modal"><h3>Material usage &mdash; ' + esc(rec.name || '') + (rec.experimentId ? ' <span class="exp-id">' + esc(rec.experimentId) + '</span>' : '') + '</h3>'
+      + banner
+      + '<p class="muted">Enter the exact kit boxes (Kit ID from <strong>10X Kits_All</strong>) and how many rxns / index wells you used. Saving records this on the experiment and deducts the net change from those boxes.</p>'
+      + '<table class="usage-tbl"><thead><tr><th>Kit ID (box)</th><th>Rxns used</th><th>Index wells used</th><th>Applied</th><th></th></tr></thead><tbody id="uBody">' + startRows.map(rowHtml).join('') + '</tbody></table>'
       + '<button class="btn ghost" id="uAdd">+ Add box</button>'
       + '<label style="display:block;margin-top:10px">Notes<textarea id="uNotes" rows="2">' + esc(existing.notes || '') + '</textarea></label>'
-      + '<div class="row-actions" style="margin-top:10px"><button class="btn primary" id="uSave">Save &amp; deduct</button><button class="btn ghost" id="uCancel">Cancel</button></div>'
+      + '<div class="row-actions" style="margin-top:10px"><button class="btn primary" id="uSave">Save &amp; apply changes</button><button class="btn ghost" id="uCancel">Cancel</button></div>'
       + '<div id="uStatus" class="muted" style="margin-top:8px"></div></div>';
     document.body.appendChild(ov);
     const close = () => { if (ov.parentNode) document.body.removeChild(ov); };
@@ -2589,17 +2600,34 @@
           if (!kit) return;
           items.push({ kitId: kit, rxnsUsed: Number(tr.querySelector('.u-rxn').value) || 0, indexesUsed: Number(tr.querySelector('.u-idx').value) || 0 });
         });
-        rec.actualUsage = { items: items, notes: ov.querySelector('#uNotes').value, recordedAt: new Date().toISOString() };
-        Store.saveExperiment(rec);
+        // compute net change vs what was already deducted (handles edits AND removed rows -> restore)
+        const newTotals = {}; items.forEach((it) => { newTotals[it.kitId] = { rxns: it.rxnsUsed, indexes: it.indexesUsed }; });
+        const kitset = {}; Object.keys(prevDeducted).forEach((k) => { kitset[k] = 1; }); Object.keys(newTotals).forEach((k) => { kitset[k] = 1; });
+        const deltas = [];
+        Object.keys(kitset).forEach((kit) => {
+          const p = prevDeducted[kit] || { rxns: 0, indexes: 0 }, n = newTotals[kit] || { rxns: 0, indexes: 0 };
+          const dR = (n.rxns || 0) - (p.rxns || 0), dI = (n.indexes || 0) - (p.indexes || 0);
+          if (dR || dI) deltas.push({ kitId: kit, rxnsUsed: dR, indexesUsed: dI });
+        });
         const st = ov.querySelector('#uStatus');
-        if (!items.length) { st.textContent = 'Saved to the experiment (no kit boxes entered to deduct).'; return; }
-        st.textContent = 'Saved. Deducting from inventory\u2026';
-        fetch('/api/inventory', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'deductKitBoxes', items: items }) })
+        // persist the recorded usage immediately
+        rec.actualUsage = { items: items, notes: ov.querySelector('#uNotes').value, recordedAt: new Date().toISOString(), deducted: Object.assign({}, prevDeducted) };
+        if (!deltas.length) { Store.saveExperiment(rec); st.textContent = 'Saved. No inventory change (nothing new to deduct).'; return; }
+        st.textContent = 'Saving and applying net change to inventory\u2026';
+        fetch('/api/inventory', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'deductKitBoxes', items: deltas }) })
           .then((r) => r.json()).then((d) => {
-            if (d && d.ok) { const errs = (d.results || []).filter((x) => x.error); st.textContent = errs.length ? ('Saved, but these Kit IDs were not found: ' + errs.map((x) => x.kitId).join(', ')) : ('Saved and deducted from ' + (d.results || []).length + ' box(es).'); }
-            else { st.textContent = 'Saved to the experiment, but deduction failed: ' + (d && d.message ? d.message : JSON.stringify(d)); }
+            const finalDeducted = Object.assign({}, prevDeducted);
+            const errs = [];
+            (d && d.results ? d.results : []).forEach((res) => {
+              if (res.error) { errs.push(res.kitId); return; }
+              if (newTotals[res.kitId]) finalDeducted[res.kitId] = newTotals[res.kitId]; else delete finalDeducted[res.kitId];
+            });
+            rec.actualUsage.deducted = finalDeducted; Store.saveExperiment(rec);
+            if (d && d.ok) st.textContent = errs.length ? ('Applied changes, but these Kit IDs were not found (fix and re-save): ' + errs.join(', ')) : ('Applied. Net change deducted from ' + (d.results || []).length + ' box(es). You can close this.');
+            else st.textContent = 'Saved to the experiment, but the deduction failed: ' + (d && d.message ? d.message : JSON.stringify(d));
+            renderManage();
           })
-          .catch((err) => { st.textContent = 'Saved to the experiment, but the deduction request failed: ' + err; });
+          .catch((err) => { Store.saveExperiment(rec); st.textContent = 'Saved to the experiment, but the deduction request failed: ' + err; });
       }
     });
   }
@@ -3418,6 +3446,7 @@
           const flags = statusBadge(e.status)
             + (s ? '' : ' <span class="exp-badge nobuild">not built</span>')
             + (e.scheduledAt ? '' : ' <span class="exp-badge unsched">not scheduled</span>')
+            + ((e.actualUsage && e.actualUsage.deducted && Object.keys(e.actualUsage.deducted).length) ? ' <span class="exp-badge usage-ok">materials logged</span>' : '')
             + batchFlag;
           c += '<div class="exp-card' + (expOpen ? ' is-open' : '') + (CURRENT_EXP_ID === e.id ? ' is-active' : '') + '">'
             + '<div class="exp-card-head"><div class="exp-card-info"><strong>' + esc(e.name) + '</strong> ' + (e.experimentId ? '<span class="exp-id">' + esc(e.experimentId) + '</span> ' : '') + flags
