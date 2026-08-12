@@ -728,7 +728,7 @@ async function formatSpreadsheet(token, ssId) {
   // banding is separate + best-effort (fails harmlessly if a band already exists on re-format)
   try {
     const bands = meta.sheets.map((sh) => ({ addBanding: { bandedRange: { range: { sheetId: sh.properties.sheetId, startRowIndex: 1 },
-      rowProperties: { headerColor: { red: 0.122, green: 0.227, blue: 0.372 }, firstBandColor: { red: 1, green: 1, blue: 1 }, secondBandColor: { red: 0.949, green: 0.965, blue: 0.980 } } } } }));
+      rowProperties: { firstBandColor: { red: 1, green: 1, blue: 1 }, secondBandColor: { red: 0.949, green: 0.965, blue: 0.980 } } } } }));
     await fetch('https://sheets.googleapis.com/v4/spreadsheets/' + ssId + ':batchUpdate',
       { method: 'POST', headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' }, body: JSON.stringify({ requests: bands }) });
   } catch (e) { /* banding optional */ }

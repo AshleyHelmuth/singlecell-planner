@@ -2780,6 +2780,18 @@
 
   function wbBase64(wb) { return XLSX.write(wb, { bookType: 'xlsx', type: 'base64' }); }
   function htmlBase64(html) { return btoa(unescape(encodeURIComponent(html))); }
+  // Google Docs conversion ignores CSS classes/stylesheets and only honours inline
+  // styles, so inject an inline colored bar (a shaded 1-cell table, which converts
+  // reliably) + a tinted header at the top of each protocol section for the Doc.
+  function inlineProtocolColors(html) {
+    const hex = { blue: '#3b7dd8', green: '#4a9a52', purple: '#7b5ea7', orange: '#e08a3c', yellow: '#e0b81e', pink: '#d46a9c', slate: '#64748b' };
+    const tint = { blue: '#eaf1fb', green: '#e9f4ec', purple: '#f0ebf6', orange: '#fbeede', yellow: '#fbf3d4', pink: '#f9e8f0', slate: '#eef1f5' };
+    return html.replace(/<article class="protocol-page pp-(\w+)"([^>]*)>/g, (m, color, attrs) => {
+      const bar = hex[color] || hex.slate, bg = tint[color] || tint.slate;
+      return '<article class="protocol-page pp-' + color + '"' + attrs + '>'
+        + '<table style="width:100%;border-collapse:collapse;margin:0 0 6px 0;"><tr><td style="background-color:' + bar + ';height:10px;line-height:10px;font-size:1px;">&nbsp;</td></tr></table>';
+    }).replace(/<header class="pp-head"(?:\s+style="[^"]*")?>/g, '<header class="pp-head" style="background-color:#f2f5f9;padding:6px 10px;">');
+  }
   function driveApi(payload) {
     return fetch('/api/drive', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) }).then((r) => r.json());
   }
@@ -2802,7 +2814,7 @@
       let protoRes = null;
       const protoEl = document.getElementById('protocolsContent');
       if (protoEl && protoEl.innerHTML.trim()) {
-        const html = '<html><head><meta charset="utf-8"></head><body>' + protoEl.innerHTML + '</body></html>';
+        const html = '<html><head><meta charset="utf-8"></head><body>' + inlineProtocolColors(protoEl.innerHTML) + '</body></html>';
         protoRes = await driveApi({ action: 'upload', name: 'Protocol', folderId: path.experimentId,
           base64: htmlBase64(html), sourceMime: HTML_MIME, targetMime: GDOC_MIME });
       }
