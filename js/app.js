@@ -2421,9 +2421,9 @@
 
   // Build a tube-label sheet (one row per physical tube) from the pooling
   // strategy + selected modalities. Columns: Tube, Line 1, Line 2, Line 3.
-  function generateTubeLabels() {
+  function buildTubeLabelsWb() {
     const calc = computePooling();
-    if (!calc || !calc.samples.length) { alert('Add samples and compute a pooling strategy first.'); return; }
+    if (!calc || !calc.samples.length) return null;
     const curRec = CURRENT_EXP_ID ? Store.getExperiment(CURRENT_EXP_ID) : null;
     const exp = (curRec && curRec.name) ? curRec.name : 'Experiment';
     const expId = (curRec && curRec.experimentId) ? curRec.experimentId : '';
@@ -2491,14 +2491,19 @@
     XLSX.utils.book_append_sheet(wb, ws1, 'Sample & FACS labels');
     const ws2 = XLSX.utils.aoa_to_sheet(rows2); ws2['!cols'] = [{ wch: 14 }, { wch: 12 }, { wch: 22 }, { wch: 18 }, { wch: 12 }, { wch: 10 }];
     XLSX.utils.book_append_sheet(wb, ws2, 'cDNA & library labels');
-    XLSX.writeFile(wb, 'tube_labels_' + (expId || exp).replace(/[^A-Za-z0-9._-]+/g, '_') + '.xlsx');
+    return { wb: wb, name: 'tube_labels_' + (expId || exp).replace(/[^A-Za-z0-9._-]+/g, '_') };
+  }
+  function generateTubeLabels() {
+    const r = buildTubeLabelsWb();
+    if (!r) { alert('Add samples and compute a pooling strategy first.'); return; }
+    XLSX.writeFile(r.wb, r.name + '.xlsx');
   }
 
   // Library Sequencing Record — one row per library type, counts = lanes,
   // matching the shared record's columns (rest left blank to fill in later).
-  function generateLibraryRecord() {
+  function buildLibraryRecordWb() {
     const calc = computePooling();
-    if (!calc || !calc.samples.length) { alert('Add samples and compute a pooling strategy first.'); return; }
+    if (!calc || !calc.samples.length) return null;
     const curRec = CURRENT_EXP_ID ? Store.getExperiment(CURRENT_EXP_ID) : null;
     const exp = (curRec && curRec.name) ? curRec.name : 'Experiment';
     const expId = (curRec && curRec.experimentId) ? curRec.experimentId : '';
@@ -2521,7 +2526,12 @@
     ws['!cols'] = header.map((h) => ({ wch: Math.max(12, h.length + 2) }));
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, 'Library record');
-    XLSX.writeFile(wb, 'library_record_' + (expId || exp).replace(/[^A-Za-z0-9._-]+/g, '_') + '.xlsx');
+    return { wb: wb, name: 'library_record_' + (expId || exp).replace(/[^A-Za-z0-9._-]+/g, '_') };
+  }
+  function generateLibraryRecord() {
+    const r = buildLibraryRecordWb();
+    if (!r) { alert('Add samples and compute a pooling strategy first.'); return; }
+    XLSX.writeFile(r.wb, r.name + '.xlsx');
   }
 
   // Build the library rows (data only, no header) for the current experiment.
@@ -2759,15 +2769,34 @@
         rec.driveFolderId = path.experimentId; rec.driveProjectId = path.projectId; Store.saveExperiment(rec);
       }
       // Experiment summary (Summary + Pooling + Reagents + Pricing) -> Google Sheet
-      await driveApi({ action: 'upload', name: 'Experiment summary', folderId: path.experimentId,
+      const sumRes = await driveApi({ action: 'upload', name: 'Experiment summary', folderId: path.experimentId,
         base64: wbBase64(buildExperimentWb(rec)), sourceMime: XLSX_MIME, targetMime: GSHEET_MIME });
       // Protocol packet (rendered HTML) -> Google Doc
+      let protoRes = null;
       const protoEl = document.getElementById('protocolsContent');
       if (protoEl && protoEl.innerHTML.trim()) {
         const html = '<html><head><meta charset="utf-8"></head><body>' + protoEl.innerHTML + '</body></html>';
-        await driveApi({ action: 'upload', name: 'Protocol', folderId: path.experimentId,
+        protoRes = await driveApi({ action: 'upload', name: 'Protocol', folderId: path.experimentId,
           base64: htmlBase64(html), sourceMime: HTML_MIME, targetMime: GDOC_MIME });
       }
+      rec.driveFiles = Object.assign({}, rec.driveFiles, {
+        summary: (sumRes && sumRes.id) || (rec.driveFiles && rec.driveFiles.summary) || null,
+        protocol: (protoRes && protoRes.id) || (rec.driveFiles && rec.driveFiles.protocol) || null
+      });
+      // Tube labels + Library record -> Google Sheets
+      const labelsBuilt = buildTubeLabelsWb();
+      if (labelsBuilt) {
+        const labRes = await driveApi({ action: 'upload', name: 'Tube labels', folderId: path.experimentId,
+          base64: wbBase64(labelsBuilt.wb), sourceMime: XLSX_MIME, targetMime: GSHEET_MIME });
+        if (labRes && labRes.id) rec.driveFiles.labels = labRes.id;
+      }
+      const libBuilt = buildLibraryRecordWb();
+      if (libBuilt) {
+        const libRes = await driveApi({ action: 'upload', name: 'Library record', folderId: path.experimentId,
+          base64: wbBase64(libBuilt.wb), sourceMime: XLSX_MIME, targetMime: GSHEET_MIME });
+        if (libRes && libRes.id) rec.driveFiles.library = libRes.id;
+      }
+      Store.saveExperiment(rec);
       console.log('[drive] exported', project + '/' + (rec.name || 'Experiment'));
     } catch (e) { console.warn('[drive] export error', e); }
   }
@@ -3486,8 +3515,15 @@
               + '<div class="sec-actions">' + B('open', 'Open in planner') + B('pooling', 'Pooling strategy') + B('del', 'Delete experiment', ' danger') + '</div></details>'
               // 2) Experiment sheets
               + '<details class="exp-sec"><summary>Experiment sheets</summary>'
-              + '<p class="muted small">Generate the packet, protocols, labels, and summary workbook. ' + (e.driveFolder ? '<a href="https://drive.google.com/drive/folders/' + escAttr(e.driveFolder) + '" target="_blank" rel="noopener">Open this experiment\u2019s Drive folder</a>.' : 'A Drive copy is created when the experiment is built/exported.') + '</p>'
-              + '<div class="sec-actions">' + B('packet', 'Experiment summary (xlsx)') + B('protocols', 'Protocols') + B('labels', 'Tube labels') + B('libRecord', 'Library record (xlsx)') + B('reagents', 'Reagent checklist') + '</div></details>'
+              + (e.driveFolderId
+                  ? ('<p class="small">On Drive: <a href="https://drive.google.com/drive/folders/' + escAttr(e.driveFolderId) + '" target="_blank" rel="noopener">experiment folder</a>'
+                     + (e.driveFiles && e.driveFiles.summary ? ' \u00b7 <a href="https://docs.google.com/spreadsheets/d/' + escAttr(e.driveFiles.summary) + '/edit" target="_blank" rel="noopener">Experiment summary (Sheet)</a>' : '')
+                     + (e.driveFiles && e.driveFiles.labels ? ' \u00b7 <a href="https://docs.google.com/spreadsheets/d/' + escAttr(e.driveFiles.labels) + '/edit" target="_blank" rel="noopener">Tube labels (Sheet)</a>' : '')
+                     + (e.driveFiles && e.driveFiles.library ? ' \u00b7 <a href="https://docs.google.com/spreadsheets/d/' + escAttr(e.driveFiles.library) + '/edit" target="_blank" rel="noopener">Library record (Sheet)</a>' : '')
+                     + (e.driveFiles && e.driveFiles.protocol ? ' \u00b7 <a href="https://docs.google.com/document/d/' + escAttr(e.driveFiles.protocol) + '/edit" target="_blank" rel="noopener">Protocol (Doc)</a>' : '')
+                     + '</p><p class="muted small">Open the live Drive copies above, or generate a fresh download below.</p>')
+                  : '<p class="muted small">Build the experiment to create live Google Drive copies (Sheet + Doc) here. Until then, generate downloads below.</p>')
+              + '<div class="sec-actions">' + B('drive', 'Export / refresh Drive copies') + B('packet', 'Experiment summary (xlsx)') + B('protocols', 'Protocols') + B('labels', 'Tube labels') + B('libRecord', 'Library record (xlsx)') + B('reagents', 'Reagent checklist') + '</div></details>'
               // 3) Scheduling
               + '<details class="exp-sec"><summary>Scheduling</summary>'
               + '<p class="small">' + schedSum + '</p>'
@@ -3574,6 +3610,13 @@
         renderManage();
       }
       else if (act === 'open') openExperiment(id);
+      else if (act === 'drive') {
+        const r = Store.getExperiment(id);
+        if (!r || !r.snapshot) { alert('Build the experiment first (Open in planner \u2192 build), then it can be exported to Drive.'); return; }
+        openExperiment(id);
+        try { openExperimentProtocols(id); } catch (err) { /* protocol render optional */ }
+        exportExperimentToDrive(r).then(() => renderManage()).catch(() => renderManage());
+      }
       else if (act === 'reschedule') { CURRENT_EXP_ID = id; updatePlanExpBar(); $('.tab[data-tab="scheduling"]').click(); if (window.Scheduling) Scheduling.render($('#schedulingContent')); }
       else if (act === 'inv') recordInventoryUI(id);
       else if (act === 'del') { const r = Store.getExperiment(id); if (r && confirm('Delete \u201c' + r.name + '\u201d? This cannot be undone.')) { if (CURRENT_EXP_ID === id) { CURRENT_EXP_ID = null; updatePlanExpBar(); } const folder = r.driveFolderId; Store.deleteExperiment(id); if (folder) driveApi({ action: 'trash', id: folder }).catch(() => {}); pushReservedToSheet(); renderManage(); } }
