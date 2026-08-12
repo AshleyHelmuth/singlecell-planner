@@ -2785,11 +2785,12 @@
   // reliably) + a tinted header at the top of each protocol section for the Doc.
   function inlineProtocolColors(html) {
     const hex = { blue: '#3b7dd8', green: '#4a9a52', purple: '#7b5ea7', orange: '#e08a3c', yellow: '#e0b81e', pink: '#d46a9c', slate: '#64748b' };
-    const tint = { blue: '#eaf1fb', green: '#e9f4ec', purple: '#f0ebf6', orange: '#fbeede', yellow: '#fbf3d4', pink: '#f9e8f0', slate: '#eef1f5' };
-    return html.replace(/<article class="protocol-page pp-(\w+)"([^>]*)>/g, (m, color, attrs) => {
-      const bar = hex[color] || hex.slate, bg = tint[color] || tint.slate;
-      return '<article class="protocol-page pp-' + color + '"' + attrs + '>'
-        + '<table style="width:100%;border-collapse:collapse;margin:0 0 6px 0;"><tr><td style="background-color:' + bar + ';height:10px;line-height:10px;font-size:1px;">&nbsp;</td></tr></table>';
+    let n = 0;
+    return html.replace(/<article class="protocol-page( pp-(\w+))?"([^>]*)>/g, (m, clsSuffix, color, attrs) => {
+      n += 1;
+      const brk = n > 1 ? '<div style="page-break-before:always"></div>' : '';
+      const bar = color ? ('<table style="width:100%;border-collapse:collapse;margin:0 0 6px 0;"><tr><td style="background-color:' + (hex[color] || hex.slate) + ';height:12px;line-height:12px;font-size:1px;">&nbsp;</td></tr></table>') : '';
+      return brk + '<article class="protocol-page' + (clsSuffix || '') + '"' + attrs + '>' + bar;
     }).replace(/<header class="pp-head"(?:\s+style="[^"]*")?>/g, '<header class="pp-head" style="background-color:#f2f5f9;padding:6px 10px;">');
   }
   function driveApi(payload) {
@@ -3006,14 +3007,15 @@
     wsLT['!cols'] = [{ wch: 20 }].concat(Array.from({ length: 8 }, () => ({ wch: 8 })), [{ wch: 42 }]);
     XLSX.utils.book_append_sheet(wb, wsLT, '10X Library Tubes');
 
-    // ---- 10X Chip Layout (per-modality well diagram, printable) ------------
-    const cl = [['How to use this sheet:'], ['Annotate each lane with the pool / super-pool loaded, then print for records.'], []];
+    // ---- 10X Chip Layout (8-lane grid coloured like a real chip) -----------
+    const cl = [['How to use this sheet:'], ['Well rows are coloured like the physical 10X chip. Fill the Tube row with the pool/super-pool loaded per lane, then print.'], []];
     const chipDiagram = (title, kit, kitDoc, chipDesc, wells, count, perChip, namer) => {
       for (let c = 0; c < Math.ceil(count / perChip || 0); c++) {
         cl.push([title]); cl.push(['Loader', '']); cl.push(['Kit', kit, kitDoc]); cl.push(['Chip', chipDesc]);
-        const laneHdr = []; for (let i = 0; i < perChip; i++) laneHdr.push(i + 1); laneHdr.push('unused wells: 50% glycerol'); cl.push(laneHdr);
-        const tubeRow = []; for (let i = 0; i < perChip; i++) { const g = c * perChip + i; tubeRow.push(g < count ? namer(g) : ''); } cl.push(tubeRow);
-        wells.forEach((w) => cl.push([w[0], w[1]])); cl.push([]);
+        const laneRow = ['Lane']; for (let i = 0; i < perChip; i++) laneRow.push(i + 1); laneRow.push('unused: 50% glycerol'); cl.push(laneRow);
+        const tubeRow = ['Tube']; for (let i = 0; i < perChip; i++) { const g = c * perChip + i; tubeRow.push(g < count ? namer(g) : ''); } cl.push(tubeRow);
+        wells.forEach((w) => { const row = [w[0]]; for (let i = 0; i < perChip; i++) row.push(''); row.push(w[1]); cl.push(row); });
+        cl.push([]);
       }
     };
     chipDiagram("Unsort 5' CITEseq (5' HT v2)", "5' HT v2", 'CG000424 | Rev D', 'Next GEM Chip N + Chromium X Chip Holder (black)',
@@ -3023,10 +3025,10 @@
       [['3: Oil (40ul)', '40ul'], ['2: Gel beads (50ul)', '50ul'], ['1: Sample (MM + nuclei: 70ul)', '70ul'], ['NO FILL - GEM RECOVERY', 'DO NOT ADD']],
       lanes.asap, 8, (g) => 'A' + (Math.floor(g / 2) + 1) + '-' + ((g % 2) + 1));
     chipDiagram("Sort 5' scRNAseq w/ HTO (5' v3)", "5' v3", 'CG000734 | Rev A', "GEM-X 5' Chip + Chromium X/iX Chip Holder (black)",
-      [['3A: Oil (140ul)', '140ul'], ['2A: Sample (MM + cells) (140ul)', '140ul'], ['1: Gel beads (130ul)', '130ul'], ['2B: Sample (MM + cells) (140ul)', '140ul'], ['3B: Oil (140ul)', '140ul']],
+      [['NO FILL - GEM RECOVERY', 'DO NOT ADD'], ['2: Gel beads (60ul)', '60ul'], ['1: Sample (MM + cells) (60ul)', '60ul'], ['3: Oil (250ul)', '250ul']],
       lanes.sort, 8, (g) => 'S' + (g + 1));
     const wsCL = XLSX.utils.aoa_to_sheet(cl);
-    wsCL['!cols'] = [{ wch: 32 }].concat(Array.from({ length: 8 }, () => ({ wch: 11 })));
+    wsCL['!cols'] = [{ wch: 30 }].concat(Array.from({ length: 8 }, () => ({ wch: 7 })), [{ wch: 16 }]);
     XLSX.utils.book_append_sheet(wb, wsCL, '10X Chip Layout');
 
     // ---- Library indexes tab (labels + recommended indexes + kits) --------

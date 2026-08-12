@@ -709,29 +709,61 @@ function b64ToBytes(b64) {
 // Apply clean formatting to a converted Google Sheet: frozen bold header row,
 // auto-sized columns, and subtle alternating-row banding (best-effort).
 async function formatSpreadsheet(token, ssId) {
-  const metaR = await fetch('https://sheets.googleapis.com/v4/spreadsheets/' + ssId + '?fields=sheets(properties(sheetId,gridProperties(columnCount)))',
-    { headers: { Authorization: 'Bearer ' + token } });
-  const meta = await metaR.json();
+  const base = 'https://sheets.googleapis.com/v4/spreadsheets/' + ssId;
+  const hdrs = { Authorization: 'Bearer ' + token };
+  const meta = await (await fetch(base + '?fields=sheets(properties(sheetId,title,gridProperties(columnCount)))', { headers: hdrs })).json();
   if (!meta || !meta.sheets) return;
+  // fetch values so we can detect chip-well rows and note-first tabs
+  const ranges = meta.sheets.map((s) => "'" + String(s.properties.title).replace(/'/g, "''") + "'");
+  const vurl = base + '/values:batchGet?' + ranges.map((r) => 'ranges=' + encodeURIComponent(r)).join('&');
+  let valueRanges = [];
+  try { const vr = await (await fetch(vurl, { headers: hdrs })).json(); valueRanges = vr.valueRanges || []; } catch (e) { /* values optional */ }
+  const RGB = (r, g, b) => ({ red: r, green: g, blue: b });
+  const CHIP = { oil5: RGB(0.85, 0.27, 0.24), oilA: RGB(0.98, 0.67, 0.09), sample: RGB(0.70, 0.62, 0.76), beads: RGB(0.27, 0.71, 0.90), nofill: RGB(0.55, 0.58, 0.62) };
+  const wline = { style: 'SOLID', color: RGB(1, 1, 1) };
   const reqs = [];
-  for (const sh of meta.sheets) {
+  const bandTabs = [];
+  meta.sheets.forEach((sh, si) => {
     const sid = sh.properties.sheetId;
     const cols = (sh.properties.gridProperties && sh.properties.gridProperties.columnCount) || 12;
-    reqs.push({ updateSheetProperties: { properties: { sheetId: sid, gridProperties: { frozenRowCount: 1 } }, fields: 'gridProperties.frozenRowCount' } });
-    reqs.push({ repeatCell: { range: { sheetId: sid, startRowIndex: 0, endRowIndex: 1 },
-      cell: { userEnteredFormat: { backgroundColor: { red: 0.122, green: 0.227, blue: 0.372 }, verticalAlignment: 'MIDDLE', wrapStrategy: 'WRAP', textFormat: { bold: true, foregroundColor: { red: 1, green: 1, blue: 1 } } } },
-      fields: 'userEnteredFormat(backgroundColor,verticalAlignment,wrapStrategy,textFormat)' } });
+    const title = String(sh.properties.title);
+    const vals = (valueRanges[si] && valueRanges[si].values) || [];
     reqs.push({ autoResizeDimensions: { dimensions: { sheetId: sid, dimension: 'COLUMNS', startIndex: 0, endIndex: cols } } });
+    if (title === '10X Chip Layout') {
+      let mode = '5';
+      vals.forEach((row, r) => {
+        const a = String((row && row[0]) || '');
+        if (/asapseq/i.test(a)) mode = 'asap';
+        else if (/citeseq|scrnaseq/i.test(a)) mode = '5';
+        if (/citeseq|asapseq|scrnaseq/i.test(a)) {
+          reqs.push({ repeatCell: { range: { sheetId: sid, startRowIndex: r, endRowIndex: r + 1, startColumnIndex: 0, endColumnIndex: cols }, cell: { userEnteredFormat: { backgroundColor: RGB(0.20, 0.25, 0.32), textFormat: { bold: true, foregroundColor: RGB(1, 1, 1) } } }, fields: 'userEnteredFormat(backgroundColor,textFormat)' } });
+          return;
+        }
+        let col = null;
+        if (/oil/i.test(a)) col = (mode === 'asap') ? CHIP.oilA : CHIP.oil5;
+        else if (/sample/i.test(a)) col = CHIP.sample;
+        else if (/gel bead/i.test(a)) col = CHIP.beads;
+        else if (/no fill/i.test(a)) col = CHIP.nofill;
+        if (col) reqs.push({ repeatCell: { range: { sheetId: sid, startRowIndex: r, endRowIndex: r + 1, startColumnIndex: 1, endColumnIndex: 9 }, cell: { userEnteredFormat: { backgroundColor: col, borders: { top: wline, bottom: wline, left: wline, right: wline }, horizontalAlignment: 'CENTER' } }, fields: 'userEnteredFormat(backgroundColor,borders,horizontalAlignment)' } });
+      });
+      return; // no generic header/banding on the chip layout
+    }
+    // generic tabs: dark bold header on row 1 only if row 1 is a real header (not a "How to use" note)
+    const a1 = String((vals[0] && vals[0][0]) || '');
+    if (!/^how to use/i.test(a1)) {
+      reqs.push({ updateSheetProperties: { properties: { sheetId: sid, gridProperties: { frozenRowCount: 1 } }, fields: 'gridProperties.frozenRowCount' } });
+      reqs.push({ repeatCell: { range: { sheetId: sid, startRowIndex: 0, endRowIndex: 1 }, cell: { userEnteredFormat: { backgroundColor: RGB(0.122, 0.227, 0.372), verticalAlignment: 'MIDDLE', wrapStrategy: 'WRAP', textFormat: { bold: true, foregroundColor: RGB(1, 1, 1) } } }, fields: 'userEnteredFormat(backgroundColor,verticalAlignment,wrapStrategy,textFormat)' } });
+      bandTabs.push(sid);
+    }
+  });
+  await fetch(base + ':batchUpdate', { method: 'POST', headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' }, body: JSON.stringify({ requests: reqs }) });
+  // banding is best-effort + only on generic real-header tabs (fails harmlessly if a band already exists)
+  if (bandTabs.length) {
+    try {
+      const bands = bandTabs.map((sid) => ({ addBanding: { bandedRange: { range: { sheetId: sid, startRowIndex: 1 }, rowProperties: { firstBandColor: RGB(1, 1, 1), secondBandColor: RGB(0.949, 0.965, 0.980) } } } }));
+      await fetch(base + ':batchUpdate', { method: 'POST', headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' }, body: JSON.stringify({ requests: bands }) });
+    } catch (e) { /* banding optional */ }
   }
-  await fetch('https://sheets.googleapis.com/v4/spreadsheets/' + ssId + ':batchUpdate',
-    { method: 'POST', headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' }, body: JSON.stringify({ requests: reqs }) });
-  // banding is separate + best-effort (fails harmlessly if a band already exists on re-format)
-  try {
-    const bands = meta.sheets.map((sh) => ({ addBanding: { bandedRange: { range: { sheetId: sh.properties.sheetId, startRowIndex: 1 },
-      rowProperties: { firstBandColor: { red: 1, green: 1, blue: 1 }, secondBandColor: { red: 0.949, green: 0.965, blue: 0.980 } } } } }));
-    await fetch('https://sheets.googleapis.com/v4/spreadsheets/' + ssId + ':batchUpdate',
-      { method: 'POST', headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' }, body: JSON.stringify({ requests: bands }) });
-  } catch (e) { /* banding optional */ }
 }
 
 async function driveUpload(token, name, folderId, base64, sourceMime, targetMime) {
