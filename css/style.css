@@ -708,3 +708,14 @@ input.stepchk { margin-right: 8px; transform: scale(1.15); vertical-align: middl
 .u-applied { color: #2a7a34; font-size: 12px; font-weight: 600; white-space: nowrap; }
 .u-appliedcell { text-align: center; }
 .exp-badge.usage-ok { background: #e0f0e2; color: #2a6a34; }
+
+/* Experiment detail — collapsible task sections */
+.exp-sec { border: 1px solid #dbe2ea; border-radius: 6px; margin: 6px 0; background: #fbfcfe; }
+.exp-sec > summary { cursor: pointer; padding: 8px 12px; font-weight: 600; color: #1f3a5f; list-style: none; user-select: none; }
+.exp-sec > summary::-webkit-details-marker { display: none; }
+.exp-sec > summary::before { content: '\25B8'; display: inline-block; margin-right: 8px; transition: transform .15s; color: #8a97a8; }
+.exp-sec[open] > summary::before { transform: rotate(90deg); }
+.exp-sec > summary:hover { background: #f0f4f9; border-radius: 6px; }
+.exp-sec > p, .exp-sec > .sec-actions { padding: 0 12px; }
+.exp-sec > p.small { margin: 2px 0 8px; }
+.sec-actions { display: flex; flex-wrap: wrap; gap: 6px; padding-bottom: 12px; align-items: center; }

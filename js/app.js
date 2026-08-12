@@ -3466,25 +3466,41 @@
             + '<div class="muted small">' + (e.date ? esc(e.date) + ' \u00b7 ' : '') + info + '</div></div>'
             + '<button class="btn tiny" data-exp-act="manage" data-id="' + e.id + '">' + (expOpen ? 'Hide' : 'Manage') + '</button></div>';
           if (expOpen) {
+            const dsum = s ? (s.nSamples + ' samples \u00b7 ' + s.nPools + ' pools'
+              + ((s.arms && s.arms.length) ? ' \u00b7 ' + s.arms.map((a) => ({ unsort5: "unsort 5'", asap3: 'ASAP', sort5: "sort 5'", flex: 'Flex' }[a] || a)).join(', ') : '')
+              + ((s.modalities && s.modalities.length) ? ' \u00b7 ' + s.modalities.join(', ') : '')
+              + (s.knownTotal != null ? ' \u00b7 est. ' + fmtMoney(s.knownTotal) : '')) : 'Not built yet \u2014 open in the planner and build to populate the design.';
+            const usage = e.actualUsage;
+            const usageSum = (usage && usage.deducted && Object.keys(usage.deducted).some((k) => usage.deducted[k]))
+              ? ('Logged \u2014 ' + Object.keys(usage.deducted).filter((k) => usage.deducted[k]).length + ' kit box(es) deducted from inventory' + (usage.recordedAt ? ' (last ' + esc(usage.recordedAt.slice(0, 10)) + ')' : '') + '.')
+              : 'No materials logged yet.';
+            const schedSum = e.scheduledAt ? ('Scheduled to calendar \u00b7 ' + esc(String(e.scheduledAt).slice(0, 10)))
+              : (e.date ? ('Date set: ' + esc(e.date) + ' \u2014 not yet pushed to the calendar.') : 'No date set.');
+            const B = (act, label, extra) => '<button class="btn tiny' + (extra || '') + '" data-exp-act="' + act + '" data-id="' + e.id + '">' + label + '</button>';
+            const batchSel = (bpE && bpE.plan && bpE.plan.sizes) ? '<label class="inline-date">Batch <select data-exp-batch="' + e.id + '"><option value="">none</option>' + bpE.plan.sizes.map((sz, i) => '<option value="' + (i + 1) + '"' + (e.batchRef === i + 1 ? ' selected' : '') + '>batch ' + (i + 1) + ' (' + sz + ')</option>').join('') + '</select></label>' : '';
             c += '<div class="exp-detail"><div class="exp-detail-head">' + roleChipHTML(e, invState) + '</div>'
               + '<p class="muted small">planned by ' + esc(e.plannedBy || '\u2014') + '</p>'
-              + '<div class="exp-detail-actions">'
-              + '<label class="inline-date">Date <input type="date" data-exp-date="' + e.id + '" value="' + escAttr(e.date || '') + '" /></label>'
-              + (bpE && bpE.plan && bpE.plan.sizes ? '<label class="inline-date">Batch <select data-exp-batch="' + e.id + '"><option value="">none</option>' + bpE.plan.sizes.map((sz, i) => '<option value="' + (i + 1) + '"' + (e.batchRef === i + 1 ? ' selected' : '') + '>batch ' + (i + 1) + ' (' + sz + ')</option>').join('') + '</select></label>' : '')
-              + '<button class="btn tiny" data-exp-act="open" data-id="' + e.id + '">Open in planner</button>'
-              + '<button class="btn tiny" data-exp-act="reschedule" data-id="' + e.id + '">Reschedule</button>'
-              + '<button class="btn tiny" data-exp-act="inv" data-id="' + e.id + '">Record inventory</button>'
-              + '<button class="btn tiny danger" data-exp-act="del" data-id="' + e.id + '">Delete</button></div>'
-              + '<div class="exp-print"><span class="muted small">Print / save:</span> '
-              + '<button class="btn tiny" data-exp-act="packet" data-id="' + e.id + '">Experiment packet</button>'
-              + '<button class="btn tiny" data-exp-act="protocols" data-id="' + e.id + '">Protocols</button>'
-              + '<button class="btn tiny" data-exp-act="labels" data-id="' + e.id + '">Labels</button>'
-              + '<button class="btn tiny" data-exp-act="libRecord" data-id="' + e.id + '">Library record</button>'
-              + '<button class="btn tiny" data-exp-act="libSend" data-id="' + e.id + '">\u2192 Library sheet</button>'
-              + '<button class="btn tiny" data-exp-act="pooling" data-id="' + e.id + '">Pooling strategy</button>'
-              + '<button class="btn tiny" data-exp-act="recordUsage" data-id="' + e.id + '">Record usage</button>'
-              + '<button class="btn tiny" data-exp-act="reagents" data-id="' + e.id + '">Reagent checklist</button>'
-              + '</div></div>';
+              // 1) Experimental design
+              + '<details class="exp-sec" open><summary>Experimental design</summary>'
+              + '<p class="small">' + dsum + '</p>'
+              + '<div class="sec-actions">' + B('open', 'Open in planner') + B('pooling', 'Pooling strategy') + B('del', 'Delete experiment', ' danger') + '</div></details>'
+              // 2) Experiment sheets
+              + '<details class="exp-sec"><summary>Experiment sheets</summary>'
+              + '<p class="muted small">Generate the packet, protocols, labels, and summary workbook. ' + (e.driveFolder ? '<a href="https://drive.google.com/drive/folders/' + escAttr(e.driveFolder) + '" target="_blank" rel="noopener">Open this experiment\u2019s Drive folder</a>.' : 'A Drive copy is created when the experiment is built/exported.') + '</p>'
+              + '<div class="sec-actions">' + B('packet', 'Experiment summary (xlsx)') + B('protocols', 'Protocols') + B('labels', 'Tube labels') + B('libRecord', 'Library record (xlsx)') + B('reagents', 'Reagent checklist') + '</div></details>'
+              // 3) Scheduling
+              + '<details class="exp-sec"><summary>Scheduling</summary>'
+              + '<p class="small">' + schedSum + '</p>'
+              + '<div class="sec-actions"><label class="inline-date">Date <input type="date" data-exp-date="' + e.id + '" value="' + escAttr(e.date || '') + '" /></label>' + batchSel + B('reschedule', 'Reschedule to calendar') + '</div></details>'
+              // 4) Material usage
+              + '<details class="exp-sec"><summary>Material usage</summary>'
+              + '<p class="small">' + usageSum + '</p>'
+              + '<div class="sec-actions">' + B('recordUsage', 'Record / edit material usage') + B('inv', 'Record reagent lots') + '</div></details>'
+              // 5) cDNA & libraries
+              + '<details class="exp-sec"><summary>cDNA &amp; libraries</summary>'
+              + '<p class="muted small">Library and cDNA tubes generated for this experiment, and the shared sequencing record.</p>'
+              + '<div class="sec-actions">' + B('libRecord', 'Library record (xlsx)') + B('libSend', '\u2192 Add to Library sheet') + '</div></details>'
+              + '</div>';
           }
           c += '</div>';
         });
