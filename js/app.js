@@ -2771,6 +2771,114 @@
     XLSX.writeFile(wb, 'project_' + projectLabel(project) + '_batches_samples.xlsx');
   }
 
+  // ---- whole-project summary workbook ---------------------------------------
+  const projLanes = (s) => { const L = { unsort: 0, asap: 0, sort: 0 }; (s.laneBreakdown || []).forEach((l) => { if (l.chem === 'asap') L.asap += l.lanes || 0; else if (l.population === 'sorted') L.sort += l.lanes || 0; else if (l.population === 'unsorted' && l.laneChem === "5'") L.unsort += l.lanes || 0; }); return L; };
+  const projArmVdj = (s) => { const v = {}; (s.laneBreakdown || []).forEach((l) => { if (l.vdj) { if (l.population === 'sorted') v.sort = true; else if (l.chem !== 'asap') v.unsort = true; } }); return v; };
+
+  function buildProjectWb(project) {
+    const exps = withSnapshotExps(project);
+    const proj = Store.allProjects().find((p) => p.name === project);
+    const abbrev = (proj && proj.abbreviation) || '';
+    const wb = XLSX.utils.book_new();
+    const addSheet = (name, aoa, cols) => { const ws = XLSX.utils.aoa_to_sheet(aoa); if (cols) ws['!cols'] = cols; XLSX.utils.book_append_sheet(wb, ws, name); };
+
+    // 1) Overview
+    let totalSamples = 0, totalCost = 0; const dates = []; const statusCount = {}; const modSet = {};
+    exps.forEach((e) => { const s = e.snapshot; totalSamples += s.nSamples || 0; totalCost += s.knownTotal || 0; if (e.date) dates.push(e.date); statusCount[e.status || 'planned'] = (statusCount[e.status || 'planned'] || 0) + 1; (s.modalities || []).forEach((m) => { modSet[m] = 1; }); });
+    dates.sort();
+    const ov = [['PROJECT SUMMARY'], [],
+      ['Project', project], ['Abbreviation', abbrev], ['Owner', (proj && proj.owner) || ''], ['Generated', new Date().toISOString().slice(0, 10)], [],
+      ['# experiments', exps.length], ['Total samples (all experiments)', totalSamples], ['Estimated total cost ($)', Math.round(totalCost * 100) / 100],
+      ['Date range', dates.length ? (dates[0] + ' \u2192 ' + dates[dates.length - 1]) : '\u2014'],
+      ['Modalities used', Object.keys(modSet).join(', ') || '\u2014'], [], ['Experiments by status']];
+    Object.keys(statusCount).forEach((k) => ov.push([k, statusCount[k]]));
+    addSheet('Overview', ov, [{ wch: 32 }, { wch: 40 }]);
+
+    // 2) Experiments
+    const eHdr = ['Experiment_ID', 'Experiment', 'Date', 'Scheduled', 'Status', 'Samples', 'Pools', 'Arms', 'Modalities', 'Est. cost ($)', 'Unsort lanes', 'ASAP lanes', 'Sort lanes'];
+    const eRows = [eHdr];
+    exps.forEach((e) => { const s = e.snapshot; const L = projLanes(s); eRows.push([e.experimentId || '', e.name, e.date || '', e.scheduledAt ? String(e.scheduledAt).slice(0, 10) : '', e.status || '', s.nSamples, s.nPools, (s.arms || []).join(', '), (s.modalities || []).join(', '), Math.round((s.knownTotal || 0) * 100) / 100, L.unsort, L.asap, L.sort]); });
+    eRows.push([]); eRows.push(['TOTAL', '', '', '', '', totalSamples, '', '', '', Math.round(totalCost * 100) / 100]);
+    addSheet('Experiments', eRows, [{ wch: 14 }, { wch: 24 }, { wch: 12 }, { wch: 11 }, { wch: 10 }, { wch: 8 }, { wch: 7 }, { wch: 18 }, { wch: 24 }, { wch: 13 }, { wch: 11 }, { wch: 10 }, { wch: 9 }]);
+
+    // 3) Samples & pools (every sample across the project)
+    const customSet = [];
+    exps.forEach((e) => (e.snapshot.customCols || []).forEach((c) => { if (customSet.indexOf(c) === -1) customSet.push(c); }));
+    const sHdr = ['Experiment_ID', 'Experiment', 'Sample ID', 'Patient ID', 'Lineage', 'Genetic pool', 'HTO', 'Loading super-pool'].concat(customSet);
+    const sRows = [sHdr];
+    exps.forEach((e) => (e.snapshot.batches || []).forEach((b) => b.samples.forEach((sm) => {
+      sRows.push([e.experimentId || '', e.name, sm.sampleId, sm.patientId, sm.lineage, b.pool, b.hto, b.superPool].concat(customSet.map((c) => (sm.confounders && sm.confounders[c]) || '')));
+    })));
+    addSheet('Samples & pools', sRows, [{ wch: 14 }, { wch: 22 }, { wch: 20 }, { wch: 12 }, { wch: 12 }, { wch: 12 }, { wch: 8 }, { wch: 16 }].concat(customSet.map(() => ({ wch: 14 }))));
+
+    // 4) Cost by experiment
+    const cHdr = ['Experiment_ID', 'Experiment', 'Date', 'Status', 'Samples', 'Pools', 'Est. cost ($)'];
+    const cRows = [cHdr];
+    exps.forEach((e) => cRows.push([e.experimentId || '', e.name, e.date || '', e.status || '', e.snapshot.nSamples, e.snapshot.nPools, Math.round((e.snapshot.knownTotal || 0) * 100) / 100]));
+    cRows.push([]); cRows.push(['PROJECT TOTAL', '', '', '', '', '', Math.round(totalCost * 100) / 100]);
+    addSheet('Cost by experiment', cRows, [{ wch: 14 }, { wch: 24 }, { wch: 12 }, { wch: 10 }, { wch: 9 }, { wch: 7 }, { wch: 14 }]);
+
+    // 5) Reagent totals (merged across experiments)
+    const merged = {};
+    exps.forEach((e) => (e.snapshot.reagents || []).forEach((r) => {
+      const key = (r.itemId || r.reagent) + '|' + (r.units || '');
+      if (!merged[key]) merged[key] = { category: r.category, reagent: r.reagent, itemId: r.itemId || '', units: r.units || '', totalAmount: 0, cost: 0, priced: false, nExp: 0 };
+      const m = merged[key];
+      if (typeof r.totalAmount === 'number') m.totalAmount += r.totalAmount;
+      if (r.total != null) { m.cost += r.total; m.priced = true; }
+      m.nExp += 1;
+    }));
+    const rRows = [['Category', 'Reagent', 'Item ID', 'Total amount', 'Units', 'Est. cost ($)', '# experiments']];
+    Object.keys(merged).sort((a, b) => (merged[a].category + merged[a].reagent).localeCompare(merged[b].category + merged[b].reagent)).forEach((k) => {
+      const m = merged[k]; rRows.push([m.category, m.reagent, m.itemId, Math.round(m.totalAmount * 1000) / 1000, m.units, m.priced ? Math.round(m.cost * 100) / 100 : '', m.nExp]);
+    });
+    addSheet('Reagent totals', rRows, [{ wch: 24 }, { wch: 34 }, { wch: 10 }, { wch: 14 }, { wch: 14 }, { wch: 13 }, { wch: 13 }]);
+
+    // 6) Libraries & cDNA generated
+    const libRows = [['Experiment_ID', 'Experiment', 'Type', 'Modality', 'Count (lanes)']];
+    exps.forEach((e) => { const s = e.snapshot; const L = projLanes(s); const v = projArmVdj(s);
+      const add = (type, mod, n) => { if (n > 0) libRows.push([e.experimentId || '', e.name, type, mod, n]); };
+      if (L.unsort) { add("5' GEX library", 'Unsort', L.unsort); add('CSP/ADT library', 'Unsort', L.unsort); if (v.unsort) { add('TCR library', 'Unsort', L.unsort); add('BCR library', 'Unsort', L.unsort); } add('cDNA \u2013 pellet', 'Unsort', L.unsort); add('cDNA \u2013 supernatant', 'Unsort', L.unsort); }
+      if (L.asap) { add('ATAC library', 'ASAP', L.asap); add('ADT library', 'ASAP', L.asap); add('HTO library', 'ASAP', L.asap); add('cDNA \u2013 transposed', 'ASAP', L.asap); }
+      if (L.sort) { add("5' GEX library", 'Sort', L.sort); add('CSP/ADT library', 'Sort', L.sort); if (v.sort) add('TCR library', 'Sort', L.sort); add('cDNA \u2013 pellet', 'Sort', L.sort); add('cDNA \u2013 supernatant', 'Sort', L.sort); }
+    });
+    addSheet('Libraries & cDNA', libRows, [{ wch: 14 }, { wch: 24 }, { wch: 22 }, { wch: 10 }, { wch: 13 }]);
+
+    // 7) Scheduling
+    const schHdr = ['Experiment_ID', 'Experiment', 'Planned date', 'Scheduled to calendar', 'Batch', 'Status'];
+    const schRows = [schHdr];
+    exps.forEach((e) => schRows.push([e.experimentId || '', e.name, e.date || '', e.scheduledAt ? String(e.scheduledAt).slice(0, 10) : '\u2014', e.batchRef ? ('batch ' + e.batchRef) : '\u2014', e.status || '']));
+    addSheet('Scheduling', schRows, [{ wch: 14 }, { wch: 24 }, { wch: 13 }, { wch: 18 }, { wch: 10 }, { wch: 10 }]);
+
+    // 8) Materials used (actual kit boxes deducted)
+    const muRows = [['Experiment_ID', 'Experiment', 'Kit ID (box)', 'Rxns / indexes used', 'Recorded']];
+    exps.forEach((e) => { const u = e.actualUsage; if (u && u.deducted) Object.keys(u.deducted).forEach((kit) => {
+      const d = u.deducted[kit]; const amt = (typeof d === 'object' && d) ? ((d.rxns || 0) + (d.indexes || 0)) : d;
+      if (amt) muRows.push([e.experimentId || '', e.name, kit, amt, u.recordedAt ? u.recordedAt.slice(0, 10) : '']);
+    }); });
+    if (muRows.length === 1) muRows.push(['\u2014', 'No material usage logged yet', '', '', '']);
+    addSheet('Materials used', muRows, [{ wch: 14 }, { wch: 24 }, { wch: 16 }, { wch: 16 }, { wch: 12 }]);
+
+    return wb;
+  }
+
+  function downloadProjectSummary(project) {
+    if (!withSnapshotExps(project).length) { alert('No saved experiments with computed plans in this project yet.'); return; }
+    XLSX.writeFile(buildProjectWb(project), 'project_' + projectLabel(project) + '_summary.xlsx');
+  }
+
+  async function exportProjectSummaryToDrive(project) {
+    if (!withSnapshotExps(project).length) { alert('No saved experiments with computed plans in this project yet.'); return; }
+    try {
+      const path = await driveApi({ action: 'ensurePath', project: project });
+      if (!path || !path.projectId) { alert('Could not reach the project\u2019s Drive folder.'); return; }
+      const res = await driveApi({ action: 'upload', name: 'Project summary', folderId: path.projectId,
+        base64: wbBase64(buildProjectWb(project)), sourceMime: XLSX_MIME, targetMime: GSHEET_MIME });
+      if (res && res.id) { const pr = Store.allProjects().find((p) => p.name === project); if (pr) { pr.projectSummaryFileId = res.id; Store.saveProject(pr); } alert('Project summary saved to the project\u2019s Drive folder.'); renderManage(); }
+      else alert('Upload failed: ' + JSON.stringify(res));
+    } catch (e) { alert('Project summary export failed: ' + e); }
+  }
+
   // ---- per-experiment workbook (pooling + reagents + pricing + summary) ------
   // ---- Drive export ---------------------------------------------------------
   const XLSX_MIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
@@ -3583,7 +3691,10 @@
           c += '</div>';
         });
         c += '<div class="row-actions">'
-          + (isUnfiled ? '' : '<button class="btn ghost" data-proj-act="projReagents" data-proj="' + escAttr(pname) + '">Export project reagents + cost</button>'
+          + (isUnfiled ? '' : '<button class="btn primary" data-proj-act="projSummaryDrive" data-proj="' + escAttr(pname) + '">Project summary \u2192 Drive</button>'
+            + '<button class="btn ghost" data-proj-act="projSummaryDl" data-proj="' + escAttr(pname) + '">Download project summary</button>'
+            + (function () { const pr = Store.allProjects().find((x) => x.name === pname); return (pr && pr.projectSummaryFileId) ? '<a class="btn ghost" href="https://docs.google.com/spreadsheets/d/' + escAttr(pr.projectSummaryFileId) + '/edit" target="_blank" rel="noopener">Open summary in Drive</a>' : ''; })()
+            + '<button class="btn ghost" data-proj-act="projReagents" data-proj="' + escAttr(pname) + '">Export project reagents + cost</button>'
             + '<button class="btn ghost" data-proj-act="projBatches" data-proj="' + escAttr(pname) + '">Export batches + samples</button>'
             + '<button class="btn ghost danger" data-proj-act="delProj" data-proj="' + escAttr(pname) + '">Delete project</button>')
           + '</div></div>';
@@ -3604,6 +3715,8 @@
       const p = b.dataset.proj, act = b.dataset.projAct;
       if (act === 'toggle') { EXPANDED_PROJECTS[p] = !EXPANDED_PROJECTS[p]; if (!EXPANDED_PROJECTS[p] && CREATE_EXP_FOR === p) CREATE_EXP_FOR = null; renderManage(); }
       else if (act === 'createExp') { CREATE_EXP_FOR = p; EXPANDED_PROJECTS[p] = true; renderManage(); const f = $('#ceName'); if (f) f.focus(); }
+      else if (act === 'projSummaryDrive') exportProjectSummaryToDrive(p);
+      else if (act === 'projSummaryDl') downloadProjectSummary(p);
       else if (act === 'projReagents') projectReagentXlsx(p);
       else if (act === 'projBatches') projectBatchXlsx(p);
       else if (act === 'openBatch') { const t = $('.tab[data-tab="planproject"]'); if (t) t.click(); }
