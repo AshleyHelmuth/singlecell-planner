@@ -2938,6 +2938,7 @@
     const rowNo = () => cc2.length + 1;
     cc2.push(['How to use this sheet:']);
     cc2.push(['Fill the bolded DESIGN INPUTS below. On batch day, enter Live %, Live Cells/mL, and the dilution volume for each sample \u2014 pooling and aliquot volumes autofill. Sort input is whatever is left in each pool after the unsort/ASAP aliquots are removed.']);
+    cc2.push(['Yellow cells are for you to fill in; each sample\u2019s original-ID cell is colour-coded, and pool header/total rows are shaded.']);
     cc2.push([]);
     cc2.push(['# samples', s.nSamples, '', '# pools', poolKeys.length, '', '# samples / pool', spp]);
     cc2.push([]);

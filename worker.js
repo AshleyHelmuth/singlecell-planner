@@ -748,6 +748,30 @@ async function formatSpreadsheet(token, ssId) {
       });
       return; // no generic header/banding on the chip layout
     }
+    if (title === 'Cell count') {
+      const YEL = RGB(1, 0.949, 0.55), POOL = RGB(0.80, 0.88, 0.95), PAST = [RGB(0.79, 0.93, 0.98), RGB(0.85, 0.95, 0.82), RGB(1, 1, 0.73), RGB(0.96, 0.85, 0.85), RGB(0.90, 0.85, 0.93), RGB(0.99, 0.90, 0.76), RGB(0.83, 0.90, 0.85)];
+      const med = { style: 'SOLID_MEDIUM', color: RGB(0.25, 0.25, 0.25) };
+      const fill = (r, c0, c1, bg, extra) => reqs.push({ repeatCell: { range: { sheetId: sid, startRowIndex: r, endRowIndex: r + 1, startColumnIndex: c0, endColumnIndex: c1 }, cell: { userEnteredFormat: Object.assign({ backgroundColor: bg }, extra || {}) }, fields: 'userEnteredFormat(backgroundColor' + (extra && extra.borders ? ',borders' : '') + (extra && extra.textFormat ? ',textFormat' : '') + ')' } });
+      let entryCols = [], inData = false, sIdx = 0;
+      vals.forEach((row, r) => {
+        const a = String((row && row[0]) || '');
+        if (/cells pooled per sample|cells aliquoted from pool/i.test(a)) { fill(r, 1, 2, YEL, { borders: { top: med, bottom: med, left: med, right: med } }); return; }
+        if (a === '#') {                                    // column-header row of a pool block
+          entryCols = [];
+          (row || []).forEach((h, ci) => { if (/live %|live cells\/ml|vol\. dilute|pool volume/i.test(String(h))) entryCols.push(ci); });
+          fill(r, 0, cols, RGB(0.122, 0.227, 0.372), { textFormat: { bold: true, foregroundColor: RGB(1, 1, 1) } });
+          inData = true; return;
+        }
+        if (/pool .*total/i.test(a) || /pool .*total/i.test(String((row && row[4]) || ''))) { fill(r, 0, cols, POOL, { textFormat: { bold: true } }); inData = false; return; }
+        if (/^pool\s/i.test(a)) { fill(r, 0, cols, POOL, { textFormat: { bold: true } }); return; }
+        if (inData && row && row[2]) {                      // a sample data row (has a Sample ID in col C)
+          sIdx += 1;
+          fill(r, 1, 2, PAST[sIdx % PAST.length]);          // per-sample pastel on the original-ID cell
+          entryCols.forEach((ci) => fill(r, ci, ci + 1, YEL)); // yellow the fill-in / key-output columns
+        }
+      });
+      return;
+    }
     // generic tabs: dark bold header on row 1 only if row 1 is a real header (not a "How to use" note)
     const a1 = String((vals[0] && vals[0][0]) || '');
     if (!/^how to use/i.test(a1)) {
