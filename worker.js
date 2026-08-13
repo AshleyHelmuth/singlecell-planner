@@ -711,83 +711,357 @@ function b64ToBytes(b64) {
 async function formatSpreadsheet(token, ssId) {
   const base = 'https://sheets.googleapis.com/v4/spreadsheets/' + ssId;
   const hdrs = { Authorization: 'Bearer ' + token };
-  const meta = await (await fetch(base + '?fields=sheets(properties(sheetId,title,gridProperties(columnCount)))', { headers: hdrs })).json();
-  if (!meta || !meta.sheets) return;
-  // fetch values so we can detect chip-well rows and note-first tabs
+  const metaResp = await fetch(base + '?fields=sheets(properties(sheetId,title,gridProperties(columnCount,rowCount)))', { headers: hdrs });
+  const meta = await metaResp.json();
+  if (!metaResp.ok || !meta || !meta.sheets) return;
+
+  // Values are used only to identify the semantic rows/columns that need visual
+  // treatment. The data/formulas themselves are never edited here.
   const ranges = meta.sheets.map((s) => "'" + String(s.properties.title).replace(/'/g, "''") + "'");
   const vurl = base + '/values:batchGet?' + ranges.map((r) => 'ranges=' + encodeURIComponent(r)).join('&');
   let valueRanges = [];
-  try { const vr = await (await fetch(vurl, { headers: hdrs })).json(); valueRanges = vr.valueRanges || []; } catch (e) { /* values optional */ }
-  const RGB = (r, g, b) => ({ red: r, green: g, blue: b });
-  const CHIP = { oil5: RGB(0.85, 0.27, 0.24), oilA: RGB(0.98, 0.67, 0.09), sample: RGB(0.70, 0.62, 0.76), beads: RGB(0.27, 0.71, 0.90), nofill: RGB(0.55, 0.58, 0.62) };
-  const wline = { style: 'SOLID', color: RGB(1, 1, 1) };
+  try {
+    const vrResp = await fetch(vurl, { headers: hdrs });
+    const vr = await vrResp.json();
+    valueRanges = vr.valueRanges || [];
+  } catch (e) { /* formatting can proceed with metadata only */ }
+
+  const RGB = (r, g, b) => ({ red: r / 255, green: g / 255, blue: b / 255 });
+  const C = {
+    navy: RGB(31, 58, 95), ink: RGB(31, 43, 58), white: RGB(255, 255, 255),
+    black: RGB(0, 0, 0), gray: RGB(242, 242, 242), gray2: RGB(231, 230, 230),
+    line: RGB(183, 192, 204), yellowInput: RGB(255, 242, 204), pool: RGB(205, 233, 243),
+    blue: RGB(68, 114, 196), blueTint: RGB(205, 233, 243),
+    green: RGB(112, 173, 71), greenTint: RGB(226, 239, 217),
+    purple: RGB(112, 48, 160), purpleTint: RGB(221, 200, 255),
+    orange: RGB(237, 125, 49), orangeTint: RGB(251, 228, 213),
+    yellow: RGB(246, 176, 0), yellowTint: RGB(255, 242, 204),
+    pink: RGB(206, 70, 190), pinkTint: RGB(244, 215, 238),
+    chipOil5: RGB(255, 0, 0), chipOilA: RGB(251, 172, 24),
+    chipSample: RGB(178, 158, 193), chipBeads: RGB(68, 182, 229), chipNoFill: RGB(231, 230, 230)
+  };
+  const PASTELS = [RGB(202, 237, 251), RGB(218, 242, 208), RGB(255, 255, 185), RGB(243, 214, 214), RGB(230, 216, 238), RGB(252, 228, 194), RGB(212, 231, 218)];
+  const thin = { style: 'SOLID', color: C.line };
+  const darkThin = { style: 'SOLID', color: RGB(65, 65, 65) };
+  const darkMed = { style: 'SOLID_MEDIUM', color: C.black };
   const reqs = [];
   const bandTabs = [];
+
+  const fmt = (sid, r0, r1, c0, c1, userEnteredFormat) => {
+    if (r1 <= r0 || c1 <= c0) return;
+    // Update only the requested format properties. This lets layered styling (for
+    // example, borders + modality fill + number format) coexist without later
+    // format passes wiping out earlier visual structure or imported metadata.
+    const mask = [];
+    for (const [key, value] of Object.entries(userEnteredFormat || {})) {
+      if ((key === 'textFormat' || key === 'borders') && value && typeof value === 'object') {
+        for (const subKey of Object.keys(value)) mask.push(`userEnteredFormat.${key}.${subKey}`);
+      } else {
+        mask.push(`userEnteredFormat.${key}`);
+      }
+    }
+    if (!mask.length) return;
+    reqs.push({ repeatCell: {
+      range: { sheetId: sid, startRowIndex: r0, endRowIndex: r1, startColumnIndex: c0, endColumnIndex: c1 },
+      cell: { userEnteredFormat }, fields: mask.join(',')
+    } });
+  };
+  const colWidth = (sid, c0, c1, px) => reqs.push({ updateDimensionProperties: {
+    range: { sheetId: sid, dimension: 'COLUMNS', startIndex: c0, endIndex: c1 }, properties: { pixelSize: px }, fields: 'pixelSize'
+  } });
+  const rowHeight = (sid, r0, r1, px) => reqs.push({ updateDimensionProperties: {
+    range: { sheetId: sid, dimension: 'ROWS', startIndex: r0, endIndex: r1 }, properties: { pixelSize: px }, fields: 'pixelSize'
+  } });
+  const header = (sid, r, cols, bg) => fmt(sid, r, r + 1, 0, cols, {
+    backgroundColor: bg || C.navy, verticalAlignment: 'MIDDLE', wrapStrategy: 'WRAP',
+    textFormat: { bold: true, foregroundColor: C.white },
+    borders: { bottom: darkMed }
+  });
+  const softTitle = (sid, r, cols, bg, fg) => fmt(sid, r, r + 1, 0, cols, {
+    backgroundColor: bg, verticalAlignment: 'MIDDLE', wrapStrategy: 'WRAP',
+    textFormat: { bold: true, foregroundColor: fg || C.ink, fontSize: 12 },
+    borders: { bottom: { style: 'SOLID_MEDIUM', color: fg || C.ink } }
+  });
+  const tabFor = (title) => {
+    const t = title.toLowerCase();
+    if (t.includes('sort panel')) return C.purple;
+    if (t.includes('stim')) return C.pink;
+    if (t.includes('chip layout')) return C.orange;
+    if (t.includes('library tubes')) return C.green;
+    if (t.includes('cell count')) return C.blue;
+    if (t.includes('sample')) return C.blue;
+    if (t.includes('index')) return C.orange;
+    if (t.includes('reagent')) return C.green;
+    if (t.includes('pricing') || t.includes('cost')) return C.yellow;
+    return C.navy;
+  };
+  const setSheetProps = (sid, frozen, title) => reqs.push({ updateSheetProperties: {
+    properties: { sheetId: sid, gridProperties: { hideGridlines: true, frozenRowCount: frozen || 0 }, tabColorStyle: { rgbColor: tabFor(title) } },
+    fields: 'gridProperties.hideGridlines,gridProperties.frozenRowCount,tabColorStyle'
+  } });
+  const usedCols = (vals, fallback) => Math.max(1, Math.min(fallback || 40, vals.reduce((m, r) => Math.max(m, (r || []).length), 0) || fallback || 1));
+  const findRow = (vals, pred) => { for (let i = 0; i < vals.length; i++) if (pred(vals[i] || [], i)) return i; return -1; };
+
   meta.sheets.forEach((sh, si) => {
     const sid = sh.properties.sheetId;
-    const cols = (sh.properties.gridProperties && sh.properties.gridProperties.columnCount) || 12;
-    const title = String(sh.properties.title);
+    const title = String(sh.properties.title || '');
     const vals = (valueRanges[si] && valueRanges[si].values) || [];
-    reqs.push({ autoResizeDimensions: { dimensions: { sheetId: sid, dimension: 'COLUMNS', startIndex: 0, endIndex: cols } } });
+    const gridCols = (sh.properties.gridProperties && sh.properties.gridProperties.columnCount) || 12;
+    const cols = usedCols(vals, gridCols);
+    const rows = vals.length;
+    const t = title.toLowerCase();
+
+    // Purpose-built sheets are intentionally NOT auto-resized; empty cells are
+    // part of their visual meaning (especially the physical 10X chip grids).
     if (title === '10X Chip Layout') {
+      setSheetProps(sid, 0, title);
+      colWidth(sid, 0, 1, 235); colWidth(sid, 1, 9, 72); colWidth(sid, 9, 10, 145);
+      fmt(sid, 0, Math.max(rows, 1), 0, Math.min(cols, 10), { verticalAlignment: 'MIDDLE', wrapStrategy: 'WRAP' });
+      if (rows > 0) fmt(sid, 0, Math.min(rows, 2), 0, Math.min(cols, 10), { textFormat: { foregroundColor: RGB(70, 78, 88), italic: true }, wrapStrategy: 'WRAP' });
       let mode = '5';
       vals.forEach((row, r) => {
         const a = String((row && row[0]) || '');
         if (/asapseq/i.test(a)) mode = 'asap';
         else if (/citeseq|scrnaseq/i.test(a)) mode = '5';
         if (/citeseq|asapseq|scrnaseq/i.test(a)) {
-          reqs.push({ repeatCell: { range: { sheetId: sid, startRowIndex: r, endRowIndex: r + 1, startColumnIndex: 0, endColumnIndex: cols }, cell: { userEnteredFormat: { backgroundColor: RGB(0.20, 0.25, 0.32), textFormat: { bold: true, foregroundColor: RGB(1, 1, 1) } } }, fields: 'userEnteredFormat(backgroundColor,textFormat)' } });
-          return;
+          fmt(sid, r, r + 1, 0, Math.min(cols, 10), { backgroundColor: C.black, horizontalAlignment: 'CENTER', verticalAlignment: 'MIDDLE', textFormat: { bold: true, foregroundColor: C.white }, borders: { bottom: darkMed } });
+          rowHeight(sid, r, r + 1, 24); return;
         }
-        let col = null;
-        if (/oil/i.test(a)) col = (mode === 'asap') ? CHIP.oilA : CHIP.oil5;
-        else if (/sample/i.test(a)) col = CHIP.sample;
-        else if (/gel bead/i.test(a)) col = CHIP.beads;
-        else if (/no fill/i.test(a)) col = CHIP.nofill;
-        if (col) reqs.push({ repeatCell: { range: { sheetId: sid, startRowIndex: r, endRowIndex: r + 1, startColumnIndex: 1, endColumnIndex: 9 }, cell: { userEnteredFormat: { backgroundColor: col, borders: { top: wline, bottom: wline, left: wline, right: wline }, horizontalAlignment: 'CENTER' } }, fields: 'userEnteredFormat(backgroundColor,borders,horizontalAlignment)' } });
-      });
-      return; // no generic header/banding on the chip layout
-    }
-    if (title === 'Cell count') {
-      const YEL = RGB(1, 0.949, 0.55), POOL = RGB(0.80, 0.88, 0.95), PAST = [RGB(0.79, 0.93, 0.98), RGB(0.85, 0.95, 0.82), RGB(1, 1, 0.73), RGB(0.96, 0.85, 0.85), RGB(0.90, 0.85, 0.93), RGB(0.99, 0.90, 0.76), RGB(0.83, 0.90, 0.85)];
-      const med = { style: 'SOLID_MEDIUM', color: RGB(0.25, 0.25, 0.25) };
-      const fill = (r, c0, c1, bg, extra) => reqs.push({ repeatCell: { range: { sheetId: sid, startRowIndex: r, endRowIndex: r + 1, startColumnIndex: c0, endColumnIndex: c1 }, cell: { userEnteredFormat: Object.assign({ backgroundColor: bg }, extra || {}) }, fields: 'userEnteredFormat(backgroundColor' + (extra && extra.borders ? ',borders' : '') + (extra && extra.textFormat ? ',textFormat' : '') + ')' } });
-      let entryCols = [], inData = false, sIdx = 0;
-      vals.forEach((row, r) => {
-        const a = String((row && row[0]) || '');
-        if (/cells pooled per sample|cells aliquoted from pool/i.test(a)) { fill(r, 1, 2, YEL, { borders: { top: med, bottom: med, left: med, right: med } }); return; }
-        if (a === '#') {                                    // column-header row of a pool block
-          entryCols = [];
-          (row || []).forEach((h, ci) => { if (/live %|live cells\/ml|vol\. dilute|pool volume/i.test(String(h))) entryCols.push(ci); });
-          fill(r, 0, cols, RGB(0.122, 0.227, 0.372), { textFormat: { bold: true, foregroundColor: RGB(1, 1, 1) } });
-          inData = true; return;
+        if (/^(loader|kit|chip)$/i.test(a)) { fmt(sid, r, r + 1, 0, 1, { textFormat: { bold: true }, verticalAlignment: 'MIDDLE' }); return; }
+        if (/^lane$/i.test(a)) {
+          fmt(sid, r, r + 1, 1, Math.min(cols, 9), { horizontalAlignment: 'CENTER', textFormat: { bold: true }, borders: { bottom: darkThin } }); rowHeight(sid, r, r + 1, 24); return;
         }
-        if (/pool .*total/i.test(a) || /pool .*total/i.test(String((row && row[4]) || ''))) { fill(r, 0, cols, POOL, { textFormat: { bold: true } }); inData = false; return; }
-        if (/^pool\s/i.test(a)) { fill(r, 0, cols, POOL, { textFormat: { bold: true } }); return; }
-        if (inData && row && row[2]) {                      // a sample data row (has a Sample ID in col C)
-          sIdx += 1;
-          fill(r, 1, 2, PAST[sIdx % PAST.length]);          // per-sample pastel on the original-ID cell
-          entryCols.forEach((ci) => fill(r, ci, ci + 1, YEL)); // yellow the fill-in / key-output columns
+        if (/^tube$/i.test(a)) {
+          fmt(sid, r, r + 1, 0, Math.min(cols, 10), { backgroundColor: C.gray, verticalAlignment: 'MIDDLE', textFormat: { bold: true }, borders: { bottom: darkThin } });
+          fmt(sid, r, r + 1, 1, Math.min(cols, 9), { horizontalAlignment: 'CENTER', borders: { top: darkThin, bottom: darkThin, left: darkThin, right: darkThin } });
+          rowHeight(sid, r, r + 1, 28); return;
+        }
+        let bg = null;
+        if (/oil/i.test(a)) bg = (mode === 'asap') ? C.chipOilA : C.chipOil5;
+        else if (/sample/i.test(a)) bg = C.chipSample;
+        else if (/gel bead/i.test(a)) bg = C.chipBeads;
+        else if (/no fill/i.test(a)) bg = C.chipNoFill;
+        if (bg) {
+          fmt(sid, r, r + 1, 0, 1, { textFormat: { bold: /\([^)]*ul\)|do not add/i.test(a) }, verticalAlignment: 'MIDDLE', wrapStrategy: 'WRAP' });
+          fmt(sid, r, r + 1, 1, Math.min(cols, 9), { backgroundColor: bg, horizontalAlignment: 'CENTER', verticalAlignment: 'MIDDLE', borders: { top: darkMed, bottom: darkMed, left: darkMed, right: darkMed } });
+          rowHeight(sid, r, r + 1, /no fill/i.test(a) ? 50 : 38);
         }
       });
       return;
     }
-    // generic tabs: dark bold header on row 1 only if row 1 is a real header (not a "How to use" note)
+
+    if (title === '10X Library Tubes') {
+      setSheetProps(sid, 0, title);
+      colWidth(sid, 0, 1, 175); colWidth(sid, 1, 9, 62); if (cols > 9) colWidth(sid, 9, 10, 340);
+      fmt(sid, 0, Math.max(rows, 1), 0, cols, { verticalAlignment: 'MIDDLE', wrapStrategy: 'WRAP' });
+      vals.forEach((row, r) => {
+        const a = String((row && row[0]) || '');
+        if (/^10x chip output tube strips/i.test(a) || /^cdna tube strips/i.test(a)) {
+          fmt(sid, r, r + 1, 0, cols, { textFormat: { bold: true, fontSize: 11 }, verticalAlignment: 'MIDDLE' }); rowHeight(sid, r, r + 1, 24); return;
+        }
+        if (/^indicate how/i.test(a)) { fmt(sid, r, r + 1, 0, cols, { textFormat: { italic: true, foregroundColor: RGB(80, 88, 98) } }); return; }
+        if (/^modality source$/i.test(a)) {
+          fmt(sid, r, r + 1, 0, cols, { backgroundColor: C.gray, textFormat: { bold: true }, horizontalAlignment: 'CENTER', borders: { bottom: darkThin } }); return;
+        }
+        let bg = null;
+        if (/^unsort/i.test(a)) bg = C.greenTint;
+        else if (/^asap/i.test(a)) bg = C.orangeTint;
+        else if (/^sort/i.test(a)) bg = C.purpleTint;
+        if (bg) {
+          fmt(sid, r, r + 1, 1, Math.min(cols, 9), { backgroundColor: bg, horizontalAlignment: 'CENTER', borders: { top: darkThin, bottom: darkThin, left: darkThin, right: darkThin } });
+          fmt(sid, r, r + 1, 0, 1, { verticalAlignment: 'MIDDLE' });
+        }
+      });
+      return;
+    }
+
+    if (title === 'Cell count') {
+      setSheetProps(sid, 0, title);
+      const widths = [44, 165, 165, 72, 70, 72, 105, 105, 110, 100, 105, 105, 110, 105, 110, 125];
+      widths.slice(0, cols).forEach((w, i) => colWidth(sid, i, i + 1, w));
+      fmt(sid, 0, Math.max(rows, 1), 0, cols, { verticalAlignment: 'MIDDLE', wrapStrategy: 'WRAP' });
+      if (rows) fmt(sid, 0, Math.min(rows, 3), 0, cols, { textFormat: { foregroundColor: RGB(75, 83, 93), italic: true }, wrapStrategy: 'WRAP' });
+      let sampleIdx = 0, entryCols = [], inData = false;
+      vals.forEach((row, r) => {
+        const a = String((row && row[0]) || '');
+        if (/^design inputs/i.test(a)) { header(sid, r, cols, C.navy); return; }
+        if (/cells pooled per sample|cells aliquoted from pool/i.test(a)) {
+          fmt(sid, r, r + 1, 0, 1, { textFormat: { bold: true } });
+          fmt(sid, r, r + 1, 1, 2, { backgroundColor: C.yellowInput, horizontalAlignment: 'CENTER', textFormat: { bold: true }, borders: { top: darkMed, bottom: darkMed, left: darkMed, right: darkMed } });
+          return;
+        }
+        if (/^pool\s/i.test(a) && !/total/i.test(a)) {
+          softTitle(sid, r, cols, C.blueTint, C.blue); return;
+        }
+        if (a === '#') {
+          entryCols = [];
+          (row || []).forEach((h, ci) => { if (/live %|live cells\/ml|vol\. dilute/i.test(String(h))) entryCols.push(ci); });
+          header(sid, r, cols, C.navy); inData = true; rowHeight(sid, r, r + 1, 42); return;
+        }
+        const totalish = /pool .*total/i.test(a) || /pool .*total/i.test(String((row && row[4]) || ''));
+        if (totalish) { fmt(sid, r, r + 1, 0, cols, { backgroundColor: C.blueTint, textFormat: { bold: true }, borders: { top: darkMed, bottom: darkMed } }); inData = false; return; }
+        if (inData && row && row[2]) {
+          sampleIdx += 1;
+          fmt(sid, r, r + 1, 0, cols, { borders: { top: thin, bottom: thin } });
+          fmt(sid, r, r + 1, 1, 2, { backgroundColor: PASTELS[(sampleIdx - 1) % PASTELS.length] });
+          entryCols.forEach((ci) => fmt(sid, r, r + 1, ci, ci + 1, { backgroundColor: C.yellowInput, horizontalAlignment: 'CENTER', borders: { top: thin, bottom: thin, left: thin, right: thin } }));
+        }
+      });
+      return;
+    }
+
+    if (title === 'Samples') {
+      const h = findRow(vals, (row) => String(row[0] || '').toLowerCase() === 'sample #');
+      setSheetProps(sid, h >= 0 ? h + 1 : 0, title);
+      const widths = [64, 185, 92, 76, 82, 70, 70, 78, 160, 82, 110, 105, 105, 74, 92];
+      widths.slice(0, cols).forEach((w, i) => colWidth(sid, i, i + 1, w));
+      if (rows) fmt(sid, 0, Math.min(rows, 2), 0, cols, { textFormat: { foregroundColor: RGB(75, 83, 93), italic: true }, wrapStrategy: 'WRAP' });
+      if (h >= 0) {
+        header(sid, h, cols, C.navy); rowHeight(sid, h, h + 1, 42);
+        for (let r = h + 1; r < rows; r++) {
+          if (!(vals[r] || []).some((v) => String(v || '').trim())) continue;
+          fmt(sid, r, r + 1, 0, cols, { borders: { bottom: thin }, verticalAlignment: 'MIDDLE', wrapStrategy: 'WRAP' });
+          // Storage/sample-metadata fields are the hand-entry area in this sheet.
+          if (cols > 3) fmt(sid, r, r + 1, 3, Math.min(cols, 14), { backgroundColor: C.yellowInput });
+          if (cols > 2) fmt(sid, r, r + 1, 2, 3, { backgroundColor: C.blueTint, horizontalAlignment: 'CENTER' });
+        }
+      }
+      return;
+    }
+
+    if (title === 'Sort panel') {
+      setSheetProps(sid, 0, title);
+      colWidth(sid, 0, 1, 115); if (cols > 1) colWidth(sid, 1, Math.min(cols, 6), 125); if (cols > 5) colWidth(sid, 5, cols, 210);
+      if (rows) softTitle(sid, 0, cols, C.purpleTint, C.purple);
+      if (rows > 1) fmt(sid, 1, Math.min(rows, 2), 0, cols, { textFormat: { italic: true, foregroundColor: RGB(75, 83, 93) }, wrapStrategy: 'WRAP' });
+      const h = findRow(vals, (row) => String(row[0] || '').toLowerCase() === 'marker');
+      if (h >= 0) {
+        header(sid, h, cols, C.black); rowHeight(sid, h, h + 1, 34);
+        if (rows > h + 1) fmt(sid, h + 1, rows, 0, cols, { backgroundColor: C.yellowInput, borders: { bottom: thin }, wrapStrategy: 'WRAP' });
+      }
+      return;
+    }
+
+    if (title === 'Stim plan') {
+      setSheetProps(sid, 0, title);
+      const widths = [130, 145, 115, 95, 160, 220]; widths.slice(0, cols).forEach((w, i) => colWidth(sid, i, i + 1, w));
+      if (rows) softTitle(sid, 0, cols, C.pinkTint, C.pink);
+      if (rows > 1) fmt(sid, 1, Math.min(rows, 2), 0, cols, { textFormat: { italic: true, foregroundColor: RGB(75, 83, 93) }, wrapStrategy: 'WRAP' });
+      const h = findRow(vals, (row) => /condition/i.test(String(row[0] || '')) && /stimulant/i.test(String(row[1] || '')));
+      if (h >= 0) { header(sid, h, cols, C.black); if (rows > h + 1) fmt(sid, h + 1, rows, 0, cols, { backgroundColor: C.yellowInput, borders: { bottom: thin }, wrapStrategy: 'WRAP' }); }
+      return;
+    }
+
+    if (title === 'Library indexes') {
+      const h = findRow(vals, (row) => /tube label/i.test(String(row[0] || '')) && /modality/i.test(String(row[1] || '')));
+      setSheetProps(sid, h >= 0 ? h + 1 : 0, title);
+      const widths = [100, 105, 110, 190, 105, 90, 150, 220]; widths.slice(0, cols).forEach((w, i) => colWidth(sid, i, i + 1, w));
+      if (rows) fmt(sid, 0, Math.min(rows, 1), 0, cols, { textFormat: { italic: true, foregroundColor: RGB(75, 83, 93) }, wrapStrategy: 'WRAP' });
+      if (h >= 0) header(sid, h, cols, C.navy);
+      vals.forEach((row, r) => {
+        if (r <= h) return;
+        const a = String((row && row[0]) || ''), mod = String((row && row[1]) || '');
+        if (/^kits to use/i.test(a)) { softTitle(sid, r, cols, C.orangeTint, C.orange); return; }
+        if (/^index type \(kit\)$/i.test(a)) { header(sid, r, Math.min(cols, 7), C.black); return; }
+        let bg = null;
+        if (/unsort/i.test(mod)) bg = C.greenTint; else if (/asap/i.test(mod)) bg = C.orangeTint; else if (/sort/i.test(mod)) bg = C.purpleTint;
+        if (bg) fmt(sid, r, r + 1, 0, Math.min(cols, 3), { backgroundColor: bg, borders: { bottom: thin } });
+        // Open fields intended for recording sequence/changes remain visually obvious.
+        if (h >= 0 && r > h && row && row.length) {
+          if (cols > 6) fmt(sid, r, r + 1, 6, Math.min(cols, 8), { backgroundColor: C.yellowInput });
+        }
+      });
+      return;
+    }
+
+    if (title === 'Summary') {
+      setSheetProps(sid, 0, title); colWidth(sid, 0, 1, 175); if (cols > 1) colWidth(sid, 1, 2, 520);
+      for (let r = 0; r < rows; r++) {
+        const a = String((vals[r] && vals[r][0]) || '').trim();
+        if (!a) continue;
+        const b = String((vals[r] && vals[r][1]) || '').trim();
+        if (!b && /^notes$/i.test(a)) { softTitle(sid, r, Math.min(cols, 2), C.blueTint, C.blue); continue; }
+        fmt(sid, r, r + 1, 0, 1, { backgroundColor: C.gray, textFormat: { bold: true }, borders: { bottom: thin }, wrapStrategy: 'WRAP' });
+        if (cols > 1) fmt(sid, r, r + 1, 1, 2, { borders: { bottom: thin }, wrapStrategy: 'WRAP' });
+      }
+      return;
+    }
+
+    // Standard tables: determine the real header row, format it strongly, then
+    // use subtle banding. Note-first sheets keep their explanatory rows above it.
+    let h = 0;
     const a1 = String((vals[0] && vals[0][0]) || '');
-    if (!/^how to use/i.test(a1)) {
-      reqs.push({ updateSheetProperties: { properties: { sheetId: sid, gridProperties: { frozenRowCount: 1 } }, fields: 'gridProperties.frozenRowCount' } });
-      reqs.push({ repeatCell: { range: { sheetId: sid, startRowIndex: 0, endRowIndex: 1 }, cell: { userEnteredFormat: { backgroundColor: RGB(0.122, 0.227, 0.372), verticalAlignment: 'MIDDLE', wrapStrategy: 'WRAP', textFormat: { bold: true, foregroundColor: RGB(1, 1, 1) } } }, fields: 'userEnteredFormat(backgroundColor,verticalAlignment,wrapStrategy,textFormat)' } });
-      bandTabs.push(sid);
+    if (/^how to use/i.test(a1)) {
+      const candidate = findRow(vals.slice(1, 9), (row) => row.filter((v) => String(v || '').trim()).length >= 3);
+      h = candidate >= 0 ? candidate + 1 : 0;
+      if (rows) fmt(sid, 0, Math.min(rows, h || 1), 0, cols, { textFormat: { italic: true, foregroundColor: RGB(75, 83, 93) }, wrapStrategy: 'WRAP' });
+    }
+    setSheetProps(sid, h + 1, title);
+    reqs.push({ autoResizeDimensions: { dimensions: { sheetId: sid, dimension: 'COLUMNS', startIndex: 0, endIndex: cols } } });
+    header(sid, h, cols, C.navy);
+
+    // Sheet-specific semantic accents for otherwise-standard tables.
+    if (title === 'Pooling') {
+      const poolCol = (vals[h] || []).findIndex((v) => /genetic pool/i.test(String(v)));
+      for (let r = h + 1; r < rows; r++) {
+        const pv = poolCol >= 0 ? String((vals[r] || [])[poolCol] || '') : '';
+        const m = pv.match(/\d+/); if (!m) continue;
+        fmt(sid, r, r + 1, 0, cols, { backgroundColor: PASTELS[(parseInt(m[0], 10) - 1) % PASTELS.length], borders: { bottom: thin } });
+      }
+    } else if (title === 'Pricing') {
+      const totalR = findRow(vals, (row) => String((row && row[5]) || '').toUpperCase() === 'TOTAL');
+      if (cols > 5) fmt(sid, h + 1, rows, 5, Math.min(cols, 7), { numberFormat: { type: 'CURRENCY', pattern: '$#,##0.00' }, horizontalAlignment: 'RIGHT' });
+      if (totalR >= 0) fmt(sid, totalR, totalR + 1, 0, cols, { backgroundColor: C.greenTint, textFormat: { bold: true }, borders: { top: darkMed, bottom: darkMed } });
+      bandTabs.push({ sid, start: h + 1, cols });
+    } else if (title === 'Reagents') {
+      if (cols > 7) fmt(sid, h + 1, rows, 7, 8, { numberFormat: { type: 'CURRENCY', pattern: '$#,##0.00' }, horizontalAlignment: 'RIGHT' });
+      bandTabs.push({ sid, start: h + 1, cols });
+    } else {
+      bandTabs.push({ sid, start: h + 1, cols });
     }
   });
-  await fetch(base + ':batchUpdate', { method: 'POST', headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' }, body: JSON.stringify({ requests: reqs }) });
-  // banding is best-effort + only on generic real-header tabs (fails harmlessly if a band already exists)
-  if (bandTabs.length) {
-    try {
-      const bands = bandTabs.map((sid) => ({ addBanding: { bandedRange: { range: { sheetId: sid, startRowIndex: 1 }, rowProperties: { firstBandColor: RGB(1, 1, 1), secondBandColor: RGB(0.949, 0.965, 0.980) } } } }));
-      await fetch(base + ':batchUpdate', { method: 'POST', headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' }, body: JSON.stringify({ requests: bands }) });
-    } catch (e) { /* banding optional */ }
+
+  // Keep request payloads comfortably below API limits. Formatting is cosmetic;
+  // if one optional chunk fails, later chunks still get a chance to apply.
+  for (let i = 0; i < reqs.length; i += 300) {
+    const resp = await fetch(base + ':batchUpdate', {
+      method: 'POST', headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ requests: reqs.slice(i, i + 300) })
+    });
+    if (!resp.ok) {
+      const err = await resp.text();
+      throw new Error('sheet formatting failed: ' + err);
+    }
   }
+
+  // Alternating rows are deliberately light so modality/input colors stay primary.
+  for (const b of bandTabs) {
+    try {
+      await fetch(base + ':batchUpdate', {
+        method: 'POST', headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ requests: [{ addBanding: { bandedRange: {
+          range: { sheetId: b.sid, startRowIndex: b.start, startColumnIndex: 0, endColumnIndex: b.cols },
+          rowProperties: { firstBandColor: C.white, secondBandColor: RGB(248, 250, 252) }
+        } } }] })
+      });
+    } catch (e) { /* optional */ }
+  }
+}
+
+// Final page-level polish for Google Docs created from the protocol HTML. This
+// deliberately touches document style only; it never edits text or numeric content.
+async function formatDocument(token, docId) {
+  const base = 'https://docs.googleapis.com/v1/documents/' + docId;
+  const headers = { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' };
+  const requests = [{ updateDocumentStyle: {
+    documentStyle: {
+      marginTop: { magnitude: 40, unit: 'PT' }, marginBottom: { magnitude: 40, unit: 'PT' },
+      marginLeft: { magnitude: 47, unit: 'PT' }, marginRight: { magnitude: 47, unit: 'PT' }
+    },
+    fields: 'marginTop,marginBottom,marginLeft,marginRight'
+  } }];
+  const r = await fetch(base + ':batchUpdate', { method: 'POST', headers, body: JSON.stringify({ requests }) });
+  if (!r.ok) throw new Error('doc formatting failed: ' + (await r.text()));
 }
 
 async function driveUpload(token, name, folderId, base64, sourceMime, targetMime) {
@@ -855,7 +1129,8 @@ async function handleDrivePost(request, env) {
     if (body.action === 'upload') {
       if (!body.name || !body.folderId || !body.base64 || !body.sourceMime) return json({ error: 'missing_fields' }, 400);
       const d = await driveUpload(token, body.name, body.folderId, body.base64, body.sourceMime, body.targetMime || null);
-      if (d && d.id && /spreadsheet/i.test(body.targetMime || '')) { try { await formatSpreadsheet(token, d.id); } catch (e) { /* formatting best-effort */ } }
+      if (d && d.id && /spreadsheet/i.test(body.targetMime || '')) { try { await formatSpreadsheet(token, d.id); } catch (e) { console.warn('[drive] spreadsheet formatting', e); } }
+      if (d && d.id && /document/i.test(body.targetMime || '')) { try { await formatDocument(token, d.id); } catch (e) { console.warn('[drive] document formatting', e); } }
       return json({ ok: true, id: d.id, name: d.name });
     }
     if (body.action === 'trash') {

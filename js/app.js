@@ -1677,7 +1677,7 @@
     function modlistPush(arr, v) { arr.push(v); }
 
     const lanesByArm = plan.lanesByArm || {};
-    const sec = (title, bodyHtml) => bodyHtml ? `<h1 style="page-break-before:always">${esc(title)}</h1>${bodyHtml}` : '';
+    const sec = (title, bodyHtml, color) => bodyHtml ? `<div class="sop-section sop-${color || 'blue'}" style="page-break-before:always"><div class="sop-tab">&nbsp;</div><h1>${esc(title)}</h1>${bodyHtml}</div>` : '';
 
     const designTable = `<table><tbody>
       <tr><th>Date (batch day)</th><td>${esc(dateStr)}</td></tr>
@@ -1691,31 +1691,41 @@
 
     // arm-gated batch-day sections, reusing the on-page generators
     let body = '';
-    body += sec('A. Experimental design', designTable);
-    body += sec('Preparation checklist — T−3 weeks → batch day', prepChecklists(plan));
-    body += sec('Preparation — media & buffers (1–3 days before)', prepProtocol(plan));
-    body += sec('B1. PBMC thaw & count', thawProtocol(plan));
-    body += sec('B2. PBMC pool & split', poolProtocol(plan));
-    if (plan.arms.includes('unsort5')) body += sec("B3. Unsort 5' CITE-seq staining", citeStainProtocol(plan));
-    if (plan.arms.includes('asap3')) body += sec('B4. ASAP-seq staining & protocol', asapProtocol(plan));
-    if (plan.arms.includes('sort5')) body += sec("B5. Sort 5' staining", sortStainProtocol(plan));
-    if (plan.includeBulk) body += sec('B6. Bulk RNA-seq Trizol isolation', bulkProtocol(plan));
-    if (plan.modalities.includes('In vitro stimulation')) body += sec('B7. In vitro stimulation', stimProtocol(plan));
-    body += sec('B8. 10X Chromium GEM chip loading', gemLoadProtocol(plan));
+    body += sec('A. Experimental design', designTable, 'blue');
+    body += sec('Preparation checklist — T−3 weeks → batch day', prepChecklists(plan), 'blue');
+    body += sec('Preparation — media & buffers (1–3 days before)', prepProtocol(plan), 'blue');
+    body += sec('B1. PBMC thaw & count', thawProtocol(plan), 'blue');
+    body += sec('B2. PBMC pool & split', poolProtocol(plan), 'blue');
+    if (plan.arms.includes('unsort5')) body += sec("B3. Unsort 5' CITE-seq staining", citeStainProtocol(plan), 'green');
+    if (plan.arms.includes('asap3')) body += sec('B4. ASAP-seq staining & protocol', asapProtocol(plan), 'orange');
+    if (plan.arms.includes('sort5')) body += sec("B5. Sort 5' staining", sortStainProtocol(plan), 'purple');
+    if (plan.includeBulk) body += sec('B6. Bulk RNA-seq Trizol isolation', bulkProtocol(plan), 'yellow');
+    if (plan.modalities.includes('In vitro stimulation')) body += sec('B7. In vitro stimulation', stimProtocol(plan), 'pink');
+    body += sec('B8. 10X Chromium GEM chip loading', gemLoadProtocol(plan), 'blue');
     body = stepCheckboxes(body, true);
 
     const style = `<style>
       body{font-family:Calibri,Arial,sans-serif;font-size:11pt;color:#1a1a1a;line-height:1.35;}
-      h1{font-size:16pt;color:#1f3a5f;border-bottom:2px solid #1f3a5f;padding-bottom:3px;margin-top:18pt;}
+      .sop-section{page-break-before:always;}
+      .sop-tab{height:8pt;line-height:8pt;font-size:1pt;margin:0 0 4pt 0;}
+      .sop-section h1{font-size:16pt;color:#1f2b3a;border:0;padding:6pt 8pt;margin:0 0 10pt 0;}
+      .sop-blue .sop-tab{background:#4472C4}.sop-blue h1{background:#CDE9F3;border-bottom:2pt solid #4472C4}
+      .sop-green .sop-tab{background:#70AD47}.sop-green h1{background:#E2EFD9;border-bottom:2pt solid #70AD47}
+      .sop-purple .sop-tab{background:#7030A0}.sop-purple h1{background:#DDC8FF;border-bottom:2pt solid #7030A0}
+      .sop-orange .sop-tab{background:#ED7D31}.sop-orange h1{background:#FBE4D5;border-bottom:2pt solid #ED7D31}
+      .sop-yellow .sop-tab{background:#F6B000}.sop-yellow h1{background:#FFF2CC;border-bottom:2pt solid #F6B000}
+      .sop-pink .sop-tab{background:#CE46BE}.sop-pink h1{background:#F4D7EE;border-bottom:2pt solid #CE46BE}
       h2,h3,h4,h5{color:#2f5c8f;margin:10pt 0 4pt;}
-      table{border-collapse:collapse;width:100%;margin:6pt 0;}
-      th,td{border:1px solid #999;padding:4px 7px;text-align:left;vertical-align:top;font-size:10pt;}
-      th{background:#eef2f7;}
+      table{border-collapse:collapse;width:100%;margin:7pt 0 10pt;}
+      th,td{border:1px solid #B7C0CC;padding:5px 7px;text-align:left;vertical-align:top;font-size:10pt;}
+      th{background:#F2F2F2;font-weight:bold;}
       .num{text-align:right;}
-      ol,ul{margin:4pt 0 8pt 18pt;} li{margin:2pt 0;}
+      ol,ul{margin:4pt 0 8pt 18pt;} li{margin:3pt 0;}
       ol.chk,ul.chk{list-style:none;margin-left:2pt;padding-left:2pt;}
       td{height:18px;}
-      .recipe-box{border:1px solid #cbd5e2;border-radius:4px;padding:6px 10px;margin:6pt 0;background:#fafcff;}
+      .recipe-box{border:1px solid #D9E2F3;border-left:4px solid #4472C4;padding:7px 10px;margin:8pt 0;background:#FAFCFF;}
+      .sop-tip{background:#FFF7E6;border:1px solid #F3D891;border-left:4px solid #EDB000;padding:8px 10px;margin:9pt 0;color:#5F4A18;}
+      .pp-meta{background:#F2F2F2;border:1px solid #D9DEE5;padding:5px 7px;}
       .who,.muted,.pp-source,.pp-meta{color:#5a6570;font-size:9pt;}
       p{margin:4pt 0;}
     </style>`;
@@ -1829,13 +1839,13 @@
       ST6: gemLoadProtocol(plan)
     };
 
-    const checklistPage = `<article class="protocol-page">
+    const checklistPage = `<article class="protocol-page pp-blue">
         <header class="pp-head"><span class="pp-no">Prep</span><h2>Preparation checklist &mdash; T&minus;3 weeks &rarr; batch day</h2></header>
         <p class="pp-meta"><strong>Source:</strong> Tsang SOP &ldquo;Preparation / Pre-batch checklist&rdquo;</p>
         ${prepChecklists(plan)}
       </article>`;
 
-    const prepPage = `<article class="protocol-page">
+    const prepPage = `<article class="protocol-page pp-blue">
         <header class="pp-head"><span class="pp-no">Protocol 0</span><h2>Pre-experiment preparation &mdash; media &amp; buffers</h2></header>
         <p class="pp-meta"><strong>When:</strong> 1&ndash;3 days before &middot; <strong>Source:</strong> MADI02 batch protocol + CITE-seq batch protocol</p>
         ${prepProtocol(plan)}
@@ -1859,7 +1869,7 @@
     $('#protocolsContent').innerHTML = `
       <div class="section-head"><h2>Protocol packet</h2><div><button class="btn ghost" id="dlWordSop">Download Word SOP</button> <button class="btn primary" onclick="window.print()">Print packet</button></div></div>
       <p class="muted">Workflow summary first, then one page per module. “Download Word SOP” gives a Word document with only the sections for this experiment’s arms, all numbers filled in. “Print packet” → Save as PDF for a printable version.</p>
-      <article class="protocol-page cover">
+      <article class="protocol-page cover pp-slate">
         <header class="pp-head"><span class="pp-no">Overview</span><h2>Experiment workflow</h2></header>
         <div class="flow-holder">${Workflow.renderSampleFlow(plan)}</div>
         ${Workflow.renderWeekFlow(plan, DATA)}
@@ -2892,15 +2902,90 @@
   // styles, so inject an inline colored bar (a shaded 1-cell table, which converts
   // reliably) + a tinted header at the top of each protocol section for the Doc.
   function inlineProtocolColors(html) {
-    const hex = { blue: '#3b7dd8', green: '#4a9a52', purple: '#7b5ea7', orange: '#e08a3c', yellow: '#e0b81e', pink: '#d46a9c', slate: '#64748b' };
-    let n = 0;
-    return html.replace(/<article class="protocol-page( pp-(\w+))?"([^>]*)>/g, (m, clsSuffix, color, attrs) => {
-      n += 1;
-      const brk = n > 1 ? '<div style="page-break-before:always"></div>' : '';
-      const bar = color ? ('<table style="width:100%;border-collapse:collapse;margin:0 0 6px 0;"><tr><td style="background-color:' + (hex[color] || hex.slate) + ';height:12px;line-height:12px;font-size:1px;">&nbsp;</td></tr></table>') : '';
-      return brk + '<article class="protocol-page' + (clsSuffix || '') + '"' + attrs + '>' + bar;
-    }).replace(/<header class="pp-head"(?:\s+style="[^"]*")?>/g, '<header class="pp-head" style="background-color:#f2f5f9;padding:6px 10px;">');
+    // Google Docs' HTML importer discards most class-based CSS. Build a clean
+    // inline-styled copy instead so the Drive document keeps the same visual
+    // hierarchy as the on-screen/Word packet without touching protocol text.
+    const accent = { blue: '#4472C4', green: '#70AD47', purple: '#7030A0', orange: '#ED7D31', yellow: '#F6B000', pink: '#CE46BE', slate: '#64748B' };
+    const tint = { blue: '#CDE9F3', green: '#E2EFD9', purple: '#DDC8FF', orange: '#FBE4D5', yellow: '#FFF2CC', pink: '#F4D7EE', slate: '#EEF1F5' };
+    const root = document.createElement('div');
+    root.innerHTML = html;
+    const css = (el, rules) => {
+      if (!el) return;
+      const prev = el.getAttribute('style');
+      el.setAttribute('style', (prev ? prev.replace(/;?\s*$/, ';') : '') + rules);
+    };
+
+    const pages = Array.from(root.querySelectorAll('.protocol-page'));
+    pages.forEach((page, pi) => {
+      const cls = Array.from(page.classList).find((c) => /^pp-(blue|green|purple|orange|yellow|pink|slate)$/.test(c));
+      const color = cls ? cls.slice(3) : (page.classList.contains('cover') ? 'slate' : 'blue');
+      const ac = accent[color] || accent.slate, ti = tint[color] || tint.slate;
+      css(page, 'font-family:Arial,Calibri,sans-serif;font-size:10.5pt;line-height:1.35;color:#1F2B3A;margin:0;padding:0;');
+      if (pi > 0) {
+        // Keep the page break as its own block before the section. This mirrors
+        // the original export approach and is more reliably honored by the
+        // Drive HTML->Docs converter than a break attached to a table/article.
+        const pageBreak = document.createElement('div');
+        pageBreak.innerHTML = '&nbsp;';
+        pageBreak.setAttribute('style', 'page-break-before:always;break-before:page;height:0;line-height:0;font-size:1pt;margin:0;padding:0;');
+        page.parentNode.insertBefore(pageBreak, page);
+      }
+
+      // A one-cell table survives Google Docs conversion much more reliably than
+      // CSS borders and gives every modality a physical-page navigation bar.
+      const bar = document.createElement('table');
+      bar.className = 'sop-color-bar';
+      bar.setAttribute('style', 'width:100%;border-collapse:collapse;margin:0 0 5pt 0;');
+      const br = bar.insertRow(); const bc = br.insertCell();
+      bc.innerHTML = '&nbsp;';
+      bc.setAttribute('style', 'background-color:' + ac + ';height:10pt;line-height:10pt;font-size:1pt;border:0;padding:0;');
+      page.insertBefore(bar, page.firstChild);
+
+      // Use another one-cell table for the tinted section header: table-cell
+      // shading is retained by the Drive HTML->Docs converter.
+      const head = page.querySelector('.pp-head');
+      if (head) {
+        const ht = document.createElement('table'); ht.className = 'sop-head-table';
+        ht.setAttribute('style', 'width:100%;border-collapse:collapse;margin:0 0 9pt 0;');
+        const hr = ht.insertRow(); const hc = hr.insertCell();
+        hc.setAttribute('style', 'background-color:' + ti + ';border:0;border-bottom:2pt solid ' + ac + ';padding:7pt 9pt;vertical-align:middle;');
+        while (head.firstChild) hc.appendChild(head.firstChild);
+        head.parentNode.replaceChild(ht, head);
+        const no = hc.querySelector('.pp-no');
+        css(no, 'display:block;color:' + ac + ';font-weight:bold;font-size:9pt;margin:0 0 2pt 0;');
+        const h2 = hc.querySelector('h2');
+        css(h2, 'font-family:Arial,Calibri,sans-serif;font-size:16pt;line-height:1.18;color:#1F2B3A;font-weight:bold;margin:0;');
+      }
+
+      page.querySelectorAll('h3').forEach((el) => css(el, 'font-size:13pt;color:#2F5C8F;margin:9pt 0 4pt;font-weight:bold;'));
+      page.querySelectorAll('h4').forEach((el) => css(el, 'font-size:11.5pt;color:#2F5C8F;margin:8pt 0 3pt;font-weight:bold;'));
+      page.querySelectorAll('h5').forEach((el) => css(el, 'font-size:10.5pt;color:#2F5C8F;margin:6pt 0 3pt;font-weight:bold;'));
+      page.querySelectorAll('p').forEach((el) => css(el, 'margin:4pt 0;line-height:1.4;'));
+      page.querySelectorAll('ol,ul').forEach((el) => css(el, 'margin:4pt 0 8pt 18pt;padding-left:10pt;'));
+      page.querySelectorAll('li').forEach((el) => css(el, 'margin:3pt 0;line-height:1.38;'));
+      page.querySelectorAll('.pp-meta').forEach((el) => css(el, 'background-color:#F2F2F2;border:1px solid #D9DEE5;padding:5pt 7pt;color:#5A6570;font-size:9pt;margin:0 0 9pt 0;'));
+      page.querySelectorAll('.pp-source,.who,.muted').forEach((el) => css(el, 'color:#5A6570;font-size:9pt;'));
+      page.querySelectorAll('.recipe-box').forEach((el) => css(el, 'background-color:#FAFCFF;border:1px solid #D9E2F3;border-left:4px solid ' + ac + ';padding:7pt 9pt;margin:8pt 0;'));
+      page.querySelectorAll('.sop-tip').forEach((el) => css(el, 'background-color:#FFF7E6;border:1px solid #F3D891;border-left:4px solid #EDB000;padding:7pt 9pt;margin:8pt 0;color:#5F4A18;'));
+      page.querySelectorAll('.flow-holder,svg,img').forEach((el) => css(el, 'max-width:100%;'));
+
+      page.querySelectorAll('table:not(.sop-color-bar):not(.sop-head-table)').forEach((tbl) => {
+        css(tbl, 'width:100%;border-collapse:collapse;margin:6pt 0 9pt;');
+        tbl.querySelectorAll('th').forEach((th) => css(th, 'background-color:#F2F2F2;border:1px solid #B7C0CC;padding:5pt 6pt;text-align:left;vertical-align:middle;font-size:9.5pt;font-weight:bold;'));
+        tbl.querySelectorAll('td').forEach((td) => css(td, 'border:1px solid #B7C0CC;padding:5pt 6pt;text-align:left;vertical-align:top;font-size:9.5pt;'));
+        tbl.querySelectorAll('.num').forEach((td) => css(td, 'text-align:right;white-space:nowrap;'));
+      });
+
+      // Browser checkboxes do not survive HTML->Google Docs consistently; a
+      // printed ballot box preserves the checklist without altering any wording.
+      page.querySelectorAll('input.stepchk').forEach((cb) => {
+        const box = document.createElement('span'); box.textContent = '\u2610\u00a0\u00a0';
+        css(box, 'font-family:Arial,sans-serif;'); cb.parentNode.replaceChild(box, cb);
+      });
+    });
+    return root.innerHTML;
   }
+
   function driveApi(payload) {
     return fetch('/api/drive', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) }).then((r) => r.json());
   }
@@ -2923,9 +3008,14 @@
       let protoRes = null;
       const protoEl = document.getElementById('protocolsContent');
       if (protoEl && protoEl.innerHTML.trim()) {
-        const html = '<html><head><meta charset="utf-8"></head><body>' + inlineProtocolColors(protoEl.innerHTML) + '</body></html>';
-        protoRes = await driveApi({ action: 'upload', name: 'Protocol', folderId: path.experimentId,
-          base64: htmlBase64(html), sourceMime: HTML_MIME, targetMime: GDOC_MIME });
+        // Export only the packet pages themselves (not the website buttons/help text).
+        // This is presentation-only filtering; all protocol wording/numbers remain intact.
+        const pageHtml = Array.from(protoEl.querySelectorAll('.protocol-page')).map((el) => el.outerHTML).join('');
+        if (pageHtml.trim()) {
+          const html = '<html><head><meta charset="utf-8"></head><body style="margin:0.55in 0.65in;font-family:Arial,Calibri,sans-serif;">' + inlineProtocolColors(pageHtml) + '</body></html>';
+          protoRes = await driveApi({ action: 'upload', name: 'Protocol', folderId: path.experimentId,
+            base64: htmlBase64(html), sourceMime: HTML_MIME, targetMime: GDOC_MIME });
+        }
       }
       rec.driveFiles = Object.assign({}, rec.driveFiles, {
         summary: (sumRes && sumRes.id) || (rec.driveFiles && rec.driveFiles.summary) || null,
