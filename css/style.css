@@ -776,3 +776,5 @@ input.stepchk { margin-right: 8px; transform: scale(1.15); vertical-align: middl
   .protocol-page .pp-head { padding: 8px 10px; }
   .sop-tip, .recipe-box { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
 }
+
+.equip-noreserve { color: #8a97a8; font-style: italic; font-size: 13px; }

@@ -11,14 +11,16 @@
   // Equipment -> its Google group calendar id, display colour, and default
   // booking window (editable per experiment). Date defaults to the experiment day.
   var EQUIPMENT = [
-    { name: 'BSC1', cal: 'fe7836fa02ee2dbf37165fb6342df868b6878766c4212182925d5296cdddec52@group.calendar.google.com', color: '#1f7a7a', start: '07:00', end: '13:00' },
-    { name: 'BSC2', cal: 'fa259394976287b42162f6bae0794beb7fd80178cdd1f075f2383f76f3eb9525@group.calendar.google.com', color: '#2f7d53', start: '07:00', end: '13:00' },
-    { name: 'Chemical Hood', cal: '1761540d25c59e44726fa9780cd8d35d889f4505525802b9133708d636655c13@group.calendar.google.com', color: '#8a6d1f', start: '07:00', end: '17:00' },
-    { name: 'Centrifuge', cal: 'e6a9fe5cdee1eee46fe8f31ef6fd3495da881305b390862b5cdf017c17357a5d@group.calendar.google.com', color: '#b0611f', start: '07:00', end: '17:00' },
-    { name: 'Sony Sorter', cal: '1ad41eb20eb6b5f546119f6eb8da207d1274599276bcc224e8141325afc4346b@group.calendar.google.com', color: '#6b4fa3', start: '09:00', end: '16:00' },
-    { name: 'Chromium X', cal: 'f6113753a09a8128a9612bdda61e105c93221f89fffa2ce38c8f74631b950ed0@group.calendar.google.com', color: '#2f5c8f', start: '10:00', end: '17:00' },
-    { name: 'Tapestation', cal: '1d8a15eb34be699ed8d28d9b3304dbcbc835e1fad452fb156b958cb21751f935@group.calendar.google.com', color: '#ab3939', start: '13:00', end: '17:00' },
-    { name: 'Thermocycler', cal: 'ac9d4e86a5b292de20497a7961f70875cc0ed4f206f65543a45f164e852c019c@group.calendar.google.com', color: '#5b6570', start: '10:00', end: '19:00' }
+    { name: 'BSC1', cal: 'fe7836fa02ee2dbf37165fb6342df868b6878766c4212182925d5296cdddec52@group.calendar.google.com', color: '#1f7a7a', start: '07:00', end: '22:00' },
+    { name: 'BSC2', cal: 'fa259394976287b42162f6bae0794beb7fd80178cdd1f075f2383f76f3eb9525@group.calendar.google.com', color: '#2f7d53', start: '07:00', end: '22:00' },
+    { name: 'Chemical Hood', cal: '1761540d25c59e44726fa9780cd8d35d889f4505525802b9133708d636655c13@group.calendar.google.com', color: '#8a6d1f', start: '09:00', end: '17:00' },
+    { name: 'Swing bucket centrifuge', cal: 'e6a9fe5cdee1eee46fe8f31ef6fd3495da881305b390862b5cdf017c17357a5d@group.calendar.google.com', color: '#b0611f', start: '07:00', end: '22:00' },
+    { name: 'Table Centrifuge', cal: '203a7d3f0e735031b57d97d28c421222c9624d345b67fd65f99c71f71dfcd444@group.calendar.google.com', color: '#8a4a15', start: '07:00', end: '22:00' },
+    { name: 'Sony Sorter', cal: '1ad41eb20eb6b5f546119f6eb8da207d1274599276bcc224e8141325afc4346b@group.calendar.google.com', color: '#6b4fa3', start: '07:00', end: '17:00' },
+    { name: 'Chromium X', cal: 'f6113753a09a8128a9612bdda61e105c93221f89fffa2ce38c8f74631b950ed0@group.calendar.google.com', color: '#2f5c8f', start: '10:00', end: '22:00' },
+    { name: 'Tapestation', cal: '1d8a15eb34be699ed8d28d9b3304dbcbc835e1fad452fb156b958cb21751f935@group.calendar.google.com', color: '#ab3939', start: '09:00', end: '17:00', noReserve: true },
+    { name: 'Thermocycler 1', cal: 'ac9d4e86a5b292de20497a7961f70875cc0ed4f206f65543a45f164e852c019c@group.calendar.google.com', color: '#5b6570', start: '10:00', end: '22:00' },
+    { name: 'Thermocycler 2', cal: '88f86d0eb68666076b01a1cd5830a5b58d23f288abbe14cb1f0cb542858448cc@group.calendar.google.com', color: '#47525e', start: '10:00', end: '22:00' }
   ];
 
   var DAY_KEY = 'scp:dayBookings:v1'; // manual experiment-day bookings [{date,name}]
@@ -211,6 +213,12 @@
     var host = document.getElementById('equipTable');
     if (!host) return;
     var rows = EQUIPMENT.map(function (e, i) {
+      if (e.noReserve) {
+        return '<tr>' +
+          '<td><label class="equip-inc"><span class="equip-swatch" style="background:' + e.color + '"></span>' + esc(e.name) + '</label></td>' +
+          '<td colspan="3" class="equip-noreserve">no reservation \u2014 walk-up / shared use</td>' +
+          '</tr>';
+      }
       return '<tr>' +
         '<td><label class="equip-inc"><input type="checkbox" class="equip-check" data-i="' + i + '" /> <span class="equip-swatch" style="background:' + e.color + '"></span>' + esc(e.name) + '</label></td>' +
         '<td><input type="date" class="equip-date" data-i="' + i + '" value="' + (selectedDay || '') + '" /></td>' +

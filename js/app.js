@@ -2497,11 +2497,11 @@
     grp('Library', "Unsort 5'", 'CSP/ADT library', rangeN(lanes.unsort).map((i) => baseName('U', i, 8, lanes.unsort) + '-ADT'));
     if (vdjOn('unsorted')) { grp('Library', "Unsort 5'", 'TCR library', rangeN(lanes.unsort).map((i) => baseName('U', i, 8, lanes.unsort) + '-TCR')); grp('Library', "Unsort 5'", 'BCR library', rangeN(lanes.unsort).map((i) => baseName('U', i, 8, lanes.unsort) + '-BCR')); }
     // ASAP
-    grp('GEM-RT strip', 'ASAP', 'GEM RT output', rangeN(lanes.asap).map((i) => baseName('A', i, 2, lanes.asap) + '-GEM'));
-    grp('cDNA strip', 'ASAP', 'ASAP transposed', rangeN(lanes.asap).map((i) => baseName('A', i, 2, lanes.asap)));
-    grp('Library', 'ASAP', 'ATAC library', rangeN(lanes.asap).map((i) => baseName('A', i, 2, lanes.asap) + '-ATAC'));
-    grp('Library', 'ASAP', 'CSP/ADT library', rangeN(lanes.asap).map((i) => baseName('A', i, 2, lanes.asap) + '-ADT'));
-    grp('Library', 'ASAP', 'HTO library', rangeN(lanes.asap).map((i) => baseName('A', i, 2, lanes.asap) + '-HTO'));
+    grp('GEM-RT strip', 'ASAP', 'GEM RT output', rangeN(lanes.asap).map((i) => baseName('A', i, 8, lanes.asap) + '-GEM'));
+    grp('cDNA strip', 'ASAP', 'ASAP transposed', rangeN(lanes.asap).map((i) => baseName('A', i, 8, lanes.asap)));
+    grp('Library', 'ASAP', 'ATAC library', rangeN(lanes.asap).map((i) => baseName('A', i, 8, lanes.asap) + '-ATAC'));
+    grp('Library', 'ASAP', 'CSP/ADT library', rangeN(lanes.asap).map((i) => baseName('A', i, 8, lanes.asap) + '-ADT'));
+    grp('Library', 'ASAP', 'HTO library', rangeN(lanes.asap).map((i) => baseName('A', i, 8, lanes.asap) + '-HTO'));
     // sort 5'
     grp('GEM-RT strip', "Sort 5'", 'GEM RT output', rangeN(lanes.sort).map((i) => baseName('S', i, 8, lanes.sort) + '-GEM'));
     grp('cDNA strip', "Sort 5'", 'pellet \u2192 GEX' + (vdjOn('sorted') ? '/VDJ' : ''), rangeN(lanes.sort).map((i) => baseName('S', i, 8, lanes.sort) + '-P'));
@@ -2591,6 +2591,65 @@
     if (hasAsap) { add('ASAP ATAC', lanes.asap); add('ASAP CSP (ADT)', lanes.asap); add('ASAP HTO', lanes.asap); }
     if (hasSort) { add("5' sort GEX", lanes.sort); add("5' sort CSP (ADT)", lanes.sort); if (vdjOn('sorted')) add("5' sort TCR", lanes.sort); }
     return { rows: rows, experimentId: expId, exp: exp };
+  }
+
+  // Build per-tab rows for the 9-tab Library Sequencing Record (auto-populated
+  // columns only; volume/concentration/index sequence/storage stay blank for
+  // manual entry; Tube Inventoried = FALSE renders as an unchecked checkbox).
+  function buildLibraryRecordTabs() {
+    const calc = computePooling();
+    if (!calc || !calc.samples.length) return null;
+    const curRec = CURRENT_EXP_ID ? Store.getExperiment(CURRENT_EXP_ID) : null;
+    const exp = (curRec && curRec.name) ? curRec.name : 'Experiment';
+    const expId = (curRec && curRec.experimentId) ? curRec.experimentId : '';
+    const project = (curRec && curRec.project) ? curRec.project : '';
+    const proj = Store.allProjects().find((p) => p.name === project);
+    const abbrev = (proj && proj.abbreviation) || '';
+    const arms = buildArmInstances(SEL);
+    const hasUnsort = arms.some((a) => a.population === 'unsorted' && a.chem === 'cite5');
+    const hasAsap = arms.some((a) => a.chem === 'asap');
+    const hasSort = arms.some((a) => a.population === 'sorted' || a.laneMode === 'perSortPop');
+    const vdjOn = (key) => !!(SEL[key] && SEL[key].vdj);
+    const lanes = laneOverridesFromCost(calc.samples.length, calc.poolRes.nPools, calc.samples) || { unsort: 0, asap: 0, sort: 0 };
+    const bn = (letter, g, perChip, total) => { const nChips = Math.ceil(total / perChip); const chip = Math.floor(g / perChip) + 1; const lane = (g % perChip) + 1; return letter + lane + (nChips > 1 ? '-' + chip : ''); };
+    const ctr = {};
+    const idxId = (kind) => { const n = (ctr[kind] = (ctr[kind] || 0) + 1) - 1; if (kind === 'rpi') return 'RPI' + (n + 1); if (kind === 'd7xx') return 'D7' + String(n + 1).padStart(2, '0'); return String.fromCharCode(65 + Math.floor(n / 12)) + (n % 12 + 1); };
+    const IDX = { gex: ['Dual Index TT Set A', 'plate'], csp: ['Dual Index TN Set A', 'plate'], vdj: ['Dual Index TT Set A (VDJ plate)', 'plate'], atac: ['Single Index N Set A', 'plate'], asapAdt: ['RPI oligos (ASAP ADT)', 'rpi'], asapHto: ['D7xx oligos (ASAP HTO)', 'd7xx'] };
+    const libRow = (tube, modality, libType, idxKey) => [false, abbrev, exp, expId, tube, modality, libType, '', IDX[idxKey][0], idxId(IDX[idxKey][1]), '', '', '', '', '', ''];
+    const cdnaRow = (tube, modality, cdnaType) => [false, abbrev, exp, expId, tube, modality, cdnaType, '', '', '', '', '', ''];
+    const tabs = { '5 GEX': [], '5 ADT': [], 'ASAP ATAC': [], 'ASAP ADT': [], 'ASAP HTO': [], 'V(D)J': [], 'cDNA': [] };
+    if (hasUnsort) {
+      for (let i = 0; i < lanes.unsort; i++) tabs['5 GEX'].push(libRow(bn('U', i, 8, lanes.unsort) + '-GEX', 'Unsort', 'GEX', 'gex'));
+      for (let i = 0; i < lanes.unsort; i++) tabs['5 ADT'].push(libRow(bn('U', i, 8, lanes.unsort) + '-ADT', 'Unsort', 'CSP/ADT', 'csp'));
+      if (vdjOn('unsorted')) for (let i = 0; i < lanes.unsort; i++) { tabs['V(D)J'].push(libRow(bn('U', i, 8, lanes.unsort) + '-TCR', 'Unsort', 'TCR', 'vdj')); tabs['V(D)J'].push(libRow(bn('U', i, 8, lanes.unsort) + '-BCR', 'Unsort', 'BCR', 'vdj')); }
+      for (let i = 0; i < lanes.unsort; i++) { const b = bn('U', i, 8, lanes.unsort); tabs['cDNA'].push(cdnaRow(b + '-P', 'Unsort', 'pellet \u2192 GEX' + (vdjOn('unsorted') ? '/VDJ' : ''))); tabs['cDNA'].push(cdnaRow(b + '-S', 'Unsort', 'supernatant \u2192 CSP')); }
+    }
+    if (hasAsap) {
+      for (let i = 0; i < lanes.asap; i++) tabs['ASAP ATAC'].push(libRow(bn('A', i, 8, lanes.asap) + '-ATAC', 'ASAP', 'ATAC', 'atac'));
+      for (let i = 0; i < lanes.asap; i++) tabs['ASAP ADT'].push(libRow(bn('A', i, 8, lanes.asap) + '-ADT', 'ASAP', 'CSP/ADT', 'asapAdt'));
+      for (let i = 0; i < lanes.asap; i++) tabs['ASAP HTO'].push(libRow(bn('A', i, 8, lanes.asap) + '-HTO', 'ASAP', 'HTO', 'asapHto'));
+      for (let i = 0; i < lanes.asap; i++) tabs['cDNA'].push(cdnaRow(bn('A', i, 8, lanes.asap), 'ASAP', 'ASAP transposed'));
+    }
+    if (hasSort) {
+      for (let i = 0; i < lanes.sort; i++) tabs['5 GEX'].push(libRow(bn('S', i, 8, lanes.sort) + '-GEX', 'Sort', 'GEX', 'gex'));
+      for (let i = 0; i < lanes.sort; i++) tabs['5 ADT'].push(libRow(bn('S', i, 8, lanes.sort) + '-ADT', 'Sort', 'CSP/ADT', 'csp'));
+      if (vdjOn('sorted')) for (let i = 0; i < lanes.sort; i++) tabs['V(D)J'].push(libRow(bn('S', i, 8, lanes.sort) + '-TCR', 'Sort', 'TCR', 'vdj'));
+      for (let i = 0; i < lanes.sort; i++) { const b = bn('S', i, 8, lanes.sort); tabs['cDNA'].push(cdnaRow(b + '-P', 'Sort', 'pellet \u2192 GEX' + (vdjOn('sorted') ? '/VDJ' : ''))); tabs['cDNA'].push(cdnaRow(b + '-S', 'Sort', 'supernatant \u2192 CSP')); }
+    }
+    Object.keys(tabs).forEach((t) => { if (!tabs[t].length) delete tabs[t]; });
+    let total = 0; Object.keys(tabs).forEach((t) => { total += tabs[t].length; });
+    return { tabs: tabs, experimentId: expId, exp: exp, total: total };
+  }
+
+  function sendLibraryTubesToRecord() {
+    const built = buildLibraryRecordTabs();
+    if (!built || !built.total) { alert('Add samples and compute a pooling strategy first.'); return; }
+    if (!confirm('Auto-populate the Library Sequencing Record with ' + built.total + ' library/cDNA tubes for \u201c' + built.exp + '\u201d across ' + Object.keys(built.tabs).length + ' tab(s)? Existing rows for this experiment are replaced.')) return;
+    fetch('/api/library', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'recordTubes', tabs: built.tabs, experimentId: built.experimentId }) })
+      .then((r) => r.json())
+      .then((d) => { if (d && d.ok) alert('Populated the Library Sequencing Record \u2014 ' + Object.keys(d.results || {}).map((t) => t + ': ' + d.results[t]).join(', ') + '.'); else alert('Could not write to the record: ' + (d && d.message ? d.message : JSON.stringify(d))); })
+      .catch((e) => alert('Library record write failed: ' + e));
   }
 
   function sendLibraryToSheet() {
@@ -2868,6 +2927,46 @@
     }); });
     if (muRows.length === 1) muRows.push(['\u2014', 'No material usage logged yet', '', '', '']);
     addSheet('Materials used', muRows, [{ wch: 14 }, { wch: 24 }, { wch: 16 }, { wch: 16 }, { wch: 12 }]);
+
+    // 9) Per-modality lane / library rollup (across the whole project)
+    const roll = { unsort: { lanes: 0, GEX: 0, ADT: 0, TCR: 0, BCR: 0, cDNA: 0 }, asap: { lanes: 0, ATAC: 0, ADT: 0, HTO: 0, cDNA: 0 }, sort: { lanes: 0, GEX: 0, ADT: 0, TCR: 0, cDNA: 0 } };
+    exps.forEach((e) => { const L = projLanes(e.snapshot); const v = projArmVdj(e.snapshot);
+      roll.unsort.lanes += L.unsort; roll.unsort.GEX += L.unsort; roll.unsort.ADT += L.unsort; if (v.unsort) { roll.unsort.TCR += L.unsort; roll.unsort.BCR += L.unsort; } roll.unsort.cDNA += L.unsort * 2;
+      roll.asap.lanes += L.asap; roll.asap.ATAC += L.asap; roll.asap.ADT += L.asap; roll.asap.HTO += L.asap; roll.asap.cDNA += L.asap;
+      roll.sort.lanes += L.sort; roll.sort.GEX += L.sort; roll.sort.ADT += L.sort; if (v.sort) roll.sort.TCR += L.sort; roll.sort.cDNA += L.sort * 2;
+    });
+    const rollRows = [['Modality', 'Total lanes', 'GEX libs', 'CSP/ADT libs', 'ATAC libs', 'HTO libs', 'TCR libs', 'BCR libs', 'cDNA tubes'],
+      ["Unsort 5'", roll.unsort.lanes, roll.unsort.GEX, roll.unsort.ADT, '', '', roll.unsort.TCR, roll.unsort.BCR, roll.unsort.cDNA],
+      ['ASAP', roll.asap.lanes, '', roll.asap.ADT, roll.asap.ATAC, roll.asap.HTO, '', '', roll.asap.cDNA],
+      ["Sort 5'", roll.sort.lanes, roll.sort.GEX, roll.sort.ADT, '', '', roll.sort.TCR, '', roll.sort.cDNA]];
+    const totLibs = roll.unsort.GEX + roll.unsort.ADT + roll.unsort.TCR + roll.unsort.BCR + roll.asap.ATAC + roll.asap.ADT + roll.asap.HTO + roll.sort.GEX + roll.sort.ADT + roll.sort.TCR;
+    rollRows.push([]); rollRows.push(['TOTAL lanes', roll.unsort.lanes + roll.asap.lanes + roll.sort.lanes, 'TOTAL libraries', totLibs]);
+    addSheet('Modality rollup', rollRows, [{ wch: 12 }, { wch: 12 }, { wch: 10 }, { wch: 13 }, { wch: 11 }, { wch: 10 }, { wch: 10 }, { wch: 10 }, { wch: 11 }]);
+
+    // 10) Consolidated index usage (which index kits/wells the project consumes)
+    const idxAgg = {}; const order = [];
+    const addIdx = (type, cat, n) => { if (n <= 0) return; if (!idxAgg[type]) { idxAgg[type] = { cat: cat, count: 0 }; order.push(type); } idxAgg[type].count += n; };
+    exps.forEach((e) => { const L = projLanes(e.snapshot); const v = projArmVdj(e.snapshot);
+      addIdx('Dual Index TT Set A \u2014 GEX', '1000215', L.unsort + L.sort);
+      addIdx('Dual Index TN Set A \u2014 CSP/ADT', '1000250', L.unsort + L.sort);
+      if (v.unsort) addIdx('Dual Index TT Set A \u2014 V(D)J', '1000215', L.unsort * 2);
+      if (v.sort) addIdx('Dual Index TT Set A \u2014 V(D)J', '1000215', L.sort);
+      addIdx('Single Index N Set A \u2014 ATAC', '1000212', L.asap);
+      addIdx('RPI oligos \u2014 ASAP ADT', 'OL016\u2013031', L.asap);
+      addIdx('D7xx oligos \u2014 ASAP HTO', 'OL004\u2013015', L.asap);
+    });
+    const idxRows = [['Index type (kit)', 'Catalog #', 'Indexes / wells needed (planned)']];
+    order.forEach((t) => idxRows.push([t, idxAgg[t].cat, idxAgg[t].count]));
+    if (order.length === 0) idxRows.push(['\u2014 no indexed libraries yet \u2014', '', '']);
+    addSheet('Index usage', idxRows, [{ wch: 34 }, { wch: 14 }, { wch: 30 }]);
+
+    // 11) Project timeline (experiments in date order)
+    const dated = exps.filter((e) => e.date).slice().sort((a, b) => (a.date || '').localeCompare(b.date || ''));
+    const undated = exps.filter((e) => !e.date);
+    const tlRows = [['Date', 'Experiment_ID', 'Experiment', 'Status', 'Samples', 'Modalities', 'Scheduled to calendar']];
+    dated.forEach((e) => tlRows.push([e.date, e.experimentId || '', e.name, e.status || '', e.snapshot.nSamples, (e.snapshot.modalities || []).join(', '), e.scheduledAt ? String(e.scheduledAt).slice(0, 10) : '']));
+    undated.forEach((e) => tlRows.push(['(no date set)', e.experimentId || '', e.name, e.status || '', e.snapshot.nSamples, (e.snapshot.modalities || []).join(', '), '']));
+    addSheet('Timeline', tlRows, [{ wch: 13 }, { wch: 14 }, { wch: 24 }, { wch: 10 }, { wch: 8 }, { wch: 26 }, { wch: 18 }]);
 
     return wb;
   }
@@ -3187,7 +3286,7 @@
     const lt = [['10X Chip Output Tube Strips: for GEM-RT Incubation + storage'], ['indicate how you are labeling your tube strip'], ['Modality Source', 1, 2, 3, 4, 5, 6, 7, 8]];
     const laneRow = (label, names) => { const r = [label]; for (let i = 0; i < 8; i++) r.push(names[i] || ''); lt.push(r); };
     for (let c = 0; c < Math.ceil(lanes.unsort / 8 || 0); c++) { const names = []; for (let i = 0; i < 8 && c * 8 + i < lanes.unsort; i++) names.push('U' + (c * 8 + i + 1)); laneRow("unsort 5' chip " + (c + 1), names); }
-    for (let c = 0; c < Math.ceil(lanes.asap / 2 || 0); c++) { const names = ['A' + (c + 1) + '-1']; if (c * 2 + 1 < lanes.asap) names.push('A' + (c + 1) + '-2'); laneRow('asap chip ' + (c + 1), names); }
+    for (let c = 0; c < Math.ceil(lanes.asap / 8 || 0); c++) { const names = []; for (let i = 0; i < 8 && c * 8 + i < lanes.asap; i++) names.push('A' + (c * 8 + i + 1)); laneRow('asap chip ' + (c + 1), names); }
     for (let c = 0; c < Math.ceil(lanes.sort / 8 || 0); c++) { const names = []; for (let i = 0; i < 8 && c * 8 + i < lanes.sort; i++) names.push('S' + (c * 8 + i + 1)); laneRow("sort 5' chip " + (c + 1), names); }
     lt.push([]); lt.push(['cDNA Tube Strips']); lt.push(['indicate how you are labeling your tube strip']); lt.push(['Modality Source', 1, 2, 3, 4, 5, 6, 7, 8, 'Note']);
     const cdnaRow = (label, names, note) => { const r = [label]; for (let i = 0; i < 8; i++) r.push(names[i] || ''); r.push(note || ''); lt.push(r); };
@@ -3196,7 +3295,7 @@
       cdnaRow("unsort 5' chip " + (c + 1), pp, 'cDNA from pellet --> GEX' + (armVdj.unsort ? '/VDJ' : '') + ' libraries');
       cdnaRow("unsort 5' chip " + (c + 1), sp, 'cDNA from supernatent --> CSP libraries');
     }
-    for (let c = 0; c < Math.ceil(lanes.asap / 2 || 0); c++) { const names = ['A' + (c + 1) + '-1']; if (c * 2 + 1 < lanes.asap) names.push('A' + (c + 1) + '-2'); cdnaRow('asap chip ' + (c + 1), names, ''); }
+    for (let c = 0; c < Math.ceil(lanes.asap / 8 || 0); c++) { const names = []; for (let i = 0; i < 8 && c * 8 + i < lanes.asap; i++) names.push('A' + (c * 8 + i + 1)); cdnaRow('asap chip ' + (c + 1), names, ''); }
     for (let c = 0; c < Math.ceil(lanes.sort / 8 || 0); c++) {
       const pp = [], sp = []; for (let i = 0; i < 8 && c * 8 + i < lanes.sort; i++) { pp.push('S' + (c * 8 + i + 1) + '-P'); sp.push('S' + (c * 8 + i + 1) + '-S'); }
       cdnaRow("sort 5' chip " + (c + 1), pp, 'cDNA from pellet --> GEX' + (armVdj.sort ? '/VDJ' : '') + ' libraries');
@@ -3222,7 +3321,7 @@
       lanes.unsort, 8, (g) => 'U' + (g + 1));
     chipDiagram('ASAPseq (ATAC v2)', 'ATAC v2', 'CG000496 | Rev B', 'Next GEM Chip H + Chromium Next GEM Chip Holder (silver)',
       [['3: Oil (40ul)', '40ul'], ['2: Gel beads (50ul)', '50ul'], ['1: Sample (MM + nuclei: 70ul)', '70ul'], ['NO FILL - GEM RECOVERY', 'DO NOT ADD']],
-      lanes.asap, 8, (g) => 'A' + (Math.floor(g / 2) + 1) + '-' + ((g % 2) + 1));
+      lanes.asap, 8, (g) => 'A' + ((g % 8) + 1) + (Math.ceil(lanes.asap / 8) > 1 ? '-' + (Math.floor(g / 8) + 1) : ''));
     chipDiagram("Sort 5' scRNAseq w/ HTO (5' v3)", "5' v3", 'CG000734 | Rev A', "GEM-X 5' Chip + Chromium X/iX Chip Holder (black)",
       [['NO FILL - GEM RECOVERY', 'DO NOT ADD'], ['2: Gel beads (60ul)', '60ul'], ['1: Sample (MM + cells) (60ul)', '60ul'], ['3: Oil (250ul)', '250ul']],
       lanes.sort, 8, (g) => 'S' + (g + 1));
@@ -3258,9 +3357,9 @@
     for (let i = 0; i < lanes.unsort; i++) idxRow(bn('U', i, 8, lanes.unsort) + '-ADT', "Unsort 5'", 'CSP/ADT', 'csp');
     if (armVdj.unsort) for (let i = 0; i < lanes.unsort; i++) { const b = bn('U', i, 8, lanes.unsort); idxRow(b + '-TCR', "Unsort 5'", 'TCR', 'vdj'); idxRow(b + '-BCR', "Unsort 5'", 'BCR', 'vdj'); }
     // ASAP
-    for (let i = 0; i < lanes.asap; i++) idxRow(bn('A', i, 2, lanes.asap) + '-ATAC', 'ASAP', 'ATAC', 'atac');
-    for (let i = 0; i < lanes.asap; i++) idxRow(bn('A', i, 2, lanes.asap) + '-ADT', 'ASAP', 'CSP/ADT', 'asapAdt');
-    for (let i = 0; i < lanes.asap; i++) idxRow(bn('A', i, 2, lanes.asap) + '-HTO', 'ASAP', 'HTO', 'asapHto');
+    for (let i = 0; i < lanes.asap; i++) idxRow(bn('A', i, 8, lanes.asap) + '-ATAC', 'ASAP', 'ATAC', 'atac');
+    for (let i = 0; i < lanes.asap; i++) idxRow(bn('A', i, 8, lanes.asap) + '-ADT', 'ASAP', 'CSP/ADT', 'asapAdt');
+    for (let i = 0; i < lanes.asap; i++) idxRow(bn('A', i, 8, lanes.asap) + '-HTO', 'ASAP', 'HTO', 'asapHto');
     // sort 5'
     for (let i = 0; i < lanes.sort; i++) idxRow(bn('S', i, 8, lanes.sort) + '-GEX', "Sort 5'", 'GEX', 'gex');
     for (let i = 0; i < lanes.sort; i++) idxRow(bn('S', i, 8, lanes.sort) + '-ADT', "Sort 5'", 'CSP/ADT', 'csp');
@@ -3775,7 +3874,7 @@
               // 5) cDNA & libraries
               + '<details class="exp-sec"><summary>cDNA &amp; libraries</summary>'
               + '<p class="muted small">Library and cDNA tubes generated for this experiment, and the shared sequencing record.</p>'
-              + '<div class="sec-actions">' + B('libRecord', 'Library record (xlsx)') + B('libSend', '\u2192 Add to Library sheet') + '</div></details>'
+              + '<div class="sec-actions">' + B('libRecord', 'Library record (xlsx)') + B('libTubes', 'Auto-populate sequencing record') + B('libSend', '\u2192 Add to Library sheet') + '</div></details>'
               + '</div>';
           }
           c += '</div>';
@@ -3870,6 +3969,7 @@
       else if (act === 'labels') { openExperiment(id); generateTubeLabels(); }
       else if (act === 'libRecord') { openExperiment(id); generateLibraryRecord(); }
       else if (act === 'libSend') { openExperiment(id); sendLibraryToSheet(); }
+      else if (act === 'libTubes') { openExperiment(id); sendLibraryTubesToRecord(); }
       else if (act === 'pooling') { openExperiment(id); downloadPoolingXlsx(); }
       else if (act === 'recordUsage') recordUsageUI(id);
       else if (act === 'reagents') experimentReagentChecklist(id);

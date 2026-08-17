@@ -459,10 +459,51 @@ async function handleLibraryPost(request, env) {
     if (!env.GOOGLE_SA_KEY) return json({ error: 'not_configured', message: 'GOOGLE_SA_KEY not set' }, 503);
     if (!env.LIBRARY_RECORD_SHEET_ID) return json({ error: 'no_sheet', message: 'LIBRARY_RECORD_SHEET_ID not set' }, 503);
     const body = await request.json();
-    const rows = Array.isArray(body.rows) ? body.rows : [];
-    if (!rows.length) return json({ error: 'no_rows' }, 400);
     const token = await invToken(env);
     const id = env.LIBRARY_RECORD_SHEET_ID;
+
+    // --- 9-tab auto-population: write library/cDNA tubes into their per-modality tabs ---
+    if (body.action === 'recordTubes') {
+      const tabs = body.tabs || {};
+      const expId = String(body.experimentId || '').trim();
+      const metaR = await fetch('https://sheets.googleapis.com/v4/spreadsheets/' + id + '?fields=sheets(properties(sheetId,title),conditionalFormats)', { headers: { Authorization: 'Bearer ' + token } });
+      const meta = await metaR.json();
+      const sidByTitle = {}, cfCountByTitle = {};
+      (meta.sheets || []).forEach((s) => { sidByTitle[s.properties.title] = s.properties.sheetId; cfCountByTitle[s.properties.title] = (s.conditionalFormats || []).length; });
+      const results = {}; const fmtReqs = [];
+      for (const tabName of Object.keys(tabs)) {
+        const rows = tabs[tabName]; if (!rows || !rows.length) continue;
+        if (sidByTitle[tabName] == null) { results[tabName] = 'tab not found'; continue; }
+        const vr = await sheetsBatchGet(token, id, [tabName]);
+        const values = (vr[0] && vr[0].values) ? vr[0].values : [];
+        const header = values[0] || [];
+        const expCol = header.findIndex((h) => String(h).trim() === 'Experiment_ID');
+        const kept = [header];
+        for (let r = 1; r < values.length; r++) { const row = values[r] || []; if (expCol < 0 || String(row[expCol] || '').trim() !== expId) kept.push(row); }
+        const combined = kept.concat(rows);
+        const width = Math.max.apply(null, combined.map((r) => r.length).concat([header.length || 1]));
+        const writeRows = combined.map((r) => { const c = r.slice(); while (c.length < width) c.push(''); return c; });
+        while (writeRows.length < values.length) writeRows.push(new Array(width).fill(''));  // clear removed rows
+        await sheetsUpdateValues(token, id, qtab(tabName) + '!A1:' + colLetter(width) + writeRows.length, writeRows);
+        const sid = sidByTitle[tabName];
+        const dataRows = combined.length;
+        // real checkbox in column A for the data rows
+        fmtReqs.push({ setDataValidation: { range: { sheetId: sid, startRowIndex: 1, endRowIndex: Math.max(dataRows, 2), startColumnIndex: 0, endColumnIndex: 1 }, rule: { condition: { type: 'BOOLEAN' }, strict: true } } });
+        // light-red shading while unchecked — add once (covers a generous row range so it applies as rows grow)
+        if (!cfCountByTitle[tabName]) {
+          fmtReqs.push({ addConditionalFormatRule: { index: 0, rule: {
+            ranges: [{ sheetId: sid, startRowIndex: 1, endRowIndex: 5000, startColumnIndex: 0, endColumnIndex: Math.max(width, 16) }],
+            booleanRule: { condition: { type: 'CUSTOM_FORMULA', values: [{ userEnteredValue: '=AND($D2<>"",$A2=FALSE)' }] }, format: { backgroundColor: { red: 0.988, green: 0.898, blue: 0.898 } } }
+          } } });
+        }
+        results[tabName] = rows.length;
+      }
+      if (fmtReqs.length) { try { await fetch('https://sheets.googleapis.com/v4/spreadsheets/' + id + ':batchUpdate', { method: 'POST', headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' }, body: JSON.stringify({ requests: fmtReqs }) }); } catch (e) { /* formatting best-effort */ } }
+      return json({ ok: true, results: results });
+    }
+
+    const rows = Array.isArray(body.rows) ? body.rows : [];
+    if (!rows.length) return json({ error: 'no_rows' }, 400);
     // Optional: remove existing rows for this experiment (by Experiment_ID in col C) before appending.
     if (body.replace && body.experimentId) {
       const vr = await sheetsBatchGet(token, id, [LIBRARY_TAB]);
