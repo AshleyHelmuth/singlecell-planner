@@ -149,9 +149,9 @@ function handleHealth(env) {
  * Setup: enable the Google Sheets API on the same Cloud project; share the
  * Sheet with the service-account email as Editor; set INVENTORY_SHEET_ID var.
  * =========================================================================== */
-const SHEET_TABS = { kits: '10X Kits_Condensed', reagents: 'Reagents & Supplies', oligos: 'Oligos', antibodies: 'Antibodies', lots: 'Lots Used' };
-const ID_HEADER = { '10X Kits_Condensed': 'Catalog #', 'Reagents & Supplies': 'item_id', 'Oligos': 'item_id', 'Antibodies': 'item_id' };
-const ONHAND_HEADER = { '10X Kits_Condensed': 'On hand (kits)', 'Reagents & Supplies': 'On hand (units)', 'Oligos': 'On hand (units)', 'Antibodies': 'On hand (units)' };
+const SHEET_TABS = { kits: '10X Kits_Condensed', reagents: 'Reagents & Supplies', oligos: 'Oligos', antibodies: 'Antibodies', totalseq: 'Totalseq Cocktails + HTOs', lots: 'Lots Used' };
+const ID_HEADER = { '10X Kits_Condensed': 'Catalog #', 'Reagents & Supplies': 'item_id', 'Oligos': 'item_id', 'Antibodies': 'item_id', 'Totalseq Cocktails + HTOs': 'Tube ID' };
+const ONHAND_HEADER = { '10X Kits_Condensed': 'On hand (kits)', 'Reagents & Supplies': 'On hand (units)', 'Oligos': 'On hand (units)', 'Antibodies': 'On hand (units)', 'Totalseq Cocktails + HTOs': 'Volume/Quantity Remaining' };
 const RESERVED_HEADER = 'Reserved (experiments)';
 const SHEETS_SCOPE = 'https://www.googleapis.com/auth/spreadsheets';
 
@@ -202,7 +202,7 @@ function rowsToObjects(values) {
 // so on-hand writes must never target the kits tab.
 async function findItem(token, sheetId, itemId) {
   const want = String(itemId).trim();
-  for (const tab of [SHEET_TABS.reagents, SHEET_TABS.oligos, SHEET_TABS.antibodies]) {
+  for (const tab of [SHEET_TABS.reagents, SHEET_TABS.oligos, SHEET_TABS.antibodies, SHEET_TABS.totalseq]) {
     const vr = await sheetsBatchGet(token, sheetId, [tab]);
     const { headers, items } = rowsToObjects(vr[0] ? vr[0].values : []);
     const idH = ID_HEADER[tab], ohH = ONHAND_HEADER[tab];
@@ -223,14 +223,15 @@ async function handleInventoryGet(env) {
     if (!env.GOOGLE_SA_KEY) return json({ error: 'not_configured', message: 'GOOGLE_SA_KEY not set' }, 503);
     if (!env.INVENTORY_SHEET_ID) return json({ error: 'no_sheet', message: 'INVENTORY_SHEET_ID not set' }, 503);
     const token = await invToken(env);
-    const vr = await sheetsBatchGet(token, env.INVENTORY_SHEET_ID, [SHEET_TABS.kits, SHEET_TABS.reagents, SHEET_TABS.oligos, SHEET_TABS.antibodies, SHEET_TABS.lots]);
+    const vr = await sheetsBatchGet(token, env.INVENTORY_SHEET_ID, [SHEET_TABS.kits, SHEET_TABS.reagents, SHEET_TABS.oligos, SHEET_TABS.antibodies, SHEET_TABS.totalseq, SHEET_TABS.lots]);
     return json({
       ok: true, configured: true,
       kits: rowsToObjects(vr[0] ? vr[0].values : []).items,
       reagents: rowsToObjects(vr[1] ? vr[1].values : []).items,
       oligos: rowsToObjects(vr[2] ? vr[2].values : []).items,
       antibodies: rowsToObjects(vr[3] ? vr[3].values : []).items,
-      lots: rowsToObjects(vr[4] ? vr[4].values : []).items
+      totalseq: rowsToObjects(vr[4] ? vr[4].values : []).items,
+      lots: rowsToObjects(vr[5] ? vr[5].values : []).items
     });
   } catch (e) { return json({ error: 'exception', message: (e && e.message) || String(e) }, 500); }
 }

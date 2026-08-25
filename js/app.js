@@ -93,8 +93,20 @@
       }).filter((x) => x.id);
       const oligos = mapReagentLike(d.oligos, 'Oligos');
       const antibodies = mapReagentLike(d.antibodies, 'Antibodies');
-      if (kits.length || reagents.length || oligos.length || antibodies.length) {
-        DATA.liveInventory = kits.concat(reagents, oligos, antibodies);
+      // TotalSeq cocktails + HTOs — per-tube structure (Tube ID / Volume remaining / hashtag).
+      const totalseq = (d.totalseq || []).map((t) => ({
+        id: String(t['Tube ID'] || '').trim(),
+        name: (t['Type'] || 'TotalSeq') + (t['Hashtag Number'] ? ' \u2014 Hashtag ' + t['Hashtag Number'] : ''),
+        category: 'TotalSeq / HTOs',
+        container: 'tube', packSize: 1, usageUnit: 'µL', unit: 'µL',
+        currentUnits: num(t['Volume/Quantity Remaining']), currentContainers: null, currentStock: num(t['Volume/Quantity Remaining']),
+        minStock: null, orderStatus: '', location: t['Storage Box'] || '',
+        reservedForProject: String(t['Reserved For'] || '').trim(),
+        lots: t['Lot Number'] || '', expiry: '',
+        notes: [t['Catalog Number'] ? 'Cat ' + t['Catalog Number'] : '', t['TotalSeq Version'] || '', t['Hashtag Number'] ? 'HT ' + t['Hashtag Number'] : ''].filter(Boolean).join(' \u00b7 ')
+      })).filter((x) => x.id);
+      if (kits.length || reagents.length || oligos.length || antibodies.length || totalseq.length) {
+        DATA.liveInventory = kits.concat(reagents, oligos, antibodies, totalseq);
         DATA.inventorySource = 'live';
       }
     } catch (e) { /* keep workbook fallback */ }
