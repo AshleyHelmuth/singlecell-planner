@@ -93,18 +93,32 @@
       }).filter((x) => x.id);
       const oligos = mapReagentLike(d.oligos, 'Oligos');
       const antibodies = mapReagentLike(d.antibodies, 'Antibodies');
-      // TotalSeq cocktails + HTOs — per-tube structure (Tube ID / Volume remaining / hashtag).
-      const totalseq = (d.totalseq || []).map((t) => ({
-        id: String(t['Tube ID'] || '').trim(),
-        name: (t['Type'] || 'TotalSeq') + (t['Hashtag Number'] ? ' \u2014 Hashtag ' + t['Hashtag Number'] : ''),
-        category: 'TotalSeq / HTOs',
-        container: 'tube', packSize: 1, usageUnit: 'µL', unit: 'µL',
-        currentUnits: num(t['Volume/Quantity Remaining']), currentContainers: null, currentStock: num(t['Volume/Quantity Remaining']),
-        minStock: null, orderStatus: '', location: t['Storage Box'] || '',
-        reservedForProject: String(t['Reserved For'] || '').trim(),
-        lots: t['Lot Number'] || '', expiry: '',
-        notes: [t['Catalog Number'] ? 'Cat ' + t['Catalog Number'] : '', t['TotalSeq Version'] || '', t['Hashtag Number'] ? 'HT ' + t['Hashtag Number'] : ''].filter(Boolean).join(' \u00b7 ')
-      })).filter((x) => x.id);
+      // TotalSeq cocktails + HTOs — multiple vials per hashtag; aggregate by
+      // (version + hashtag number), summing volumes (blank / "not measured" = 0).
+      const clean = (v) => String(v == null ? '' : v).replace(/\.0$/, '').trim();
+      const tsGroups = {}; const tsOrder = [];
+      (d.totalseq || []).forEach((t) => {
+        const ver = clean(t['TotalSeq Version']);
+        const ht = clean(t['Hashtag Number']);
+        if (ver === '' && ht === '') return;
+        const key = ver + ht;                       // e.g. "A2"
+        if (!tsGroups[key]) { tsGroups[key] = { ver: ver, ht: ht, vol: 0, vials: 0, box: t['Storage Box'] || '', cat: clean(t['Catalog Number']), type: t['Type'] || 'HTO', reserved: '' }; tsOrder.push(key); }
+        const g = tsGroups[key];
+        g.vol += (num(t['Volume/Quantity Remaining']) || 0);   // non-numeric / blank -> 0
+        g.vials += 1;
+        if (t['Reserved For']) g.reserved = String(t['Reserved For']).trim();
+        if (!g.cat && clean(t['Catalog Number'])) g.cat = clean(t['Catalog Number']);
+      });
+      const totalseq = tsOrder.map((key) => {
+        const g = tsGroups[key];
+        return {
+          id: key, name: 'TotalSeq-' + g.ver + ' Hashtag ' + g.ht + ' (' + g.type + ')', category: 'TotalSeq / HTOs',
+          container: 'vial', packSize: 1, usageUnit: 'µL', unit: 'µL',
+          currentUnits: g.vol, currentContainers: g.vials, currentStock: g.vol,
+          minStock: null, orderStatus: '', location: g.box, reservedForProject: g.reserved,
+          lots: '', expiry: '', notes: g.vials + ' vial(s)' + (g.cat ? ' \u00b7 Cat ' + g.cat : '')
+        };
+      });
       if (kits.length || reagents.length || oligos.length || antibodies.length || totalseq.length) {
         DATA.liveInventory = kits.concat(reagents, oligos, antibodies, totalseq);
         DATA.inventorySource = 'live';
@@ -3615,7 +3629,7 @@
     const invSections = cats.map((c) => {
       const list = byCat[c];
       const toOrderN = list.filter((i) => i.toOrder > 0).length;
-      return '<details class="inv-cat" open><summary><strong>' + esc(c) + '</strong> <span class="who">' + list.length + ' item' + (list.length === 1 ? '' : 's') +
+      return '<details class="inv-cat"><summary><strong>' + esc(c) + '</strong> <span class="who">' + list.length + ' item' + (list.length === 1 ? '' : 's') +
         (toOrderN ? ' \u00b7 ' + toOrderN + ' to order' : '') + '</span></summary>' +
         '<table class="cost-table">' + invHead + '<tbody>' + list.map(invRow).join('') + '</tbody></table></details>';
     }).join('');

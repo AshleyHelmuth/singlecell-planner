@@ -450,7 +450,7 @@
         '<table class="cost-table"><thead><tr><th>Task</th><th class="num">Libraries</th><th class="num">Hands-on</th><th class="num">Incubation</th><th>Stop</th></tr></thead><tbody>' + tasks + '</tbody></table></div>';
     }).join('');
     var warn = chosen.warnings.length ? '<div class="callout warn"><strong>\u26a0 Timing flags:</strong><ul>' + chosen.warnings.map(function (w) { return '<li>' + esc(w) + '</li>'; }).join('') + '</ul></div>' : '';
-    host.innerHTML = controls + cmp + '<p class="muted">' + libsum + '</p>' + altNote + warn + dayHtml +
+    host.innerHTML = controls + cmp + '<p class="muted">' + libsum + '</p>' + altNote + warn +
       '<p class="muted small">Hands-on time scales with the number of libraries in each step (no cap \u2014 so you can see how big a pooled prep gets); days break only at 10x safe stops; batch days are exempt from the 8 h/person limit. Timings are the lab defaults \u2014 ask Claude to change any. Assumes one person working sequentially; splitting steps across people is the next addition.</p>';
     wirePlanner();
   }
