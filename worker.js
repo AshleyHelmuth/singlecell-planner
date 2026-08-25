@@ -926,25 +926,26 @@ async function formatSpreadsheet(token, ssId) {
       vals.forEach((row, r) => {
         const a = String((row && row[0]) || '');
         if (/^design inputs/i.test(a)) { header(sid, r, cols, C.navy); return; }
-        if (/cells pooled per sample|cells aliquoted from pool/i.test(a)) {
-          fmt(sid, r, r + 1, 0, 1, { textFormat: { bold: true } });
-          fmt(sid, r, r + 1, 1, 2, { backgroundColor: C.yellowInput, horizontalAlignment: 'CENTER', textFormat: { bold: true }, borders: { top: darkMed, bottom: darkMed, left: darkMed, right: darkMed } });
+        const bcol = String((row && row[1]) || '');
+        if (/cells pooled per sample|cells aliquoted from pool/i.test(bcol)) {
+          fmt(sid, r, r + 1, 1, 2, { textFormat: { bold: true } });
+          fmt(sid, r, r + 1, 8, 9, { backgroundColor: C.yellowInput, horizontalAlignment: 'CENTER', textFormat: { bold: true }, borders: { top: darkMed, bottom: darkMed, left: darkMed, right: darkMed } });
           return;
         }
-        if (/^pool\s/i.test(a) && !/total/i.test(a)) {
+        if (/^pool\s/i.test(a) && !/total/i.test(a) && !(row && row[2])) {
           softTitle(sid, r, cols, C.blueTint, C.blue); return;
         }
-        if (a === '#') {
+        if (/^pool$/i.test(a) && /sample/i.test(bcol)) {
           entryCols = [];
           (row || []).forEach((h, ci) => { if (/live %|live cells\/ml|vol\. dilute/i.test(String(h))) entryCols.push(ci); });
           header(sid, r, cols, C.navy); inData = true; rowHeight(sid, r, r + 1, 42); return;
         }
-        const totalish = /pool .*total/i.test(a) || /pool .*total/i.test(String((row && row[4]) || ''));
+        const totalish = /pool .*total/i.test(a) || /pool .*total/i.test(String((row && row[5]) || ''));
         if (totalish) { fmt(sid, r, r + 1, 0, cols, { backgroundColor: C.blueTint, textFormat: { bold: true }, borders: { top: darkMed, bottom: darkMed } }); inData = false; return; }
         if (inData && row && row[2]) {
           sampleIdx += 1;
           fmt(sid, r, r + 1, 0, cols, { borders: { top: thin, bottom: thin } });
-          fmt(sid, r, r + 1, 1, 2, { backgroundColor: PASTELS[(sampleIdx - 1) % PASTELS.length] });
+          fmt(sid, r, r + 1, 2, 3, { backgroundColor: PASTELS[(sampleIdx - 1) % PASTELS.length] });
           entryCols.forEach((ci) => fmt(sid, r, r + 1, ci, ci + 1, { backgroundColor: C.yellowInput, horizontalAlignment: 'CENTER', borders: { top: thin, bottom: thin, left: thin, right: thin } }));
         }
       });

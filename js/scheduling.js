@@ -233,10 +233,14 @@
       '<div id="equipBookOutput"></div>';
   }
 
+  var _booking = false;
   function bookEquipment() {
+    if (_booking) return;                 // ignore re-entrant clicks while a booking is in flight
     var out = document.getElementById('equipBookOutput');
     var checks = Array.prototype.slice.call(document.querySelectorAll('.equip-check:checked'));
     if (!checks.length) { out.innerHTML = '<p class="feas-flag feas-msg">Select at least one piece of equipment first.</p>'; return; }
+    _booking = true;
+    var btn = document.getElementById('bookEquipBtn'); if (btn) { btn.disabled = true; btn.textContent = 'Booking\u2026'; }
     var title = (selectedDay && bookingsByDate()[selectedDay]) ? bookingsByDate()[selectedDay].name : 'Equipment booking';
     var bookings = [];
     var bad = [];
@@ -276,7 +280,11 @@
       }).catch(function (err) {
         return { b: b, http: 0, ok: false, j: { error: 'network', message: String(err) } };
       });
-    })).then(function (results) { renderBookingResults(results, bad, bookings); });
+    })).then(function (results) {
+      renderBookingResults(results, bad, bookings);
+      _booking = false;
+      var b2 = document.getElementById('bookEquipBtn'); if (b2) { b2.disabled = false; b2.textContent = 'Book selected equipment'; }
+    });
   }
 
   function renderBookingResults(results, bad, bookings) {
@@ -359,10 +367,15 @@
 
     var cal = document.getElementById('expCalendar');
     if (cal) cal.addEventListener('click', onCalClick);
-    container.addEventListener('click', function (e) {
-      if (e.target.id === 'bookEquipBtn') bookEquipment();
-      if (e.target.id === 'selectAllEquip') { document.querySelectorAll('.equip-check').forEach(function (c) { c.checked = true; }); }
-    });
+    // Attach the delegated click handler only once — container persists across
+    // re-renders, so attaching every render stacks listeners and books N times.
+    if (!container._schedWired) {
+      container._schedWired = true;
+      container.addEventListener('click', function (e) {
+        if (e.target.id === 'bookEquipBtn') bookEquipment();
+        if (e.target.id === 'selectAllEquip') { document.querySelectorAll('.equip-check').forEach(function (c) { c.checked = true; }); }
+      });
+    }
   }
 
   // ---- Project timing planner ----------------------------------------------

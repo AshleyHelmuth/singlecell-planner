@@ -1979,14 +1979,14 @@
     if (hasUnsort) { stainML += 19 * plan.nPools + 9 * nSuper; stainParts.push('unsort ' + (19 * plan.nPools) + ' mL (19 \u00d7 ' + plan.nPools + ' pools) + ' + (9 * nSuper) + ' mL super-pool'); }
     if (hasAsap) { stainML += 19 * plan.nPools + 9 * nSuper; stainParts.push('ASAP ' + (19 * plan.nPools) + ' mL + ' + (9 * nSuper) + ' mL super-pool'); }
     if (hasSort) { stainML += 2 * plan.nPools; stainParts.push('sort wash ' + (2 * plan.nPools) + ' mL (2 \u00d7 ' + plan.nPools + ' pools)'); }
-    const stainPrep = stainML ? Math.ceil(stainML / 5) * 5 : 0;   // round up to 5 mL for prep
+    const stainPrep = stainML ? Math.ceil(stainML * 1.1 / 5) * 5 : 0;   // +10% margin, round up to 5 mL
     const stainBSA = Math.round(stainPrep * 0.02 * 100) / 100;    // 2% w/v of the prep volume
     const stainBox = stainML
       ? `<div class="recipe-box"><h5>CITE-seq staining / wash buffer (1&times; PBS + 2% BSA) &mdash; prepare ~${stainPrep}&nbsp;mL</h5>
         <table><tr><th>Component</th><th>Amount</th></tr>
         <tr><td>BSA (from powder)</td><td class="num">${stainBSA}&nbsp;g (2% w/v)</td></tr>
         <tr><td>1&times; PBS</td><td class="num">to ${stainPrep}&nbsp;mL, then 0.22&nbsp;µm filter</td></tr></table>
-        <p class="who">${stainML}&nbsp;mL needed for this plan (${stainParts.join('; ')}); prep rounded up to ${stainPrep}&nbsp;mL.</p></div>`
+        <p class="who">${stainML}&nbsp;mL needed for this plan (${stainParts.join('; ')}); prep with +10% margin, rounded up to ${stainPrep}&nbsp;mL.</p></div>`
       : `<div class="recipe-box"><h5>CITE-seq staining / wash buffer (1&times; PBS + 2% BSA)</h5>
         <table><tr><th>Component</th><th>Amount</th></tr>
         <tr><td>BSA (from powder)</td><td class="num">10&nbsp;g / 500&nbsp;mL PBS (2% w/v)</td></tr>
@@ -1994,12 +1994,12 @@
 
     // FACS sort buffer (1x PBS + 10% FBS, ~70 mL/pool) — only when sorting.
     const facsBox = hasSort ? (function () {
-      const ml = 70 * plan.nPools, prep = Math.ceil(ml / 10) * 10, fbs = Math.round(prep * 0.10), pbs = prep - fbs;
+      const ml = 70 * plan.nPools, prep = Math.ceil(ml * 1.1 / 10) * 10, fbs = Math.round(prep * 0.10), pbs = prep - fbs;
       return `<div class="recipe-box"><h5>FACS sort buffer (1&times; PBS + 10% FBS) &mdash; prepare ~${prep}&nbsp;mL</h5>
         <table><tr><th>Component</th><th>Amount</th></tr>
         <tr><td>1&times; PBS</td><td class="num">${pbs}&nbsp;mL</td></tr>
         <tr><td>FBS</td><td class="num">${fbs}&nbsp;mL (10%)</td></tr></table>
-        <p class="who">${ml}&nbsp;mL needed (70&nbsp;mL/pool &times; ${plan.nPools} pools); prep rounded up to ${prep}&nbsp;mL.</p></div>`;
+        <p class="who">${ml}&nbsp;mL needed (70&nbsp;mL/pool &times; ${plan.nPools} pools); prep with +10% margin, rounded up to ${prep}&nbsp;mL.</p></div>`;
     })() : '';
 
     // DNase: always dissolve the full 100 mg vial; note how much this plan uses
@@ -2613,7 +2613,7 @@
     const lanes = laneOverridesFromCost(calc.samples.length, calc.poolRes.nPools, calc.samples) || { unsort: 0, asap: 0, sort: 0 };
     const bn = (letter, g, perChip, total) => { const nChips = Math.ceil(total / perChip); const chip = Math.floor(g / perChip) + 1; const lane = (g % perChip) + 1; return letter + lane + (nChips > 1 ? '-' + chip : ''); };
     const ctr = {};
-    const idxId = (kind) => { const n = (ctr[kind] = (ctr[kind] || 0) + 1) - 1; if (kind === 'rpi') return 'RPI' + (n + 1); if (kind === 'd7xx') return 'D7' + String(n + 1).padStart(2, '0'); return String.fromCharCode(65 + Math.floor(n / 12)) + (n % 12 + 1); };
+    const idxId = (kind) => { const n = (ctr[kind] = (ctr[kind] || 0) + 1) - 1; if (kind === 'rpi') return 'RPI' + ((n % 16) + 1); if (kind === 'd7xx') return 'D7' + String((n % 12) + 1).padStart(2, '0'); const w = n % 96; return String.fromCharCode(65 + Math.floor(w / 12)) + (w % 12 + 1); };
     const IDX = { gex: ['Dual Index TT Set A', 'plate'], csp: ['Dual Index TN Set A', 'plate'], vdj: ['Dual Index TT Set A (VDJ plate)', 'plate'], atac: ['Single Index N Set A', 'plate'], asapAdt: ['RPI oligos (ASAP ADT)', 'rpi'], asapHto: ['D7xx oligos (ASAP HTO)', 'd7xx'] };
     const libRow = (tube, modality, libType, idxKey) => [false, abbrev, exp, expId, tube, modality, libType, '', IDX[idxKey][0], idxId(IDX[idxKey][1]), '', '', '', '', '', ''];
     const cdnaRow = (tube, modality, cdnaType) => [false, abbrev, exp, expId, tube, modality, cdnaType, '', '', '', '', '', ''];
@@ -3221,65 +3221,74 @@
     XLSX.utils.book_append_sheet(wb, wsSamp, 'Samples');
 
     // ---- Cell count tab (grouped by pool; live formulas) -------------------
-    // Pool volume (uL) = ROUNDUP(cells pooled per sample / live cells-per-mL * 1000, 0).
-    // Cells for a modality per sample = pool modality aliquot * (this sample's cells / pool total cells).
+    // Layout: A = merged "Pool n" label, B = Sample #, C = Original ID, D = Sample ID,
+    // E = Thawer, F = Pool, G = Live %, H = Live Cells/mL, I = Vol. dilute, J = Total
+    // viable (=H*I), K = Cells pooled (=$I$8), L = Pool volume, M/N = unsort cells/vol,
+    // O/P = ASAP cells/vol, Q = sort leftover. Design inputs live at I8/I9/I10.
     const poolMap = {};
     (s.batches || []).forEach((b) => { (poolMap[b.pool] = poolMap[b.pool] || []).push.apply(poolMap[b.pool], b.samples); });
     const poolKeys = Object.keys(poolMap);
     const spp = poolKeys.length ? Math.round(s.nSamples / poolKeys.length) : 0;
     const hasUnsortArm = lanes.unsort > 0, hasAsapArm = lanes.asap > 0, hasSortArm = lanes.sort > 0;
-    const cpsDefault = s.cellsPerSample != null ? s.cellsPerSample : 2000000;   // pool contribution / sample (from planner)
-    const unsDefault = s.unsortAmt != null ? s.unsortAmt : 1200000;             // unsort cells / pool (after split)
-    const asaDefault = s.asapAmt != null ? s.asapAmt : 1200000;                 // ASAP cells / pool (after split)
-    const cc2 = [];
-    const rowNo = () => cc2.length + 1;
-    cc2.push(['How to use this sheet:']);
-    cc2.push(['Fill the bolded DESIGN INPUTS below. On batch day, enter Live %, Live Cells/mL, and the dilution volume for each sample \u2014 pooling and aliquot volumes autofill. Sort input is whatever is left in each pool after the unsort/ASAP aliquots are removed.']);
-    cc2.push(['Yellow cells are for you to fill in; each sample\u2019s original-ID cell is colour-coded, and pool header/total rows are shaded.']);
+    const cpsDefault = s.cellsPerSample != null ? s.cellsPerSample : 2000000;
+    const unsDefault = s.unsortAmt != null ? s.unsortAmt : 1200000;
+    const asaDefault = s.asapAmt != null ? s.asapAmt : 1200000;
+    const CPS = '$I$8', UNS = '$I$9', ASA = '$I$10';   // design-input cells (fixed positions)
+    const cc2 = []; const merges = [];
+    // rows 1-3: how-to + notes (B column; label merged B:H)
+    cc2.push(['', 'How to use this sheet:']);
+    cc2.push(['', 'Fill the bolded DESIGN INPUTS below. On batch day, enter Live %, Live Cells/mL, and the dilution volume for each sample \u2014 pooling and aliquot volumes autofill. Sort input is whatever is left in each pool after the unsort/ASAP aliquots are removed.']);
+    cc2.push(['', 'Yellow cells are for you to fill in; each sample\u2019s original-ID cell is colour-coded, and pool header/total rows are shaded.']);
     cc2.push([]);
-    cc2.push(['# samples', s.nSamples, '', '# pools', poolKeys.length, '', '# samples / pool', spp]);
+    // row 5: counts (B/C, E/F, H/I)
+    cc2.push(['', '# samples', s.nSamples, '', '# pools', poolKeys.length, '', '# samples / pool', spp]);
     cc2.push([]);
-    cc2.push(['DESIGN INPUTS (prefilled from the planner \u2014 edit if needed):']);
-    const cpsRow = rowNo(); cc2.push(['Cells pooled per sample', cpsDefault]);
-    const unsRow = rowNo(); cc2.push(['Cells aliquoted from pool for unsort 5\u2032 (CITE-seq)', unsDefault]);
-    const asaRow = rowNo(); cc2.push(['Cells aliquoted from pool for ASAP-seq', asaDefault]);
-    const cpsRef = '$B$' + cpsRow, unsRef = '$B$' + unsRow, asaRef = '$B$' + asaRow;
-    cc2.push([]);
-    const hdr = ['#', 'Original ID (cryovial)', 'Sample ID', 'Thawer', 'Pool', 'Live %', 'Live Cells/mL', 'Vol. dilute for count (mL)', 'Total viable cells', 'Cells pooled', 'Pool volume (uL)'];
-    if (hasUnsortArm) hdr.push('Cells for unsort', 'Vol for unsort (uL)');
-    if (hasAsapArm) hdr.push('Cells for ASAP', 'Vol for ASAP (uL)');
-    if (hasSortArm) hdr.push('Cells to sort (leftover)');
+    // row 7: design-inputs header (B:H); rows 8-10: labels in B (merged B:H), values in I
+    cc2.push(['', 'DESIGN INPUTS (prefilled from the planner \u2014 edit if needed):']);
+    cc2.push(['', 'Cells pooled per sample', '', '', '', '', '', '', cpsDefault]);
+    cc2.push(['', 'Cells aliquoted from pool for unsort 5\u2032 (CITE-seq)', '', '', '', '', '', '', unsDefault]);
+    cc2.push(['', 'Cells aliquoted from pool for ASAP-seq', '', '', '', '', '', '', asaDefault]);
+    merges.push({ s: { r: 1, c: 1 }, e: { r: 1, c: 7 } }, { s: { r: 2, c: 1 }, e: { r: 2, c: 7 } }, { s: { r: 6, c: 1 }, e: { r: 6, c: 7 } }, { s: { r: 7, c: 1 }, e: { r: 7, c: 7 } }, { s: { r: 8, c: 1 }, e: { r: 8, c: 7 } }, { s: { r: 9, c: 1 }, e: { r: 9, c: 7 } });
+    cc2.push([]); cc2.push([]); cc2.push([]);   // rows 11,12,13
+    // row 14: single header row
+    const hdr = ['Pool', 'Sample #', 'Original ID (cryovial)', 'Sample ID', 'Thawer', 'Pool', 'Live %', 'Live Cells/mL', 'Vol. dilute for count (mL)', 'Total viable cells', 'Cells pooled', 'Pool volume (uL)', 'Cells for unsort', 'Vol for unsort (uL)', 'Cells for ASAP', 'Vol for ASAP (uL)', 'Cells to sort (leftover)'];
+    cc2.push(hdr.slice());
     let nC = 0;
     poolKeys.forEach((pk) => {
-      cc2.push([]);
-      cc2.push(['POOL ' + pk]);
-      cc2.push(hdr.slice());
       const dataRows = [];
+      const startIdx = cc2.length;                 // 0-based index of first sample row
       poolMap[pk].forEach((sm) => {
-        nC += 1; const r = rowNo(); dataRows.push(r);
-        cc2.push([nC, sm.patientId || '', sm.sampleId, '', pk, '', '', '',
-          { t: 'n', f: 'G' + r + '*H' + r },
-          { t: 'n', f: cpsRef },
-          { t: 'n', f: 'IFERROR(ROUNDUP(J' + r + '/G' + r + '*1000,0),"")' }]);
+        nC += 1; const r = cc2.length + 1;          // 1-based sheet row
+        dataRows.push(r);
+        cc2.push([dataRows.length === 1 ? ('Pool ' + pk) : '', nC, sm.patientId || '', sm.sampleId, '', pk, '', '', '',
+          { t: 'n', f: 'H' + r + '*I' + r },        // J: total viable = Live Cells/mL * Vol dilute
+          { t: 'n', f: CPS },                        // K: cells pooled = $I$8
+          { t: 'n', f: 'IFERROR(ROUNDUP(K' + r + '/H' + r + '*1000,0),"")' }, // L: pool volume
+          '', '', '', '', '']);
       });
-      const totRow = rowNo();
-      const firstR = dataRows[0], lastR = dataRows[dataRows.length - 1];
+      const totRow = cc2.length + 1;
+      // fill per-sample modality cells now that we know the pool total row
       dataRows.forEach((r) => {
-        const row = cc2[r - 1]; let col = 11;
-        if (hasUnsortArm) { row[col++] = { t: 'n', f: 'IFERROR(' + unsRef + '*(J' + r + '/$J$' + totRow + '),"")' }; row[col++] = ''; }
-        if (hasAsapArm) { row[col++] = { t: 'n', f: 'IFERROR(' + asaRef + '*(J' + r + '/$J$' + totRow + '),"")' }; row[col++] = ''; }
+        const row = cc2[r - 1];
+        if (hasUnsortArm) row[12] = { t: 'n', f: 'IFERROR(' + UNS + '*(K' + r + '/$K$' + totRow + '),"")' }; // M
+        if (hasAsapArm) row[14] = { t: 'n', f: 'IFERROR(' + ASA + '*(K' + r + '/$K$' + totRow + '),"")' };   // O
       });
-      const tot = ['', '', '', '', 'POOL ' + pk + ' TOTAL', '', '', '',
-        { t: 'n', f: 'SUM(I' + firstR + ':I' + lastR + ')' },
+      if (dataRows.length > 1) merges.push({ s: { r: startIdx, c: 0 }, e: { r: startIdx + dataRows.length - 1, c: 0 } });
+      const firstR = dataRows[0], lastR = dataRows[dataRows.length - 1];
+      const tot = ['', '', '', '', '', 'POOL ' + pk + ' TOTAL', '', '', '',
         { t: 'n', f: 'SUM(J' + firstR + ':J' + lastR + ')' },
-        { t: 'n', f: 'SUM(K' + firstR + ':K' + lastR + ')' }];
-      if (hasUnsortArm) tot.push({ t: 'n', f: unsRef }, { t: 'n', f: 'IFERROR(ROUNDUP(' + unsRef + '/K' + totRow + ',1),"")' });
-      if (hasAsapArm) tot.push({ t: 'n', f: asaRef }, { t: 'n', f: 'IFERROR(ROUNDUP(' + asaRef + '/K' + totRow + ',1),"")' });
-      if (hasSortArm) tot.push({ t: 'n', f: 'J' + totRow + (hasUnsortArm ? '-' + unsRef : '') + (hasAsapArm ? '-' + asaRef : '') }); // leftover = pool total - unsort - asap
+        { t: 'n', f: 'SUM(K' + firstR + ':K' + lastR + ')' },
+        { t: 'n', f: 'SUM(L' + firstR + ':L' + lastR + ')' },
+        hasUnsortArm ? { t: 'n', f: UNS } : '',
+        hasUnsortArm ? { t: 'n', f: 'IFERROR(ROUNDUP(' + UNS + '/L' + totRow + ',1),"")' } : '',
+        hasAsapArm ? { t: 'n', f: ASA } : '',
+        hasAsapArm ? { t: 'n', f: 'IFERROR(ROUNDUP(' + ASA + '/L' + totRow + ',1),"")' } : '',
+        hasSortArm ? { t: 'n', f: 'K' + totRow + (hasUnsortArm ? '-' + UNS : '') + (hasAsapArm ? '-' + ASA : '') } : ''];
       cc2.push(tot);
     });
     const wsCC = XLSX.utils.aoa_to_sheet(cc2);
-    wsCC['!cols'] = [{ wch: 5 }, { wch: 24 }, { wch: 22 }, { wch: 8 }, { wch: 8 }, { wch: 8 }, { wch: 13 }, { wch: 12 }, { wch: 14 }, { wch: 12 }, { wch: 13 }, { wch: 12 }, { wch: 14 }, { wch: 12 }, { wch: 14 }];
+    wsCC['!merges'] = merges;
+    wsCC['!cols'] = [{ wch: 9 }, { wch: 8 }, { wch: 22 }, { wch: 20 }, { wch: 8 }, { wch: 6 }, { wch: 8 }, { wch: 13 }, { wch: 16 }, { wch: 14 }, { wch: 12 }, { wch: 13 }, { wch: 13 }, { wch: 13 }, { wch: 13 }, { wch: 13 }, { wch: 16 }];
     XLSX.utils.book_append_sheet(wb, wsCC, 'Cell count');
 
     // ---- 10X Library Tubes tab (naming grid, per reference) ----------------
@@ -3316,8 +3325,8 @@
         cl.push([]);
       }
     };
-    chipDiagram("Unsort 5' CITEseq (5' HT v2)", "5' HT v2", 'CG000424 | Rev D', 'Next GEM Chip N + Chromium X Chip Holder (black)',
-      [['3A: Oil (140ul)', '140ul'], ['2A: Sample (MM + cells) (140ul)', '140ul'], ['1: Gel beads (130ul)', '130ul'], ['2B: Sample (MM + cells) (140ul)', '140ul'], ['3B: Oil (140ul)', '140ul']],
+    chipDiagram("Unsort 5' CITEseq (5' v3)", "5' v3", 'CG000734 | Rev A', "GEM-X 5' Chip + Chromium X/iX Chip Holder (black)",
+      [['3: Oil (250ul)', '250ul'], ['2: Gel beads (60ul)', '60ul'], ['1: Sample (MM + cells) (60ul)', '60ul']],
       lanes.unsort, 8, (g) => 'U' + (g + 1));
     chipDiagram('ASAPseq (ATAC v2)', 'ATAC v2', 'CG000496 | Rev B', 'Next GEM Chip H + Chromium Next GEM Chip Holder (silver)',
       [['3: Oil (40ul)', '40ul'], ['2: Gel beads (50ul)', '50ul'], ['1: Sample (MM + nuclei: 70ul)', '70ul'], ['NO FILL - GEM RECOVERY', 'DO NOT ADD']],
@@ -3345,9 +3354,9 @@
     const idxId = (key) => {
       const n = (ctr[key] = (ctr[key] || 0) + 1) - 1;
       const gen = IDX[key].gen;
-      if (gen === 'rpi') return 'RPI' + (n + 1);
-      if (gen === 'd7xx') return 'D7' + String(n + 1).padStart(2, '0');   // D701..D712
-      return String.fromCharCode(65 + Math.floor(n / 12)) + (n % 12 + 1);   // A1..A12,B1..
+      if (gen === 'rpi') return 'RPI' + ((n % 16) + 1);                    // RPI1..RPI16, then wrap
+      if (gen === 'd7xx') return 'D7' + String((n % 12) + 1).padStart(2, '0'); // D701..D712, then wrap
+      const w = n % 96; return String.fromCharCode(65 + Math.floor(w / 12)) + (w % 12 + 1);  // A1..H12, then wrap
     };
     const li2 = [['How to use: recommended 10X indexes + tube labels for every library in this experiment. Print with the packet; record any index/label changes by hand.'], [],
       ['Tube label', 'Modality', 'Library type', 'Index type (kit)', 'Kit catalog #', 'Index ID', 'Index sequence', 'Notes / changes']];
