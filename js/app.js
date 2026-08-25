@@ -1608,6 +1608,17 @@
 
     const notes = cost.notes.length ? '<div class="callout info"><strong>How to read this:</strong><ul>' + cost.notes.map((n) => '<li>' + esc(n) + '</li>').join('') + '</ul></div>' : '';
 
+    // TotalSeq / HTO hashtag reminder — one unique hashtag per genetic pool. These
+    // are selected from the TotalSeq inventory, not purchased as a bulk reagent.
+    const nPools = plan.nPools || 0;
+    const pArms = plan.arms || [];
+    const htoLines = [];
+    if (pArms.indexOf('asap3') !== -1 && nPools) htoLines.push(nPools + ' distinct <strong>TotalSeq-A</strong> hashtag vials (ASAP-seq)');
+    if ((pArms.indexOf('unsort5') !== -1 || pArms.indexOf('sort5') !== -1) && nPools) htoLines.push(nPools + ' distinct <strong>TotalSeq-C</strong> hashtag vials (CITE-seq / sort 5\u2032)');
+    const htoReminder = htoLines.length
+      ? '<div class="callout info"><strong>TotalSeq / HTOs \u2014 hashtag reminder:</strong> this experiment needs ' + htoLines.join(' and ') + ' \u2014 one unique hashtag per genetic pool (don\u2019t reuse a hashtag within a batch). This is <em>not</em> a purchase; choose available vials from the <strong>TotalSeq / HTOs</strong> tab in Inventory.</div>'
+      : '';
+
     $('#reagentsContent').innerHTML = `
       <div class="section-head"><h2>Reagents &amp; cost</h2>
         <div class="head-actions">
@@ -1620,6 +1631,7 @@
         <div><span class="ch-num">${cost.nPlaceholders}</span><span class="ch-lbl">line items still need spreadsheet data</span></div>
       </div>
       ${notes}
+      ${htoReminder}
       <h3>Lanes per load</h3>
       <table class="cost-table"><thead><tr><th>Population &middot; modality</th><th class="num">Lanes</th><th>Libraries</th><th>Basis</th></tr></thead><tbody>${laneRows}</tbody></table>
       ${tables}`;
