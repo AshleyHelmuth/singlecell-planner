@@ -31,20 +31,160 @@
   let PLAN_INPUT = 'grid'; // 'grid' (real samples) | 'counts' (planning: synthesize from counts)
   let SORT_SEL = new Set((window.Pooling && Pooling.SORT_MODEL) ? Pooling.SORT_MODEL.DEFAULT_ON : ['HSC', 'pDC', 'cDC', 'Treg']);
 
-  // ---- Tabs -----------------------------------------------------------------
+  // ---- Two-tier navigation --------------------------------------------------
+  // Top tabs are all-project-level. Plan / Record / Review show a left sidebar
+  // (project + experiment selector, then step sub-tabs with completion checks).
+  const NAV = {
+    projects: { panels: [{ id: 'projects', label: 'Project manager' }] },
+    calendar: { panels: [{ id: 'calendar', label: 'Calendar' }] },
+    handbook: { panels: [{ id: 'handbook', label: 'Handbook' }] },
+    plan: { sidebar: true, panels: [
+      { id: 'planproject', label: 'Create batch plan' }, { id: 'plan', label: 'Plan experiment' },
+      { id: 'workflow', label: 'Workflow' }, { id: 'protocols', label: 'Protocols' },
+      { id: 'scheduling', label: 'Scheduling' }, { id: 'inventory', label: 'Inventory' },
+      { id: 'reagents', label: 'Reagents & cost' } ] },
+    record: { sidebar: true, panels: [
+      { id: 'rec-cellaca', label: 'Cellaca counts' }, { id: 'rec-batchday', label: 'Batch Day Worksheet' },
+      { id: 'rec-library', label: 'Library Worksheets' }, { id: 'rec-tapestation', label: 'Tapestation Output' },
+      { id: 'rec-supply', label: 'Supply Usage' }, { id: 'rec-seqdata', label: 'Sequencing data' } ] },
+    review: { sidebar: true, panels: [
+      { id: 'rev-design', label: 'Experimental design' }, { id: 'rev-seq', label: 'Sequencing' },
+      { id: 'rev-kits', label: 'Kit and supply usage' }, { id: 'rev-data', label: 'Data' } ] }
+  };
+  let CUR_TOP = 'projects';
+
+  function panelRenderHook(id) {
+    if (id === 'scheduling' && window.Scheduling) Scheduling.render($('#schedulingContent'));
+    else if (id === 'plan') refreshBatchLoadControl();
+    else if (id === 'inventory') renderInventory();
+    else if (id === 'projects') renderManage();
+    else if (id === 'calendar') renderCalendar();
+    else if (id.indexOf('rec-') === 0) renderRecord(id);
+    else if (id.indexOf('rev-') === 0) renderReview(id);
+  }
+  function showPanel(id) {
+    $$('.panel').forEach((p) => p.classList.remove('is-active'));
+    const el = $('#tab-' + id); if (el) el.classList.add('is-active');
+    panelRenderHook(id);
+  }
+  function markActiveStep(id) { $$('.side-step').forEach((s) => s.classList.toggle('is-active', s.dataset.panel === id)); }
+  function updateStepChecks(top) {
+    const rec = CURRENT_EXP_ID ? Store.getExperiment(CURRENT_EXP_ID) : null;
+    const done = {};
+    if (top === 'plan') {
+      done.planproject = !!CURRENT_PROJECT; done.plan = !!(rec && rec.snapshot);
+      done.workflow = !!(rec && rec.snapshot); done.protocols = !!(rec && rec.snapshot);
+      done.scheduling = !!(rec && rec.scheduledAt); done.inventory = !!(rec && rec.actualUsage);
+      done.reagents = !!(rec && rec.snapshot);
+    }
+    $$('.side-check').forEach((c) => c.classList.toggle('done', !!done[c.dataset.check]));
+  }
+  function renderSidebar(top) {
+    const cfg = NAV[top]; const side = $('#sideNav');
+    if (!cfg.sidebar) { if (side) side.hidden = true; return; }
+    if (side) side.hidden = false;
+    syncSideSelectors();
+    const steps = $('#sideSteps');
+    if (steps) steps.innerHTML = cfg.panels.map((p) => '<button class="side-step" data-panel="' + p.id + '"><span class="side-check" data-check="' + p.id + '"></span><span>' + p.label + '</span></button>').join('');
+    updateStepChecks(top);
+  }
+  function selectTop(top, subId) {
+    if (!NAV[top]) top = 'projects';
+    CUR_TOP = top;
+    $$('.tab').forEach((b) => { const on = b.dataset.top === top; b.classList.toggle('is-active', on); b.setAttribute('aria-selected', on ? 'true' : 'false'); });
+    const cfg = NAV[top];
+    renderSidebar(top);
+    const first = subId || cfg.panels[0].id;
+    showPanel(first);
+    if (cfg.sidebar) markActiveStep(first);
+  }
+  window.selectTop = selectTop;
+
+  // Mirror the project/experiment selection into the sidebar selectors.
+  function syncSideSelectors() {
+    const cur = CURRENT_EXP_ID ? Store.getExperiment(CURRENT_EXP_ID) : null;
+    const proj = (cur && cur.project) ? cur.project : CURRENT_PROJECT;
+    const psel = $('#sideProjectSel'), esel = $('#sideExperimentSel');
+    if (psel) {
+      const names = Store.allProjects().map((p) => p.name).filter(Boolean);
+      Store.allExperiments().forEach((e) => { if (e.project && names.indexOf(e.project) < 0) names.push(e.project); });
+      names.sort((a, b) => a.toLowerCase() < b.toLowerCase() ? -1 : 1);
+      psel.innerHTML = '<option value="">\u2014 select project \u2014</option>' + names.map((n) => '<option value="' + escAttr(n) + '"' + (n === proj ? ' selected' : '') + '>' + esc(n) + '</option>').join('');
+    }
+    if (esel) {
+      const exps = Store.allExperiments().filter((e) => (e.project || '') === (proj || ''));
+      esel.innerHTML = '<option value="">\u2014 select experiment \u2014</option>' + exps.map((e) => '<option value="' + e.id + '"' + (e.id === CURRENT_EXP_ID ? ' selected' : '') + '>' + esc(e.name || 'experiment') + '</option>').join('');
+    }
+  }
+
   function initTabs() {
-    $$('.tab').forEach((btn) => {
-      btn.addEventListener('click', () => {
-        $$('.tab').forEach((b) => { b.classList.remove('is-active'); b.setAttribute('aria-selected', 'false'); });
-        $$('.panel').forEach((p) => p.classList.remove('is-active'));
-        btn.classList.add('is-active'); btn.setAttribute('aria-selected', 'true');
-        $('#tab-' + btn.dataset.tab).classList.add('is-active');
-        if (btn.dataset.tab === 'scheduling' && window.Scheduling) Scheduling.render($('#schedulingContent'));
-        if (btn.dataset.tab === 'plan') refreshBatchLoadControl();
-        if (btn.dataset.tab === 'inventory') renderInventory();
-        if (btn.dataset.tab === 'projects') renderManage();
-      });
+    $$('.tab').forEach((btn) => { btn.addEventListener('click', () => selectTop(btn.dataset.top)); });
+    const steps = $('#sideSteps');
+    if (steps) steps.addEventListener('click', (e) => {
+      const b = e.target.closest('.side-step'); if (!b) return;
+      showPanel(b.dataset.panel); markActiveStep(b.dataset.panel);
     });
+    const sp = $('#sideProjectSel'), se = $('#sideExperimentSel');
+    if (sp) sp.addEventListener('change', () => {
+      CURRENT_PROJECT = sp.value || null; CURRENT_EXP_ID = null;
+      EXPANDED_PROJECTS = {}; if (CURRENT_PROJECT) EXPANDED_PROJECTS[CURRENT_PROJECT] = true; EXPANDED_EXPERIMENTS = {};
+      updatePlanExpBar(); updateContextBar(); renderManage(); syncSideSelectors(); updateStepChecks(CUR_TOP);
+    });
+    if (se) se.addEventListener('change', () => {
+      const id = se.value;
+      if (!id) { CURRENT_EXP_ID = null; updatePlanExpBar(); updateStepChecks(CUR_TOP); return; }
+      CURRENT_EXP_ID = id; const r = Store.getExperiment(id); CURRENT_PROJECT = r ? (r.project || CURRENT_PROJECT) : CURRENT_PROJECT;
+      EXPANDED_PROJECTS = {}; if (CURRENT_PROJECT) EXPANDED_PROJECTS[CURRENT_PROJECT] = true; EXPANDED_EXPERIMENTS = {}; EXPANDED_EXPERIMENTS[id] = true;
+      updatePlanExpBar(); updateContextBar(); renderManage(); syncSideSelectors(); updateStepChecks(CUR_TOP);
+      if (CUR_TOP === 'plan' || CUR_TOP === 'record' || CUR_TOP === 'review') { const cur = $('.side-step.is-active'); showPanel(cur ? cur.dataset.panel : NAV[CUR_TOP].panels[0].id); }
+    });
+  }
+
+  // Placeholder renderers for the new Record / Review / Calendar pages.
+  function stubPage(elId, title, blurb) {
+    const el = $('#' + elId); if (!el) return;
+    el.innerHTML = '<div class="wrap"><h2>' + esc(title) + '</h2><div class="callout info">' + esc(blurb) + '</div></div>';
+  }
+  const REC_STUBS = {
+    'rec-cellaca': ['recCellacaContent', 'Cellaca counts', 'Record cell-count readouts from the Cellaca here (per sample: live %, cells/mL). Coming soon \u2014 this will feed the Cell count sheet automatically.'],
+    'rec-batchday': ['recBatchdayContent', 'Batch Day Worksheet', 'Log the batch-day timeline and per-step notes here. Coming soon.'],
+    'rec-library': ['recLibraryContent', 'Library Worksheets', 'Enter per-library prep details (volumes, indexes used, yields). Coming soon.'],
+    'rec-tapestation': ['recTapestationContent', 'Tapestation Output', 'Attach or enter TapeStation traces and sizing per library. Coming soon.'],
+    'rec-supply': ['recSupplyContent', 'Supply Usage', 'Record actual kit / reagent / tip usage for this experiment. Coming soon \u2014 will reconcile against Inventory.'],
+    'rec-seqdata': ['recSeqdataContent', 'Sequencing data', 'Enter sequencing run info and data paths. Coming soon.']
+  };
+  const REV_STUBS = {
+    'rev-design': ['revDesignContent', 'Experimental design', 'A read-only view of the batching / pooling plan and the pipeline cell-flow figure for the chosen plan. Coming soon.'],
+    'rev-seq': ['revSeqContent', 'Sequencing', 'Chosen sequencing depths and a summary of libraries generated per modality. Coming soon.'],
+    'rev-kits': ['revKitsContent', 'Kit and supply usage', 'Summary of cost and kit / supply usage for the project or experiment. Coming soon.'],
+    'rev-data': ['revDataContent', 'Data', 'Concentrations and TapeStation traces for every library, plus paths to stored data. Coming soon.']
+  };
+  function renderRecord(id) { const s = REC_STUBS[id]; if (s) stubPage(s[0], s[1], s[2]); }
+  function renderReview(id) { const s = REV_STUBS[id]; if (s) stubPage(s[0], s[1], s[2]); }
+
+  // ---- Calendar page (all scheduled experiments + month grid + equipment week)
+  function renderCalendar() {
+    const el = $('#calendarContent'); if (!el) return;
+    const dOf = (e) => e.date || (e.scheduledAt ? String(e.scheduledAt).slice(0, 10) : '');
+    const exps = Store.allExperiments().filter((e) => dOf(e)).sort((a, b) => dOf(a).localeCompare(dOf(b)));
+    let h = '<h2>Calendar</h2><h3>Scheduled experiments</h3>';
+    if (!exps.length) h += '<p class="muted">No experiments have a date yet. Set one on the Plan \u2192 Scheduling step.</p>';
+    else h += '<table class="tbl"><thead><tr><th>Date</th><th>Project</th><th>Experiment</th><th>Status</th><th>Modalities</th></tr></thead><tbody>'
+      + exps.map((e) => '<tr><td>' + esc(dOf(e)) + '</td><td>' + esc(e.project || '\u2014') + '</td><td>' + esc(e.name || 'experiment') + '</td><td>' + esc(e.status || '') + '</td><td>' + esc(((e.snapshot && e.snapshot.modalities) || []).join(', ')) + '</td></tr>').join('')
+      + '</tbody></table>';
+    // month grid (current month), experiments marked on their day
+    const now = new Date(); const y = now.getFullYear(), m = now.getMonth();
+    const byDay = {}; exps.forEach((e) => { const d = dOf(e); if (d.slice(0, 7) === (y + '-' + String(m + 1).padStart(2, '0'))) { const day = parseInt(d.slice(8, 10), 10); (byDay[day] = byDay[day] || []).push(e.name || 'exp'); } });
+    const first = new Date(y, m, 1).getDay(); const days = new Date(y, m + 1, 0).getDate();
+    const monthName = now.toLocaleString('en-US', { month: 'long', year: 'numeric' });
+    let cells = ''; for (let i = 0; i < first; i++) cells += '<td class="cal-empty"></td>';
+    for (let d = 1; d <= days; d++) { const evs = byDay[d] || []; cells += '<td class="cal-day' + (evs.length ? ' cal-has' : '') + '"><span class="cal-n">' + d + '</span>' + evs.map((n) => '<span class="cal-ev">' + esc(n) + '</span>').join('') + '</td>'; if ((first + d) % 7 === 0) cells += '</tr><tr>'; }
+    h += '<h3>' + esc(monthName) + '</h3><table class="cal-grid"><thead><tr><th>Sun</th><th>Mon</th><th>Tue</th><th>Wed</th><th>Thu</th><th>Fri</th><th>Sat</th></tr></thead><tbody><tr>' + cells + '</tr></tbody></table>';
+    // weekly equipment (view-only)
+    const embed = (window.Scheduling && Scheduling.mergedEmbedUrl) ? Scheduling.mergedEmbedUrl() : '';
+    h += '<h3>Equipment schedule (this week)</h3><p class="muted small">View only \u2014 book equipment on the Plan \u2192 Scheduling step.</p>'
+      + (embed ? '<iframe src="' + embed + '" class="cal-embed" frameborder="0" scrolling="no"></iframe>' : '<p class="muted">Equipment calendar unavailable.</p>');
+    el.innerHTML = h;
   }
 
   // ---- Load workbook --------------------------------------------------------
@@ -1521,7 +1661,7 @@
       }
     }
     if (window.Scheduling) Scheduling.render($('#schedulingContent'));
-    $('.tab[data-tab="workflow"]').click();
+    selectTop('plan', 'workflow');
   }
 
   function renderWorkflow(plan) {
@@ -2408,7 +2548,7 @@
     resetPlanEditor();
     renderManage();
     updatePlanExpBar();
-    $('.tab[data-tab="plan"]').click();
+    selectTop('plan', 'plan');
     window.scrollTo({ top: 0, behavior: 'smooth' });
     flashSaveStatus('New experiment \u201c' + rec.name + '\u201d \u2014 build the plan, then Save.', true);
   }
@@ -2455,7 +2595,7 @@
       EXPANDED_PROJECTS = {}; if (CURRENT_PROJECT) EXPANDED_PROJECTS[CURRENT_PROJECT] = true;
       EXPANDED_EXPERIMENTS = {};
       updatePlanExpBar(); renderManage();
-      const t = $('.tab[data-tab="projects"]'); if (t) t.click();
+      selectTop('projects');
     });
     if (esel) esel.addEventListener('change', () => {
       const id = esel.value;
@@ -2464,7 +2604,7 @@
       EXPANDED_PROJECTS = {}; if (CURRENT_PROJECT) EXPANDED_PROJECTS[CURRENT_PROJECT] = true;
       EXPANDED_EXPERIMENTS = {}; EXPANDED_EXPERIMENTS[id] = true;
       updatePlanExpBar(); renderManage();
-      const t = $('.tab[data-tab="projects"]'); if (t) t.click();
+      selectTop('projects');
     });
   }
   function setActiveProject(name) { CURRENT_PROJECT = name || null; updateContextBar(); }
@@ -2799,7 +2939,7 @@
     if (!res.error) renderAllTabs(res);
     updatePlanExpBar();
     flashSaveStatus('Editing \u201c' + (rec.name || 'experiment') + '\u201d. Rebuild + Save to update its numbers.', true);
-    $('.tab[data-tab="plan"]').click();
+    selectTop('plan', 'plan');
     window.scrollTo({ top: 0, behavior: 'smooth' });
   }
 
@@ -2811,7 +2951,7 @@
     const res = computeCurrent();
     if (res.error) { alert('Could not build protocols: ' + res.error); return; }
     renderAllTabs(res);
-    $('.tab[data-tab="protocols"]').click();
+    selectTop('plan', 'protocols');
   }
 
   // ---- project-level exports ------------------------------------------------
@@ -3584,7 +3724,7 @@
   }
 
   function inventoryBadge() {
-    const tabBtn = $('.tab[data-tab="inventory"]'); if (!tabBtn) return;
+    if (!$('#tab-inventory')) return;
     let n = 0;
     try { n = computeInventoryState().items.filter((i) => i.status === 'out' || i.status === 'low').length; } catch (e) { n = 0; }
     let b = tabBtn.querySelector('.tab-badge');
@@ -3955,7 +4095,7 @@
       else if (act === 'projSummaryDl') downloadProjectSummary(p);
       else if (act === 'projReagents') projectReagentXlsx(p);
       else if (act === 'projBatches') projectBatchXlsx(p);
-      else if (act === 'openBatch') { const t = $('.tab[data-tab="planproject"]'); if (t) t.click(); }
+      else if (act === 'openBatch') { selectTop('plan', 'planproject'); }
       else if (act === 'delProj') {
         if (confirm('Delete project \u201c' + p + '\u201d? Its experiments are kept but become unfiled.')) {
           Store.deleteProject(p);
@@ -4008,7 +4148,7 @@
         try { openExperimentProtocols(id); } catch (err) { /* protocol render optional */ }
         exportExperimentToDrive(r).then(() => renderManage()).catch(() => renderManage());
       }
-      else if (act === 'reschedule') { CURRENT_EXP_ID = id; updatePlanExpBar(); $('.tab[data-tab="scheduling"]').click(); if (window.Scheduling) Scheduling.render($('#schedulingContent')); }
+      else if (act === 'reschedule') { CURRENT_EXP_ID = id; updatePlanExpBar(); selectTop('plan', 'scheduling'); }
       else if (act === 'inv') recordInventoryUI(id);
       else if (act === 'del') { const r = Store.getExperiment(id); if (r && confirm('Delete \u201c' + r.name + '\u201d? This cannot be undone.')) { if (CURRENT_EXP_ID === id) { CURRENT_EXP_ID = null; updatePlanExpBar(); } const folder = r.driveFolderId; Store.deleteExperiment(id); if (folder) driveApi({ action: 'trash', id: folder }).catch(() => {}); pushReservedToSheet(); renderManage(); } }
       else if (act === 'packet') experimentWorkbookXlsx(id);
@@ -4111,6 +4251,7 @@
     updatePlanExpBar();
     updateContextBar();
     wireContextBar();
+    selectTop('projects');
     // keep an open tab in sync with others' changes: re-pull when it regains focus
     let _lastSync = Date.now();
     document.addEventListener('visibilitychange', () => {
@@ -4120,6 +4261,6 @@
       }
     });
     const sp = $('#savePlanBtn'); if (sp) sp.addEventListener('click', saveExperimentUI);
-    const bp = $('#backToProjectsBtn'); if (bp) bp.addEventListener('click', () => { $('.tab[data-tab="projects"]').click(); });
+    const bp = $('#backToProjectsBtn'); if (bp) bp.addEventListener('click', () => { selectTop('projects'); });
   });
 })();

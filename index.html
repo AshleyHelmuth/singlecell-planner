@@ -24,15 +24,12 @@
 </header>
 
 <nav class="tabs" role="tablist" aria-label="Sections">
-  <button class="tab is-active" data-tab="projects" role="tab" aria-selected="true">Project manager</button>
-  <button class="tab" data-tab="planproject" role="tab" aria-selected="false">Plan project</button>
-  <button class="tab" data-tab="plan" role="tab" aria-selected="false">Plan experiment</button>
-  <button class="tab" data-tab="workflow" role="tab" aria-selected="false">Workflow</button>
-  <button class="tab" data-tab="reagents" role="tab" aria-selected="false">Reagents &amp; cost</button>
-  <button class="tab" data-tab="protocols" role="tab" aria-selected="false">Protocols</button>
-  <button class="tab" data-tab="inventory" role="tab" aria-selected="false">Inventory</button>
-  <button class="tab" data-tab="handbook" role="tab" aria-selected="false">Handbook</button>
-  <button class="tab" data-tab="scheduling" role="tab" aria-selected="false">Scheduling</button>
+  <button class="tab is-active" data-top="projects" role="tab" aria-selected="true">Project manager</button>
+  <button class="tab" data-top="calendar" role="tab" aria-selected="false">Calendar</button>
+  <button class="tab" data-top="handbook" role="tab" aria-selected="false">Handbook</button>
+  <button class="tab" data-top="plan" role="tab" aria-selected="false">Plan</button>
+  <button class="tab" data-top="record" role="tab" aria-selected="false">Record</button>
+  <button class="tab" data-top="review" role="tab" aria-selected="false">Review</button>
 </nav>
 
 <div id="contextBar" class="ctx-bar" aria-live="polite">
@@ -44,6 +41,16 @@
 </div>
 
 <main>
+  <aside class="side-nav" id="sideNav" hidden>
+    <div class="side-sel">
+      <label class="side-sel-l">Project</label>
+      <select class="ctx-sel" id="sideProjectSel" aria-label="Select project"></select>
+      <label class="side-sel-l">Experiment</label>
+      <select class="ctx-sel" id="sideExperimentSel" aria-label="Select experiment"></select>
+    </div>
+    <nav class="side-steps" id="sideSteps" aria-label="Steps"></nav>
+  </aside>
+  <div class="main-area" id="mainArea"></div>
   <!-- ============ PLAN TAB ============ -->
   <section class="panel" id="tab-plan" role="tabpanel">
     <div class="wrap">
@@ -240,6 +247,25 @@
   <section class="panel" id="tab-scheduling" role="tabpanel">
     <div id="schedulingContent"></div>
   </section>
+
+  <!-- ============ CALENDAR TAB ============ -->
+  <section class="panel" id="tab-calendar" role="tabpanel">
+    <div class="wrap" id="calendarContent"></div>
+  </section>
+
+  <!-- ============ RECORD SUB-PANELS ============ -->
+  <section class="panel" id="tab-rec-cellaca" role="tabpanel"><div class="wrap" id="recCellacaContent"></div></section>
+  <section class="panel" id="tab-rec-batchday" role="tabpanel"><div class="wrap" id="recBatchdayContent"></div></section>
+  <section class="panel" id="tab-rec-library" role="tabpanel"><div class="wrap" id="recLibraryContent"></div></section>
+  <section class="panel" id="tab-rec-tapestation" role="tabpanel"><div class="wrap" id="recTapestationContent"></div></section>
+  <section class="panel" id="tab-rec-supply" role="tabpanel"><div class="wrap" id="recSupplyContent"></div></section>
+  <section class="panel" id="tab-rec-seqdata" role="tabpanel"><div class="wrap" id="recSeqdataContent"></div></section>
+
+  <!-- ============ REVIEW SUB-PANELS ============ -->
+  <section class="panel" id="tab-rev-design" role="tabpanel"><div class="wrap" id="revDesignContent"></div></section>
+  <section class="panel" id="tab-rev-seq" role="tabpanel"><div class="wrap" id="revSeqContent"></div></section>
+  <section class="panel" id="tab-rev-kits" role="tabpanel"><div class="wrap" id="revKitsContent"></div></section>
+  <section class="panel" id="tab-rev-data" role="tabpanel"><div class="wrap" id="revDataContent"></div></section>
 </main>
 
 <footer class="foot">
