@@ -44,6 +44,7 @@
       { id: 'scheduling', label: 'Scheduling' }, { id: 'inventory', label: 'Inventory' },
       { id: 'reagents', label: 'Reagents & cost' } ] },
     record: { sidebar: true, panels: [
+      { id: 'rec-freezer', label: 'Freezer Record' },
       { id: 'rec-cellaca', label: 'Cellaca counts' }, { id: 'rec-batchday', label: 'Batch Day Worksheet' },
       { id: 'rec-library', label: 'Library Worksheets' }, { id: 'rec-tapestation', label: 'Tapestation Output' },
       { id: 'rec-supply', label: 'Supply Usage' }, { id: 'rec-seqdata', label: 'Sequencing data' } ] },
@@ -148,6 +149,7 @@
     el.innerHTML = '<div class="wrap"><h2>' + esc(title) + '</h2><div class="callout info">' + esc(blurb) + '</div></div>';
   }
   const REC_STUBS = {
+    'rec-freezer': ['recFreezerContent', 'Freezer Record', 'Track sample storage moves here: samples moved to a temporary batch box, removed from the LN2 tank, and library/cDNA storage locations logged into the official freezer record. Coming soon \u2014 this will confirm each sample\u2019s chain of custody from LN2 \u2192 batch box \u2192 freezer.'],
     'rec-cellaca': ['recCellacaContent', 'Cellaca counts', 'Record cell-count readouts from the Cellaca here (per sample: live %, cells/mL). Coming soon \u2014 this will feed the Cell count sheet automatically.'],
     'rec-batchday': ['recBatchdayContent', 'Batch Day Worksheet', 'Log the batch-day timeline and per-step notes here. Coming soon.'],
     'rec-library': ['recLibraryContent', 'Library Worksheets', 'Enter per-library prep details (volumes, indexes used, yields). Coming soon.'],
@@ -3726,11 +3728,12 @@
   }
 
   function inventoryBadge() {
-    if (!$('#tab-inventory')) return;
+    const btn = document.querySelector('.side-step[data-panel="inventory"]');
+    if (!btn) return;
     let n = 0;
     try { n = computeInventoryState().items.filter((i) => i.status === 'out' || i.status === 'low').length; } catch (e) { n = 0; }
-    let b = tabBtn.querySelector('.tab-badge');
-    if (n) { if (!b) { b = document.createElement('span'); b.className = 'tab-badge'; tabBtn.appendChild(b); } b.textContent = n; }
+    let b = btn.querySelector('.tab-badge');
+    if (n) { if (!b) { b = document.createElement('span'); b.className = 'tab-badge'; btn.appendChild(b); } b.textContent = n; }
     else if (b) b.remove();
   }
 
