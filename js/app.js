@@ -103,7 +103,7 @@
   // Mirror the project/experiment selection into the sidebar selectors.
   function syncSideSelectors() {
     const cur = CURRENT_EXP_ID ? Store.getExperiment(CURRENT_EXP_ID) : null;
-    const proj = (cur && cur.project) ? cur.project : CURRENT_PROJECT;
+    const proj = CURRENT_PROJECT || (cur && cur.project) || '';   // explicit project wins
     const psel = $('#sideProjectSel'), esel = $('#sideExperimentSel');
     if (psel) {
       const names = Store.allProjects().map((p) => p.name).filter(Boolean);
@@ -112,8 +112,9 @@
       psel.innerHTML = '<option value="">\u2014 select project \u2014</option>' + names.map((n) => '<option value="' + escAttr(n) + '"' + (n === proj ? ' selected' : '') + '>' + esc(n) + '</option>').join('');
     }
     if (esel) {
-      const exps = Store.allExperiments().filter((e) => (e.project || '') === (proj || ''));
-      esel.innerHTML = '<option value="">\u2014 select experiment \u2014</option>' + exps.map((e) => '<option value="' + e.id + '"' + (e.id === CURRENT_EXP_ID ? ' selected' : '') + '>' + esc(e.name || 'experiment') + '</option>').join('');
+      const exps = Store.allExperiments().filter((e) => (e.project || '') === proj);
+      const selId = (cur && (cur.project || '') === proj) ? CURRENT_EXP_ID : '';   // only keep if it belongs to this project
+      esel.innerHTML = '<option value="">\u2014 select experiment \u2014</option>' + exps.map((e) => '<option value="' + e.id + '"' + (e.id === selId ? ' selected' : '') + '>' + esc(e.name || 'experiment') + '</option>').join('');
     }
   }
 
@@ -132,11 +133,12 @@
     });
     if (se) se.addEventListener('change', () => {
       const id = se.value;
-      if (!id) { CURRENT_EXP_ID = null; updatePlanExpBar(); updateStepChecks(CUR_TOP); return; }
-      CURRENT_EXP_ID = id; const r = Store.getExperiment(id); CURRENT_PROJECT = r ? (r.project || CURRENT_PROJECT) : CURRENT_PROJECT;
-      EXPANDED_PROJECTS = {}; if (CURRENT_PROJECT) EXPANDED_PROJECTS[CURRENT_PROJECT] = true; EXPANDED_EXPERIMENTS = {}; EXPANDED_EXPERIMENTS[id] = true;
-      updatePlanExpBar(); updateContextBar(); renderManage(); syncSideSelectors(); updateStepChecks(CUR_TOP);
-      if (CUR_TOP === 'plan' || CUR_TOP === 'record' || CUR_TOP === 'review') { const cur = $('.side-step.is-active'); showPanel(cur ? cur.dataset.panel : NAV[CUR_TOP].panels[0].id); }
+      if (!id) { CURRENT_EXP_ID = null; updatePlanExpBar(); syncSideSelectors(); updateStepChecks(CUR_TOP); return; }
+      const wasTop = CUR_TOP; const activeStep = document.querySelector('.side-step.is-active'); const wasStep = activeStep ? activeStep.dataset.panel : null;
+      openExperiment(id);                       // restores the saved plan/state (jumps to Plan)
+      if (wasTop !== 'plan') selectTop(wasTop, wasStep);   // return to Record/Review if that's where we were
+      else if (wasStep) { markActiveStep(wasStep); showPanel(wasStep); }
+      syncSideSelectors(); updateStepChecks(CUR_TOP);
     });
   }
 
@@ -3735,7 +3737,14 @@
   function renderInventory() {
     const host = $('#inventoryContent'); if (!host) return;
     if (!DATA || !((DATA.liveInventory || []).length)) {
-      host.innerHTML = '<div class="section-head"><h2>Inventory</h2></div><p class="empty">No Live_Inventory rows found in the spreadsheet. Add items (item_id, item_name, container, pack_size, usage_unit, current_containers, current_units, min_stock_threshold) to the Live_Inventory tab.</p>';
+      // The /api/inventory fetch may have failed or been slow on boot — retry once on open.
+      if (DATA && !DATA._invRetried) {
+        DATA._invRetried = true;
+        host.innerHTML = '<div class="section-head"><h2>Inventory</h2></div><p class="muted">Loading live inventory\u2026</p>';
+        loadLiveInventory().then(() => renderInventory()).catch(() => renderInventory());
+        return;
+      }
+      host.innerHTML = '<div class="section-head"><h2>Inventory</h2></div><p class="empty">Could not load the live inventory. Check that the inventory Google Sheet is shared with the service account and reachable, then reopen this tab.</p>';
       return;
     }
     const st = computeInventoryState();

@@ -223,15 +223,18 @@ async function handleInventoryGet(env) {
     if (!env.GOOGLE_SA_KEY) return json({ error: 'not_configured', message: 'GOOGLE_SA_KEY not set' }, 503);
     if (!env.INVENTORY_SHEET_ID) return json({ error: 'no_sheet', message: 'INVENTORY_SHEET_ID not set' }, 503);
     const token = await invToken(env);
-    const vr = await sheetsBatchGet(token, env.INVENTORY_SHEET_ID, [SHEET_TABS.kits, SHEET_TABS.reagents, SHEET_TABS.oligos, SHEET_TABS.antibodies, SHEET_TABS.totalseq, SHEET_TABS.lots]);
+    const vr = await sheetsBatchGet(token, env.INVENTORY_SHEET_ID, [SHEET_TABS.kits, SHEET_TABS.reagents, SHEET_TABS.oligos, SHEET_TABS.antibodies, SHEET_TABS.lots]);
+    // TotalSeq tab is optional — fetch separately so a missing/renamed tab can't break the whole inventory.
+    let totalseqItems = [];
+    try { const tvr = await sheetsBatchGet(token, env.INVENTORY_SHEET_ID, [SHEET_TABS.totalseq]); totalseqItems = rowsToObjects(tvr[0] ? tvr[0].values : []).items; } catch (e) { /* totalseq tab optional */ }
     return json({
       ok: true, configured: true,
       kits: rowsToObjects(vr[0] ? vr[0].values : []).items,
       reagents: rowsToObjects(vr[1] ? vr[1].values : []).items,
       oligos: rowsToObjects(vr[2] ? vr[2].values : []).items,
       antibodies: rowsToObjects(vr[3] ? vr[3].values : []).items,
-      totalseq: rowsToObjects(vr[4] ? vr[4].values : []).items,
-      lots: rowsToObjects(vr[5] ? vr[5].values : []).items
+      totalseq: totalseqItems,
+      lots: rowsToObjects(vr[4] ? vr[4].values : []).items
     });
   } catch (e) { return json({ error: 'exception', message: (e && e.message) || String(e) }, 500); }
 }
