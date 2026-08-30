@@ -198,6 +198,9 @@
   function removeTransactionsForExperiment(id) {
     writeArr(TX_KEY, allTransactions().filter(function (t) { return t.experimentId !== id; }));
   }
+  function removeTransaction(id) {
+    writeArr(TX_KEY, allTransactions().filter(function (t) { return t.id !== id; }));
+  }
   // Net change per item across all recorded transactions: { itemId: {delta, name, unit} }
   function inventoryNet() {
     var net = {};
@@ -249,7 +252,7 @@
     projects: projects, experimentsInProject: experimentsInProject,
     allProjects: allProjects, getProject: getProject, saveProject: saveProject, deleteProject: deleteProject, nextExperimentId: nextExperimentId,
     allTransactions: allTransactions, transactionsForExperiment: transactionsForExperiment,
-    addTransactions: addTransactions, removeTransactionsForExperiment: removeTransactionsForExperiment,
+    addTransactions: addTransactions, removeTransactionsForExperiment: removeTransactionsForExperiment, removeTransaction: removeTransaction,
     inventoryNet: inventoryNet,
     exportAll: exportAll, importAll: importAll,
     _keys: { EXP_KEY: EXP_KEY, TX_KEY: TX_KEY }

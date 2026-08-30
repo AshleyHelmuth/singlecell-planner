@@ -120,11 +120,12 @@ main{min-height:60vh}
 /* sample grid (excel-style paste-in table) */
 .row-actions{display:flex;align-items:center;gap:10px;margin-top:10px;flex-wrap:wrap}
 .grid-scroll{overflow:auto;max-height:340px;margin-top:14px;border:1px solid var(--line);border-radius:10px}
-.sample-grid{width:100%;border-collapse:separate;border-spacing:0;font-size:13px;background:var(--paper)}
+.sample-grid{width:auto;min-width:100%;border-collapse:separate;border-spacing:0;font-size:13px;background:var(--paper)}
 .sample-grid thead th{position:sticky;top:0;z-index:2;background:#eef2f7;font-size:11.5px;text-transform:uppercase;
   letter-spacing:.03em;color:#4a5a72;padding:8px 6px;text-align:left;white-space:nowrap;
   border-bottom:1px solid var(--line);box-shadow:0 1px 0 var(--line)}
-.sample-grid th.col-custom{display:flex;align-items:center;gap:4px;text-transform:none;letter-spacing:0;font-size:12px}
+.sample-grid th.col-custom{text-transform:none;letter-spacing:0;font-size:12px}
+.sample-grid th.col-custom .col-custom-inner{display:flex;align-items:center;gap:4px}
 .sample-grid th.col-custom .col-name-input{width:110px;font-weight:700;color:var(--ink);background:transparent;
   border:1px solid transparent;border-radius:5px;padding:3px 5px;font-family:var(--sans);font-size:12px}
 .sample-grid th.col-custom .col-name-input:hover,.sample-grid th.col-custom .col-name-input:focus{
@@ -808,3 +809,7 @@ main > .panel { flex: 1 1 auto; min-width: 0; }
 .cal-n { display: block; font-weight: 600; color: var(--muted); font-size: 11px; }
 .cal-ev { display: block; background: var(--teal, #1f7a7a); color: #fff; border-radius: 4px; padding: 1px 5px; margin-top: 2px; font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cal-embed { border: 0; width: 100%; height: 600px; border-radius: 10px; }
+
+.compute-pooling-row{margin:6px 0 18px;justify-content:flex-start}
+
+.inv-overcommit{color:var(--danger,#c0392b);font-weight:600}

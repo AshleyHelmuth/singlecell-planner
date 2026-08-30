@@ -254,6 +254,42 @@ async function handleInventoryPost(request, env) {
       return json({ ok: true, itemId: body.itemId, onHand: Number(body.onHand) });
     }
 
+    // Adjust on-hand by a delta (in usage units). "On hand (units)" is usually a
+    // formula (= containers x pack size), so we adjust "On hand (containers)" by
+    // delta/packSize and let the units formula recompute; that way the sheet's
+    // live number stays correct for anyone viewing it directly.
+    if (body.action === 'adjustOnHand') {
+      const want = String(body.itemId || '').trim();
+      const deltaUnits = Number(body.deltaUnits) || 0;
+      if (!want || !deltaUnits) return json({ error: 'bad_input' }, 400);
+      for (const tab of [SHEET_TABS.reagents, SHEET_TABS.oligos, SHEET_TABS.antibodies]) {
+        const vr = await sheetsBatchGet(token, id, [tab]);
+        const values = (vr[0] && vr[0].values) ? vr[0].values : [];
+        if (!values.length) continue;
+        const headers = values[0].map((h) => String(h == null ? '' : h).trim());
+        const idCol = headers.indexOf(ID_HEADER[tab]); if (idCol < 0) continue;
+        let rowIdx = -1;
+        for (let r = 1; r < values.length; r++) { if (String((values[r] || [])[idCol] || '').trim() === want) { rowIdx = r; break; } }
+        if (rowIdx < 0) continue;
+        const row = values[rowIdx];
+        const contCol = headers.indexOf('On hand (containers)');
+        const packCol = headers.indexOf('Pack size');
+        if (contCol >= 0) {
+          const pack = Number(row[packCol]) || 1;
+          const newCont = (Number(row[contCol]) || 0) + deltaUnits / (pack || 1);
+          await sheetsUpdateCell(token, id, qtab(tab) + '!' + colLetter(contCol + 1) + (rowIdx + 1), Math.round(newCont * 1e6) / 1e6);
+          return json({ ok: true, itemId: want, tab: tab, newContainers: newCont, newUnits: newCont * (pack || 1) });
+        }
+        const ohCol = headers.indexOf(ONHAND_HEADER[tab]);
+        if (ohCol >= 0) {
+          const nv = (Number(row[ohCol]) || 0) + deltaUnits;
+          await sheetsUpdateCell(token, id, qtab(tab) + '!' + colLetter(ohCol + 1) + (rowIdx + 1), Math.round(nv * 1e6) / 1e6);
+          return json({ ok: true, itemId: want, tab: tab, newOnHand: nv });
+        }
+      }
+      return json({ error: 'item_not_found', itemId: want }, 404);
+    }
+
     if (body.action === 'recordLots') {
       const rows = Array.isArray(body.rows) ? body.rows : [];
       const today = new Date().toISOString().slice(0, 10);

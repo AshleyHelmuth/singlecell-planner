@@ -163,7 +163,99 @@
     'rev-kits': ['revKitsContent', 'Kit and supply usage', 'Summary of cost and kit / supply usage for the project or experiment. Coming soon.'],
     'rev-data': ['revDataContent', 'Data', 'Concentrations and TapeStation traces for every library, plus paths to stored data. Coming soon.']
   };
-  function renderRecord(id) { const s = REC_STUBS[id]; if (s) stubPage(s[0], s[1], s[2]); }
+  function renderRecord(id) {
+    if (id === 'rec-supply') { renderSupplyUsage(); return; }
+    const s = REC_STUBS[id]; if (s) stubPage(s[0], s[1], s[2]);
+  }
+
+  // Supply Usage — a per-experiment pick-list that logs reagent/kit usage to
+  // inventory (the "removed" event). Reads the experiment's computed reagent
+  // demand and lets you confirm what was actually consumed on batch day.
+  function renderSupplyUsage() {
+    const host = $('#recSupplyContent'); if (!host) return;
+    const rec = CURRENT_EXP_ID ? Store.getExperiment(CURRENT_EXP_ID) : null;
+    if (!rec) { host.innerHTML = '<h2>Supply Usage</h2><p class="empty">Select a project and experiment in the sidebar to log its supply usage.</p>'; return; }
+    if (!rec.snapshot) { host.innerHTML = '<h2>Supply Usage</h2><p class="empty">This experiment has no computed plan yet \u2014 build and save it on the Plan tab first.</p>'; return; }
+    if (!DATA || !((DATA.liveInventory || []).length)) { host.innerHTML = '<h2>Supply Usage</h2><p class="empty">Live inventory isn\u2019t loaded, so usage can\u2019t be matched. Open the Inventory tab to load it, then return here.</p>'; return; }
+    const usage = computeExperimentUsage(rec);
+    const st = computeInventoryState(); const byId = {}; st.items.forEach((i) => { byId[i.id] = i; });
+    const applied = !!rec.inventoryApplied;
+    const rows = usage.map((u) => {
+      const it = byId[u.itemId] || {};
+      const avail = it.availableUnits != null ? fmtQ(it.availableUnits) + ' ' + esc(it.usageUnit || u.unit) : '\u2014';
+      return '<tr><td><input type="checkbox" class="su-chk" data-id="' + escAttr(u.itemId) + '"' + (applied ? '' : ' checked') + '></td>'
+        + '<td>' + esc(u.itemName) + ' <span class="who">' + esc(u.itemId) + '</span></td>'
+        + '<td class="num">' + fmtQ(u.amount) + ' ' + esc(u.unit) + '</td>'
+        + '<td class="num">' + avail + '</td>'
+        + '<td class="num"><input type="number" class="su-used" data-id="' + escAttr(u.itemId) + '" value="' + (Math.round(u.amount * 1000) / 1000) + '" step="any" style="width:90px"> ' + esc(u.unit) + '</td></tr>';
+    }).join('');
+    const statusLine = applied
+      ? '<div class="callout info">Usage for this experiment has already been deducted from the inventory sheet (' + (rec.actualUsage && rec.actualUsage.recordedAt ? esc(rec.actualUsage.recordedAt.slice(0, 10)) : 'previously') + '). Re-logging reverses the previous deduction and re-applies the current amounts.</div>'
+      : '<div class="callout info">Confirm the amounts actually used, then log them \u2014 this subtracts directly from the inventory sheet\u2019s on-hand (visible to anyone viewing the sheet) and releases this experiment\u2019s reservation.</div>';
+    host.innerHTML = '<h2>Supply Usage <span class="who">' + esc(rec.name || '') + (rec.experimentId ? ' \u00b7 ' + esc(rec.experimentId) : '') + '</span></h2>'
+      + statusLine
+      + (usage.length
+        ? '<h3>Reagents &amp; supplies</h3><table class="cost-table"><thead><tr><th>Use</th><th>Item</th><th class="num">Planned</th><th class="num">Available</th><th class="num">Actually used</th></tr></thead><tbody>' + rows + '</tbody></table>'
+          + '<div class="row-actions" style="margin-top:10px"><button class="btn primary" id="suLog">' + (applied ? 'Re-log usage to inventory' : 'Log usage to inventory') + '</button>'
+          + (applied ? '<button class="btn ghost" id="suUndo">Undo deduction</button>' : '') + '</div>'
+        : '<p class="empty">None of this experiment\u2019s reagents matched an item in the live inventory (by item_id). Add matching item_ids in the inventory sheet to track them here.</p>')
+      + '<h3 style="margin-top:22px">10x kit boxes</h3><p class="step-hint">Kit boxes are drawn down per-box (rxns / index wells). Log the exact boxes used:</p>'
+      + '<div class="row-actions"><button class="btn ghost" id="suKits">Log kit-box usage\u2026</button></div>'
+      + '<div id="suStatus" class="muted" style="margin-top:10px"></div>';
+
+    const logBtn = $('#suLog');
+    const postAdjust = (itemId, deltaUnits) => fetch('/api/inventory', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'adjustOnHand', itemId: itemId, deltaUnits: deltaUnits }) }).then((r) => r.json());
+    const cssEsc = (s) => (window.CSS && CSS.escape) ? CSS.escape(s) : s;
+    if (logBtn) logBtn.addEventListener('click', () => {
+      const picked = Array.prototype.slice.call(host.querySelectorAll('.su-chk:checked')).map((c) => c.dataset.id);
+      const stEl = $('#suStatus');
+      if (!picked.length) { stEl.textContent = 'Tick at least one item to log.'; return; }
+      const items = picked.map((id) => {
+        const u = usage.find((x) => x.itemId === id) || {};
+        const inp = host.querySelector('.su-used[data-id="' + cssEsc(id) + '"]');
+        const amt = inp ? (Number(inp.value) || 0) : u.amount;
+        return { itemId: id, itemName: u.itemName, unit: u.unit, amount: Math.abs(amt) };
+      }).filter((x) => x.amount);
+      if (!items.length) { stEl.textContent = 'Enter the amounts used.'; return; }
+      logBtn.disabled = true;
+      const date = rec.date || new Date().toISOString().slice(0, 10);
+      (async () => {
+        try {
+          // Re-logging: reverse the previous sheet deductions first.
+          if (rec.inventoryApplied) {
+            const prior = Store.transactionsForExperiment(rec.id) || [];
+            for (const t of prior) { if (t.sheetDelta) { stEl.textContent = 'Reversing previous deduction\u2026'; await postAdjust(t.itemId, -t.sheetDelta); } }
+            Store.removeTransactionsForExperiment(rec.id);
+          }
+          const txs = []; let n = 0;
+          for (const it of items) { n += 1; stEl.textContent = 'Deducting from the inventory sheet\u2026 (' + n + '/' + items.length + ')';
+            const d = await postAdjust(it.itemId, -it.amount);
+            if (d && d.ok) txs.push({ itemId: it.itemId, itemName: it.itemName, unit: it.unit, delta: 0, sheetDelta: -it.amount, date: date, reason: 'Used \u2014 ' + rec.name, experimentId: rec.id });
+          }
+          Store.addTransactions(txs);
+          rec.inventoryApplied = true; rec.status = 'completed'; rec.reserved = false; Store.saveExperiment(rec);
+          await loadLiveInventory().catch(() => {}); pushReservedToSheet();
+          renderSupplyUsage();
+        } catch (e) { stEl.textContent = 'Deduction failed: ' + e; logBtn.disabled = false; }
+      })();
+    });
+    const undoBtn = $('#suUndo');
+    if (undoBtn) undoBtn.addEventListener('click', () => {
+      if (!confirm('Undo this experiment\u2019s deductions? This adds the amounts back to the inventory sheet and moves it back to reserved.')) return;
+      const stEl = $('#suStatus'); undoBtn.disabled = true;
+      (async () => {
+        try {
+          const prior = Store.transactionsForExperiment(rec.id) || [];
+          let n = 0; for (const t of prior) { if (t.sheetDelta) { n += 1; stEl.textContent = 'Restoring stock\u2026 (' + n + ')'; await postAdjust(t.itemId, -t.sheetDelta); } }
+          Store.removeTransactionsForExperiment(rec.id);
+          rec.inventoryApplied = false; rec.status = 'planned'; rec.reserved = true; Store.saveExperiment(rec);
+          await loadLiveInventory().catch(() => {}); pushReservedToSheet();
+          renderSupplyUsage();
+        } catch (e) { stEl.textContent = 'Undo failed: ' + e; undoBtn.disabled = false; }
+      })();
+    });
+    const kitBtn = $('#suKits'); if (kitBtn) kitBtn.addEventListener('click', () => recordUsageUI(rec.id));
+  }
   function renderReview(id) { const s = REV_STUBS[id]; if (s) stubPage(s[0], s[1], s[2]); }
 
   // ---- Calendar page (all scheduled experiments + month grid + equipment week)
@@ -450,6 +542,7 @@
     libraryPooling: { title: 'Library pooling & submission', body: 'Real practice: pool WITHIN a library type and submit one pooled lane per type (1\u00d7 GEX, 1\u00d7 VDJ-TCR, 1\u00d7 VDJ-BCR, 1\u00d7 CSP/ADT, 1\u00d7 ATAC) \u2014 not everything into one mixed pool. Normalize each library to equal molarity, then combine equal-molar volumes proportional to each library\u2019s read demand. The exact route (YCGA vs Biohub) may differ.' },
     thawCapacity: { title: 'Thaw capacity', body: 'People available \u00d7 max samples one person can thaw in the working window (19). Exceeding it means you should add a person or split the thaw across days.' },
     confounderSpread: { title: 'Confounder spread', body: 'A 0\u2013100% score for how evenly a flagged confounder\u2019s values (e.g. timepoints, conditions) are distributed across the genetic pools. 100% means each pool has a near-identical mix; a low score means some pools are dominated by one value (e.g. a pool that is almost all V00), which can confound batch effects with biology. The pooling algorithm maximizes this while never breaking the hard same-patient / same-lineage rule.' },
+    laneEdit: { title: 'Adjusting lanes per modality', body: 'The tool computes lane counts to hit your per-sample cell targets. You can override any modality here \u2014 e.g. drop ASAP from 16 to 14 lanes to save reagents. Cells recovered per sample scale roughly linearly with lanes (\u2248 lanes \u00d7 recovered cells/lane \u00f7 samples), so fewer lanes means fewer cells/sample. The ~cells/sample figure is an estimate to help you weigh the trade-off; your chosen lane counts flow through to tube labels, the chip layout, index assignments, and the reagent/cost estimate. Reducing lanes below the computed value means you should confirm the resulting cells/sample is still adequate for your assay.' },
     poolComposition: { title: 'Pool composition & ALLCELLS', body: 'Each genetic pool combines the per-sample pooled contributions of its members, plus an even share of the batch-wide ALLCELLS control (ALLCELLS % \u00d7 one sample\u2019s pool contribution, split across all pools). ALLCELLS is a common reference aliquot loaded into every pool so cross-pool batch effects can be normalized during analysis.' }
   };
 
@@ -586,7 +679,11 @@
   // lane; sort = 1 lane/population). We feed these into the scenario so the
   // flowchart shows the SAME lanes as the reagent calc. The scenario's cell-flow
   // then just verifies there are enough cells to load them.
-  function laneOverridesFromCost(nSamples, nPools, samples) {
+  let LANE_OVERRIDE = null;                 // { unsort, asap, sort } when the user edits lanes
+  let LANE_COMPUTED = null;                 // the auto-computed baseline (for the impact display)
+  const RECOVERED_PER_LANE = { unsort: 50000, asap: 45000, sort: 50000 };  // approx recovered cells/lane
+
+  function computeDefaultLanes(nSamples, nPools, samples) {
     if (!DATA || !window.CostEngine) return null;
     try {
       const cost = CostEngine.computeCost(DATA, {
@@ -600,6 +697,11 @@
       });
       return { unsort, asap, sort };
     } catch (e) { return null; }
+  }
+
+  function laneOverridesFromCost(nSamples, nPools, samples) {
+    if (LANE_OVERRIDE) return { unsort: LANE_OVERRIDE.unsort, asap: LANE_OVERRIDE.asap, sort: LANE_OVERRIDE.sort };
+    return computeDefaultLanes(nSamples, nPools, samples);
   }
 
   function scenarioForPlan(plan) {
@@ -1115,10 +1217,10 @@
     const cols = allColumnDefs();
     const theadCells = cols.map((c) => {
       if (c.core) return `<th>${esc(c.label)}</th>`;
-      return `<th class="col-custom">
+      return `<th class="col-custom"><div class="col-custom-inner">
         <input type="text" class="col-name-input" data-col-index="${c.customIndex}" value="${escAttr(c.label)}" />
         <button type="button" class="col-remove" data-col-index="${c.customIndex}" title="Remove column">×</button>
-      </th>`;
+      </div></th>`;
     }).join('');
     const bodyRows = GRID_ROWS.map((row, ri) => {
       const cells = cols.map((c, ci) => `<td><input type="text" data-row="${ri}" data-col="${ci}" value="${escAttr(row[ci] == null ? '' : row[ci])}" /></td>`).join('');
@@ -1160,7 +1262,7 @@
     GRID_ROWS = [];
     CUSTOM_COLS = [];
     CONFOUNDER_CHECKED_IDX = new Set();
-    POOL_OVERRIDE = null;
+    POOL_OVERRIDE = null; LANE_OVERRIDE = null;
     renderGrid();
     resetPoolingPreview();
   }
@@ -1180,7 +1282,7 @@
         GRID_ROWS.push([sampleId, patientId, lineage, cellsAvailable, tp]);
       }
     }
-    POOL_OVERRIDE = null;
+    POOL_OVERRIDE = null; LANE_OVERRIDE = null;
     renderGrid();
     resetPoolingPreview();
   }
@@ -1358,8 +1460,36 @@
     return calc;
   }
 
-  function renderPoolingPreview(calc, scrollToResult) {
-    const { poolRes, htoRes, usedOverride, confounderCols } = calc;
+  // Wire the per-modality lane inputs: update the override, refresh the
+  // cells/sample impact live, and re-render everything that depends on lanes.
+  function wireLaneEditor(nSamplesTot) {
+    const host = $('#poolingPreview'); if (!host) return;
+    const cps = (mod, lanes) => nSamplesTot ? Math.round(lanes * RECOVERED_PER_LANE[mod] / nSamplesTot) : 0;
+    host.querySelectorAll('.lane-edit').forEach((inp) => {
+      inp.addEventListener('input', () => {
+        const base = LANE_OVERRIDE || Object.assign({}, LANE_COMPUTED || { unsort: 0, asap: 0, sort: 0 });
+        const mod = inp.dataset.mod;
+        let v = parseInt(inp.value, 10); if (isNaN(v) || v < 0) v = 0;
+        base[mod] = v; LANE_OVERRIDE = base;
+        const cur = cps(mod, v), def = cps(mod, (LANE_COMPUTED || {})[mod] || 0);
+        const cell = host.querySelector('[data-cps="' + mod + '"]'); if (cell) cell.textContent = '~' + cur.toLocaleString();
+        const was = host.querySelector('[data-cpsdef="' + mod + '"]');
+        if (was) was.textContent = (v !== ((LANE_COMPUTED || {})[mod] || 0)) ? ('(was ~' + def.toLocaleString() + ')') : '';
+        const rb = $('#resetLanes'); if (rb) rb.disabled = false;
+      });
+      inp.addEventListener('change', () => { refreshLaneDependents(); });
+    });
+    const reset = $('#resetLanes');
+    if (reset) reset.addEventListener('click', () => { LANE_OVERRIDE = null; refreshLaneDependents(); computePooling(); });
+  }
+
+  // After a lane override changes, labels/chip/indexes/cost pull lanes lazily
+  // via laneOverridesFromCost, so they pick it up automatically on next use.
+  function refreshLaneDependents() {
+    try { flashSaveStatus('Lane counts updated \u2014 labels, chip layout, indexes & cost will use your values'); } catch (e) { /* noop */ }
+  }
+
+  function renderPoolingPreview(calc, scrollToResult) {    const { poolRes, htoRes, usedOverride, confounderCols } = calc;
     const htoByPool = {}; htoRes.assignments.forEach((a) => { htoByPool[a.pool] = a.hto; });
     const superPoolByPool = {};
     htoRes.superPools.forEach((grp, spIdx) => grp.forEach((p) => { superPoolByPool[p] = spIdx; }));
@@ -1396,13 +1526,36 @@
     const warnings = [].concat(poolRes.warnings, htoRes.warnings);
     const warnHTML = warnings.length ? '<div class="callout warn"><strong>Notes:</strong><ul>' + warnings.map((w) => '<li>' + esc(w) + '</li>').join('') + '</ul></div>' : '';
 
+    // ---- Lanes-to-sequence editor (override the computed lane counts) --------
+    const nSamplesTot = poolRes.pools.reduce((sum, p) => sum + p.length, 0) || 0;
+    const defLanes = computeDefaultLanes(nSamplesTot, poolRes.nPools, calc.samples) || { unsort: 0, asap: 0, sort: 0 };
+    LANE_COMPUTED = defLanes;
+    const curLanes = LANE_OVERRIDE || defLanes;
+    const cps = (mod, lanes) => nSamplesTot ? Math.round(lanes * RECOVERED_PER_LANE[mod] / nSamplesTot) : 0;
+    const MOD_LABEL = { unsort: "Unsort 5'", asap: 'ASAP', sort: "Sort 5'" };
+    const laneModRows = ['unsort', 'asap', 'sort'].filter((m) => defLanes[m] > 0).map((m) => {
+      const def = defLanes[m], cur = curLanes[m];
+      return '<tr><td>' + MOD_LABEL[m] + '</td><td class="num">' + def + '</td>'
+        + '<td class="num"><input class="lane-edit" type="number" min="0" step="1" data-mod="' + m + '" value="' + cur + '" style="width:64px"></td>'
+        + '<td class="num" data-cps="' + m + '">~' + cps(m, cur).toLocaleString() + '</td>'
+        + '<td class="num" data-cpsdef="' + m + '">' + (cur !== def ? '(was ~' + cps(m, def).toLocaleString() + ')' : '') + '</td></tr>';
+    }).join('');
+    const laneEditorHTML = laneModRows ? (
+      '<h3>Lanes to sequence per modality <button type="button" class="info-i" data-explain="laneEdit">i</button></h3>'
+      + '<p class="step-hint">The tool computed these lane counts to hit your cell targets. You can run fewer (or more) lanes per modality \u2014 reducing lanes lowers the cells recovered per sample proportionally. Downstream labels, chip layout, indexes and cost follow your choice.</p>'
+      + '<table class="cost-table"><thead><tr><th>Modality</th><th class="num">Computed</th><th class="num">Run</th><th class="num">~Cells / sample</th><th></th></tr></thead><tbody>' + laneModRows + '</tbody></table>'
+      + '<div class="row-actions" style="margin-top:8px"><button type="button" id="resetLanes" class="btn ghost"' + (LANE_OVERRIDE ? '' : ' disabled') + '>Reset to computed</button></div>'
+    ) : '';
+
     $('#poolingPreview').innerHTML = `
       ${warnHTML}
       <table class="cost-table"><thead><tr><th>Pool</th><th>HTO</th><th>Super-pool</th><th class="num">Samples</th>${confHeads}</tr></thead><tbody>${rows}</tbody></table>
       ${compositionHTML}
+      ${laneEditorHTML}
       <div id="poolingOptionsHost"></div>
       <h3>Pipeline cell-flow (this strategy)</h3>
       <div id="pipelineFlow"></div>`;
+    wireLaneEditor(nSamplesTot);
 
     // Alternative pooling options (only when auto-computing, not on an upload).
     if (!usedOverride && window.Workflow && calc.samples) {
@@ -3778,8 +3931,8 @@
       '<td class="num">' + (i.known
         ? '<strong>' + fmtQ(i.onHandUnits) + '</strong> ' + esc(i.usageUnit) + (i.hasContainers ? '<div class="who">' + fmt1(i.onHandUnits / i.packSize) + ' ' + esc(i.container) + '</div>' : '')
         : '\u2014') + '</td>' +
-      '<td class="num">' + (i.reserved ? fmtQ(i.reserved) + ' ' + esc(i.usageUnit) : '\u2014') + '</td>' +
-      '<td class="num"><strong>' + (i.status === 'unknown' ? '\u2014' : fmtQ(i.availableUnits)) + '</strong>' + (i.status === 'unknown' ? '' : ' ' + esc(i.usageUnit)) + '</td>' +
+      '<td class="num">' + (i.reserved ? fmtQ(i.reserved) + ' ' + esc(i.usageUnit) + (i.reservedBy && i.reservedBy.length ? '<div class="who">' + i.reservedBy.map((r) => esc(r.name)).join(', ') + '</div>' : '') : '\u2014') + '</td>' +
+      '<td class="num"><strong>' + (i.status === 'unknown' ? '\u2014' : fmtQ(i.availableUnits)) + '</strong>' + (i.status === 'unknown' ? '' : ' ' + esc(i.usageUnit)) + (i.known && i.reserved > i.onHandUnits ? '<div class="who inv-overcommit">over-committed</div>' : '') + '</td>' +
       '<td class="num">' + (i.toOrder > 0 ? '<strong>' + fmtQ(i.toOrder) + '</strong> ' + orderUnit(i) : '\u2014') + '</td>' +
       '<td class="num">' + (i.threshold ? fmtQ(i.threshold) + ' ' + esc(i.usageUnit) : '\u2014') + '</td>' +
       '<td>' + badge(i.status) + '</td>' +
@@ -3825,6 +3978,28 @@
       ? '<table class="cost-table exp-table"><thead><tr><th>Experiment</th><th class="num">Samples</th><th>Project</th><th>Date</th><th>Planned by</th><th>Action</th></tr></thead><tbody>' + dedRows + '</tbody></table>'
       : '<p class="empty">No experiments have deducted reagents yet. Use \u201cRecord inventory\u201d on a completed experiment to draw down stock.</p>';
 
+    // Manual stock adjustment — ad-hoc changes not tied to an experiment.
+    const itemOpts = st.items.slice().sort((a, b) => (a.name < b.name ? -1 : 1)).map((i) => '<option value="' + escAttr(i.id) + '">' + esc(i.name) + ' (' + esc(i.id) + ')</option>').join('');
+    const manualTx = ((Store.allTransactions && Store.allTransactions()) || []).filter((t) => !t.experimentId).slice().reverse().slice(0, 12);
+    const manualRows = manualTx.map((t) => { const chg = (t.sheetDelta != null ? t.sheetDelta : t.delta) || 0;
+      return '<tr><td>' + esc((t.date || '').slice(0, 10)) + '</td><td>' + esc(t.itemName || t.itemId) + '</td>'
+      + '<td class="num">' + (chg > 0 ? '+' : '') + fmtQ(chg) + ' ' + esc(t.unit || '') + '</td>'
+      + '<td>' + esc(t.reason || '') + '</td>'
+      + '<td><button class="btn tiny" data-madj-undo="' + escAttr(t.id) + '">Undo</button></td></tr>'; }).join('');
+    const manualList = manualTx.length
+      ? '<table class="cost-table"><thead><tr><th>Date</th><th>Item</th><th class="num">Change</th><th>Reason</th><th></th></tr></thead><tbody>' + manualRows + '</tbody></table>'
+      : '<p class="empty">No manual adjustments logged yet.</p>';
+    const manualAdjust = '<h3 style="margin-top:28px">Manual stock adjustment</h3>'
+      + '<p class="muted">For ad-hoc changes not tied to an experiment \u2014 a vial removed for a one-off, a spill, a recount, or newly received stock. Logged as a dated event on top of the sheet\u2019s baseline (it doesn\u2019t rewrite the sheet).</p>'
+      + '<div class="proj-bar manual-adj">'
+      + '<label>Item <select id="madjItem">' + itemOpts + '</select></label>'
+      + '<label>Change <select id="madjDir"><option value="-1">Remove (\u2212)</option><option value="1">Add (+)</option></select></label>'
+      + '<label>Amount <input type="number" id="madjAmt" min="0" step="any" style="width:88px"></label>'
+      + '<label>Reason <input type="text" id="madjReason" placeholder="e.g. spill, recount, walk-up use" style="width:200px"></label>'
+      + '<button class="btn" id="madjLog">Log adjustment</button></div>'
+      + '<div id="madjStatus" class="muted" style="margin-top:6px"></div>'
+      + '<h4 style="margin-top:14px">Recent manual adjustments</h4>' + manualList;
+
     host.innerHTML =
       '<div class="section-head"><h2>Inventory</h2><div class="head-actions">' +
         '<button class="btn ghost" onclick="window.print()">Print / save PDF</button></div></div>' +
@@ -3835,6 +4010,7 @@
       '</div>' + orderCallout +
       '<p class="muted">Stock is drawn down in <strong>usage units</strong> (tubes / mL / reactions); <strong>To order</strong> is rounded up to whole <strong>containers</strong> (bag / kit / vial / bottle) using each item\u2019s pack size. On hand = starting stock + received \u2212 used (completed experiments). Reserved = demand from reserving experiments. Available = on hand \u2212 reserved. Set pack_size, container, and min_stock_threshold per item in the Live_Inventory sheet.</p>' +
       invSections +
+      manualAdjust +
       '<h3 style="margin-top:28px">Reserved by experiment</h3>' +
       '<p class="muted">Planned experiments holding stock. Removing a reservation frees its reagents back to Available without deleting the experiment.</p>' +
       resTable + addReserve +
@@ -3863,6 +4039,37 @@
       Store.saveExperiment(rec);
       renderInventory(); renderManage(); pushReservedToSheet();
     });
+    const madjLog = $('#madjLog');
+    if (madjLog) madjLog.addEventListener('click', () => {
+      const sel = $('#madjItem'); const id = sel && sel.value; if (!id) return;
+      const amt = Math.abs(Number($('#madjAmt').value) || 0);
+      if (!amt) { $('#madjStatus').textContent = 'Enter an amount.'; return; }
+      const dir = Number($('#madjDir').value) || -1;
+      const delta = dir * amt;
+      const it = st.items.find((x) => x.id === id) || {};
+      const reason = ($('#madjReason').value || '').trim();
+      const stEl = $('#madjStatus'); stEl.textContent = 'Updating the inventory sheet\u2026';
+      madjLog.disabled = true;
+      fetch('/api/inventory', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'adjustOnHand', itemId: id, deltaUnits: delta }) })
+        .then((r) => r.json()).then((d) => {
+          madjLog.disabled = false;
+          if (!d || !d.ok) { stEl.textContent = 'Could not update the sheet: ' + (d && (d.error || d.message) ? (d.error || d.message) : 'unknown error'); return; }
+          // audit-trail entry only (delta 0 so it doesn't double-count — the sheet now holds the change)
+          Store.addTransactions([{ itemId: id, itemName: it.name || id, unit: it.usageUnit || '', delta: 0, sheetDelta: delta,
+            date: new Date().toISOString().slice(0, 10), reason: 'Manual: ' + (reason || (delta < 0 ? 'removed' : 'added')), experimentId: null }]);
+          loadLiveInventory().then(() => renderInventory()).catch(() => renderInventory());
+        })
+        .catch((e) => { madjLog.disabled = false; stEl.textContent = 'Sheet update failed: ' + e; });
+    });
+    host.querySelectorAll('button[data-madj-undo]').forEach((b) => b.addEventListener('click', () => {
+      const txId = b.dataset.madjUndo;
+      const t = (Store.allTransactions() || []).find((x) => x.id === txId);
+      const finish = () => { if (Store.removeTransaction) Store.removeTransaction(txId); loadLiveInventory().then(() => renderInventory()).catch(() => renderInventory()); };
+      if (t && t.sheetDelta) {
+        fetch('/api/inventory', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'adjustOnHand', itemId: t.itemId, deltaUnits: -t.sheetDelta }) })
+          .then(() => finish()).catch(() => finish());
+      } else finish();
+    }));
     inventoryBadge();
   }
 
