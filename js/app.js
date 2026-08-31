@@ -38,10 +38,11 @@
     projects: { panels: [{ id: 'projects', label: 'Project manager' }] },
     calendar: { panels: [{ id: 'calendar', label: 'Calendar' }] },
     handbook: { panels: [{ id: 'handbook', label: 'Handbook' }] },
+    inventory: { panels: [{ id: 'inventory', label: 'Inventory' }] },
     plan: { sidebar: true, panels: [
       { id: 'planproject', label: 'Create batch plan' }, { id: 'plan', label: 'Plan experiment' },
       { id: 'workflow', label: 'Workflow' }, { id: 'protocols', label: 'Protocols' },
-      { id: 'scheduling', label: 'Scheduling' }, { id: 'inventory', label: 'Inventory' },
+      { id: 'scheduling', label: 'Scheduling' },
       { id: 'reagents', label: 'Reagents & cost' } ] },
     record: { sidebar: true, panels: [
       { id: 'rec-freezer', label: 'Freezer Record' },
@@ -75,7 +76,7 @@
     if (top === 'plan') {
       done.planproject = !!CURRENT_PROJECT; done.plan = !!(rec && rec.snapshot);
       done.workflow = !!(rec && rec.snapshot); done.protocols = !!(rec && rec.snapshot);
-      done.scheduling = !!(rec && rec.scheduledAt); done.inventory = !!(rec && rec.actualUsage);
+      done.scheduling = !!(rec && rec.scheduledAt);
       done.reagents = !!(rec && rec.snapshot);
     }
     $$('.side-check').forEach((c) => c.classList.toggle('done', !!done[c.dataset.check]));
@@ -2792,12 +2793,19 @@
     // per-arm lane counts (drive the cDNA/library tube labels)
     const lanes = laneOverridesFromCost(calc.samples.length, nPools, calc.samples) || { unsort: 0, asap: 0, sort: 0 };
 
+    // Canonical sample number = pool-grouped order (pool 1 samples first, then
+    // pool 2, ...) — the SAME numbering used by the Samples and Cell count tabs.
+    const sampleNo = {}; let _sn = 0;
+    calc.poolRes.pools.forEach((pool) => pool.forEach((s) => { sampleNo[s.sampleId] = ++_sn; }));
+    const sampleList = calc.samples.slice().sort((a, b) => (sampleNo[a.sampleId] || 0) - (sampleNo[b.sampleId] || 0));
+
     // ===== Sheet 1: sample prep + FACS + controls + sort output + bulk =====
     const rows1 = [['Tube', 'Line 1', 'Line 2', 'Line 3']];
     const a1 = (t, l1, l2, l3) => rows1.push([t, l1 == null ? '' : String(l1), l2 == null ? '' : String(l2), l3 == null ? '' : String(l3)]);
 
-    calc.samples.forEach((s, idx) => {
-      a1('Sample (15mL)', 'pool ' + (poolOf[s.sampleId] || '?'), idx + 1, (idx + 1) + ' / ' + s.sampleId);
+    sampleList.forEach((s) => {
+      const no = sampleNo[s.sampleId] || '?';
+      a1('Sample (15mL)', 'pool ' + (poolOf[s.sampleId] || '?'), no, no + ' / ' + s.sampleId);
     });
     for (let i = 0; i < nPools; i++) {
       if (hasSort) a1('Pool (50 mL)', 'TotalSeq-C HTO ' + htoNum(i), 'sort' + (i + 1), 'remainder from pool ' + (i + 1));
@@ -2811,7 +2819,7 @@
     a1('Unstain control (FACS)', '', '', '');
     a1('L/D control (FACS)', '', '', '');
     if (hasSort) ['HSC', 'pDC', 'cDC', 'Treg'].forEach((p) => a1('Sort output (FACS)', '', p, ''));
-    if (hasBulk) calc.samples.forEach((s, idx) => a1('BulkRNA (1.5mL tube)', 'Bulk RNA', idx + 1, (idx + 1) + ' / ' + s.sampleId));
+    if (hasBulk) sampleList.forEach((s) => { const no = sampleNo[s.sampleId] || '?'; a1('BulkRNA (1.5mL tube)', 'Bulk RNA', no, no + ' / ' + s.sampleId); });
 
     // ===== Sheet 2: GEM-RT + cDNA + library tubes (Sheet1 naming convention) =====
     // Base ID = {U/A/S}{lane-within-chip}; append -{chip} only when that modality
@@ -3881,7 +3889,7 @@
   }
 
   function inventoryBadge() {
-    const btn = document.querySelector('.side-step[data-panel="inventory"]');
+    const btn = document.querySelector('.tab[data-top="inventory"]');
     if (!btn) return;
     let n = 0;
     try { n = computeInventoryState().items.filter((i) => i.status === 'out' || i.status === 'low').length; } catch (e) { n = 0; }
