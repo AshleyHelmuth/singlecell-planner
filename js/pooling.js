@@ -446,7 +446,17 @@
     const presort = cfg.populationFrequencyPresort || SORT_MODEL.PRESORT_FREQ;
     const empirical = cfg.populationFrequencyEmpirical || SORT_MODEL.EMPIRICAL_FREQ;
 
-    const { nPools, poolSizes } = evenSplitPools(cfg.nSamples, cfg.samplesPerPool);
+    // If the caller passes the actual pool count (cfg.nPools) — e.g. from the
+    // real pooling result — use it directly, since the true pool count is driven
+    // by biological constraints, not a simple nSamples / samplesPerPool divide.
+    let nPools, poolSizes;
+    if (cfg.nPools && cfg.nPools > 0) {
+      nPools = cfg.nPools;
+      const base = Math.floor(cfg.nSamples / nPools), rem = cfg.nSamples % nPools;
+      poolSizes = Array.from({ length: nPools }, (_, i) => base + (i < rem ? 1 : 0));
+    } else {
+      const es = evenSplitPools(cfg.nSamples, cfg.samplesPerPool); nPools = es.nPools; poolSizes = es.poolSizes;
+    }
     const perSampleNeed = cfg.poolContributionPerSample + cfg.bulkTarget + cfg.stimPerCond * cfg.stimN;
     const perSampleOk = cfg.cellsPerSample >= perSampleNeed;
     const leftoverPerSample = cfg.cellsPerSample - perSampleNeed;

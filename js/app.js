@@ -1481,7 +1481,20 @@
       inp.addEventListener('change', () => { refreshLaneDependents(); });
     });
     const reset = $('#resetLanes');
-    if (reset) reset.addEventListener('click', () => { LANE_OVERRIDE = null; refreshLaneDependents(); computePooling(); });
+    if (reset) reset.addEventListener('click', () => {
+      LANE_OVERRIDE = null;
+      // Put the computed numbers back into the inputs + cells/sample, in place, so
+      // it's obvious it reset — and leave the fields editable so they can be changed again.
+      host.querySelectorAll('.lane-edit').forEach((inp) => {
+        const mod = inp.dataset.mod;
+        const def = (LANE_COMPUTED || {})[mod] || 0;
+        inp.value = def;
+        const cell = host.querySelector('[data-cps="' + mod + '"]'); if (cell) cell.textContent = '~' + cps(mod, def).toLocaleString();
+        const was = host.querySelector('[data-cpsdef="' + mod + '"]'); if (was) was.textContent = '';
+      });
+      reset.disabled = true;
+      try { flashSaveStatus('Lane counts reset to the computed values'); } catch (e) { /* noop */ }
+    });
   }
 
   // After a lane override changes, labels/chip/indexes/cost pull lanes lazily
@@ -1596,7 +1609,7 @@
         const arms = buildArmInstances(SEL);
         const nSamples = (samplesFromGrid().samples || []).length || 0;
         const sc = Pooling.exploreScenario(Object.assign({}, a, {
-          nSamples, samplesPerPool: poolRes.nPools ? Math.round(nSamples / poolRes.nPools) : nSamples,
+          nSamples, nPools: poolRes.nPools, samplesPerPool: poolRes.nPools ? Math.round(nSamples / poolRes.nPools) : nSamples,
           sortPopulations: sortSelList(),
           stainTargetUnsort: (LYO_SEL.cite5 && LYO_SEL.cite5.stainCells) || 1500000,
           stainTargetAsap: (LYO_SEL.asap && LYO_SEL.asap.stainCells) || 1500000,
@@ -1868,6 +1881,14 @@
     const byCat = {};
     cost.lineItems.forEach((li) => { (byCat[li.category] = byCat[li.category] || []).push(li); });
 
+    // Catalog lookups: kits by Kit_Catalog id (from the line's source), and
+    // reagents/supplies/antibodies by item_id.
+    const kitById = {}; ((DATA && DATA.kits) || []).forEach((k) => { kitById[k.id] = k; });
+    const catById = {};
+    ((DATA && DATA.supplies) || []).forEach((s) => { if (s.id && s.catalog) catById[s.id] = s.catalog; });
+    ((DATA && DATA.antibodies) || []).forEach((a) => { if (a.id && a.catalog) catById[a.id] = a.catalog; });
+    const kitInfo = (li) => { const m = /Kit_Catalog\s+(K\d+)/.exec(li.source || ''); return (m && kitById[m[1]]) || {}; };
+
     const REAGENT_CATS = ['Antibodies & staining', 'Buffers & reagents', 'Plasticware & consumables'];
     const order = ['10x kits'].concat(REAGENT_CATS, ['Sequencing']);
     const cats = order.filter((c) => byCat[c]).concat(Object.keys(byCat).filter((c) => order.indexOf(c) === -1));
@@ -1878,6 +1899,7 @@
         const rows = items.map((li) => `
           <tr class="${li.placeholder ? 'is-placeholder' : ''}">
             <td>${esc(li.label)}</td>
+            <td>${esc(catById[li.itemId] || '\u2014')}</td>
             <td class="num">${fmtAmount(li)}</td>
             <td class="num">${fmtOrderQty(li)}</td>
             <td>${esc(li.scope || '')}</td>
@@ -1885,7 +1907,27 @@
             <td class="src">${li.note ? esc(li.note) : ''}</td>
           </tr>`).join('');
         return `<h3>${esc(cat)}</h3><table class="cost-table">
-          <thead><tr><th>Reagent</th><th class="num">Total needed</th><th class="num">Order qty</th><th>Scope</th><th class="num">Est. cost</th><th>Notes</th></tr></thead>
+          <thead><tr><th>Reagent</th><th>Catalog #</th><th class="num">Total needed</th><th class="num">Order qty</th><th>Scope</th><th class="num">Est. cost</th><th>Notes</th></tr></thead>
+          <tbody>${rows}</tbody></table>`;
+      }
+      if (cat === '10x kits') {
+        const rows = items.map((li) => {
+          const k = kitInfo(li);
+          const lanes = (li.qty == null ? null : Number(li.qty));
+          const nKits = (k.reactions && lanes != null) ? Math.ceil(lanes / k.reactions) : null;
+          const kitSize = k.reactions ? (k.reactions + ' rxn/kit') : '';
+          return `
+          <tr class="${li.placeholder ? 'is-placeholder' : ''}">
+            <td>${esc(li.label)}</td>
+            <td>${esc(k.part || '\u2014')}</td>
+            <td class="num">${li.qty == null ? '\u2014' : esc(li.qty)}</td>
+            <td class="num"><strong>${nKits == null ? '\u2014' : nKits}</strong></td>
+            <td class="num">${esc(kitSize || '\u2014')}</td>
+            <td class="num">${li.total == null ? '<span class="ph-tag">needs data</span>' : fmtMoney(li.total)}</td>
+            <td class="src">${esc(li.source)}</td>
+          </tr>`; }).join('');
+        return `<h3>10x kits</h3><table class="cost-table">
+          <thead><tr><th>Kit</th><th>Catalog #</th><th class="num">Lanes</th><th class="num"># kits</th><th class="num">Kit size</th><th class="num">Est. cost</th><th>Source</th></tr></thead>
           <tbody>${rows}</tbody></table>`;
       }
       const rows = items.map((li) => `
@@ -1941,20 +1983,29 @@
   function downloadReagentXlsx() {
     if (!LAST_COST) return;
     const cost = LAST_COST;
-    const header = ['Category', 'Reagent', 'Item ID', 'Total needed', 'Units', 'Order quantity', 'Scope', 'Est. cost ($)', 'Notes / source'];
+    const header = ['Category', 'Reagent', 'Item ID', 'Catalog #', 'Total needed', 'Units', '# kits', 'Order quantity', 'Scope', 'Est. cost ($)', 'Notes / source'];
     const rows = [header];
+    const kitById = {}; ((DATA && DATA.kits) || []).forEach((k) => { kitById[k.id] = k; });
+    const catById = {};
+    ((DATA && DATA.supplies) || []).forEach((s) => { if (s.id && s.catalog) catById[s.id] = s.catalog; });
+    ((DATA && DATA.antibodies) || []).forEach((a) => { if (a.id && a.catalog) catById[a.id] = a.catalog; });
     const REAGENT_CATS = ['Antibodies & staining', 'Buffers & reagents', 'Plasticware & consumables'];
     // reagents first (the user's focus), then kits + sequencing
     const orderedCats = REAGENT_CATS.concat(['10x kits', 'Sequencing']);
     const seen = new Set();
     const emit = (li) => {
       const isReagent = ('totalAmount' in li);
+      const km = /Kit_Catalog\s+(K\d+)/.exec(li.source || ''); const kit = km ? kitById[km[1]] : null;
+      const catalog = kit ? (kit.part || '') : (catById[li.itemId] || '');
+      const nKits = (kit && kit.reactions && li.qty != null) ? Math.ceil(Number(li.qty) / kit.reactions) : '';
       rows.push([
         li.category || '',
         li.label || '',
         li.itemId || '',
+        catalog,
         isReagent ? (li.totalAmount == null ? '' : li.totalAmount) : (li.qty == null ? '' : li.qty),
         isReagent ? (li.units || '') : (li.unit || ''),
+        nKits,
         li.quantity != null ? (li.quantity + ' ' + (li.quantityUnit || '')) : '',
         li.scope || '',
         li.total == null ? '' : li.total,
