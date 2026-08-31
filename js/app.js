@@ -2653,7 +2653,7 @@
     return {
       nSamples: plan.nSamples, nPools: plan.nPools, arms: (plan.arms || []).slice(), modalities: (plan.modalities || []).slice(),
       knownTotal: cost.knownTotal, reagents, lineItems, customCols, batches, warnings: (plan.warnings || []).slice(),
-      cellsPerSample: scen.cellsPerSample, unsortAmt: scen.unsortAmt, asapAmt: scen.asapAmt,
+      cellsPerSample: scen.cellsPerSample, poolContributionPerSample: scen.poolContributionPerSample, unsortAmt: scen.unsortAmt, asapAmt: scen.asapAmt,
       laneBreakdown: (cost.laneBreakdown || []).map((l) => ({
         arm: l.arm || l.key, chem: l.chem, population: l.population, laneChem: l.laneChem, lanes: l.lanes,
         vdj: !!l.vdj, libraries: (l.libraries || []).slice(), label: l.label
@@ -3573,7 +3573,7 @@
     const poolKeys = Object.keys(poolMap);
     const spp = poolKeys.length ? Math.round(s.nSamples / poolKeys.length) : 0;
     const hasUnsortArm = lanes.unsort > 0, hasAsapArm = lanes.asap > 0, hasSortArm = lanes.sort > 0;
-    const cpsDefault = s.cellsPerSample != null ? s.cellsPerSample : 2000000;
+    const cpsDefault = s.poolContributionPerSample != null ? s.poolContributionPerSample : (s.cellsPerSample != null ? s.cellsPerSample : 1500000);
     const unsDefault = s.unsortAmt != null ? s.unsortAmt : 1200000;
     const asaDefault = s.asapAmt != null ? s.asapAmt : 1200000;
     const CPS = '$I$8', UNS = '$I$9', ASA = '$I$10';   // design-input cells (fixed positions)

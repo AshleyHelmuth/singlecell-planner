@@ -964,7 +964,7 @@ async function formatSpreadsheet(token, ssId) {
       widths.slice(0, cols).forEach((w, i) => colWidth(sid, i, i + 1, w));
       fmt(sid, 0, Math.max(rows, 1), 0, cols, { verticalAlignment: 'MIDDLE', wrapStrategy: 'WRAP' });
       if (rows) fmt(sid, 0, Math.min(rows, 3), 0, cols, { textFormat: { foregroundColor: RGB(75, 83, 93), italic: true }, wrapStrategy: 'WRAP' });
-      let sampleIdx = 0, entryCols = [], inData = false;
+      let entryCols = [], grpColor = {}, grpIdx = 0;
       vals.forEach((row, r) => {
         const a = String((row && row[0]) || '');
         if (/^design inputs/i.test(a)) { header(sid, r, cols, C.navy); return; }
@@ -974,20 +974,24 @@ async function formatSpreadsheet(token, ssId) {
           fmt(sid, r, r + 1, 8, 9, { backgroundColor: C.yellowInput, horizontalAlignment: 'CENTER', textFormat: { bold: true }, borders: { top: darkMed, bottom: darkMed, left: darkMed, right: darkMed } });
           return;
         }
-        if (/^pool\s/i.test(a) && !/total/i.test(a) && !(row && row[2])) {
-          softTitle(sid, r, cols, C.blueTint, C.blue); return;
-        }
-        if (/^pool$/i.test(a) && /sample/i.test(bcol)) {
+        if (/^pool\s/i.test(a) && !/total/i.test(a) && !(row && row[2])) { softTitle(sid, r, cols, C.blueTint, C.blue); return; }
+        if (/^pool$/i.test(a) && /sample/i.test(bcol)) {   // column-header row (appears once)
           entryCols = [];
           (row || []).forEach((h, ci) => { if (/live %|live cells\/ml|vol\. dilute/i.test(String(h))) entryCols.push(ci); });
-          header(sid, r, cols, C.navy); inData = true; rowHeight(sid, r, r + 1, 42); return;
+          header(sid, r, cols, C.navy); rowHeight(sid, r, r + 1, 42); return;
         }
-        const totalish = /pool .*total/i.test(a) || /pool .*total/i.test(String((row && row[5]) || ''));
-        if (totalish) { fmt(sid, r, r + 1, 0, cols, { backgroundColor: C.blueTint, textFormat: { bold: true }, borders: { top: darkMed, bottom: darkMed } }); inData = false; return; }
-        if (inData && row && row[2]) {
-          sampleIdx += 1;
+        if (/pool .*total/i.test(a) || /pool .*total/i.test(String((row && row[5]) || ''))) {
+          fmt(sid, r, r + 1, 0, cols, { backgroundColor: C.blueTint, textFormat: { bold: true }, borders: { top: darkMed, bottom: darkMed } }); return;
+        }
+        // Sample row = has an Original ID (col C) + a numeric Sample # (col B). Detected
+        // by content so EVERY pool is coloured, not just the first. Colour is keyed to
+        // the genetic group (Original ID) so a patient keeps one colour across pools.
+        const sampleNo = Number(row && row[1]);
+        if (row && row[2] && String(row[1] != null ? row[1] : '').trim() !== '' && !isNaN(sampleNo)) {
+          const grp = String(row[2]).trim();
+          if (grpColor[grp] === undefined) { grpColor[grp] = grpIdx % PASTELS.length; grpIdx += 1; }
           fmt(sid, r, r + 1, 0, cols, { borders: { top: thin, bottom: thin } });
-          fmt(sid, r, r + 1, 2, 3, { backgroundColor: PASTELS[(sampleIdx - 1) % PASTELS.length] });
+          fmt(sid, r, r + 1, 2, 3, { backgroundColor: PASTELS[grpColor[grp]] });
           entryCols.forEach((ci) => fmt(sid, r, r + 1, ci, ci + 1, { backgroundColor: C.yellowInput, horizontalAlignment: 'CENTER', borders: { top: thin, bottom: thin, left: thin, right: thin } }));
         }
       });
