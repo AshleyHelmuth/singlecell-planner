@@ -801,13 +801,13 @@ main > .panel { flex: 1 1 auto; min-width: 0; }
   .side-nav { flex-basis: auto; width: 100%; border-right: 0; border-bottom: 1px solid #e4e9ef; min-height: 0; position: static; }
 }
 /* Calendar */
-.cal-grid { width: 100%; border-collapse: collapse; margin: 8px 0 24px; table-layout: fixed; }
-.cal-grid th { background: #eef2f7; padding: 6px; font-size: 11px; text-transform: uppercase; letter-spacing: .03em; color: var(--muted); border: 1px solid #e4e9ef; }
-.cal-grid td { border: 1px solid #eef2f6; height: 76px; vertical-align: top; padding: 4px; font-size: 12px; }
-.cal-empty { background: #fafbfc; }
-.cal-has { background: #eaf1fb; }
-.cal-n { display: block; font-weight: 600; color: var(--muted); font-size: 11px; }
-.cal-ev { display: block; background: var(--teal, #1f7a7a); color: #fff; border-radius: 4px; padding: 1px 5px; margin-top: 2px; font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mcal { width: 100%; border-collapse: collapse; margin: 8px 0 24px; table-layout: fixed; }
+.mcal th { background: #eef2f7; padding: 6px; font-size: 11px; text-transform: uppercase; letter-spacing: .03em; color: var(--muted); border: 1px solid #e4e9ef; }
+.mcal td { border: 1px solid #eef2f6; height: 76px; vertical-align: top; padding: 4px; font-size: 12px; }
+.mcal-empty { background: #fafbfc; }
+.mcal-has { background: #eaf1fb; }
+.mcal-n { display: block; font-weight: 600; color: var(--muted); font-size: 11px; }
+.mcal-ev { display: block; background: var(--teal, #1f7a7a); color: #fff; border-radius: 4px; padding: 1px 5px; margin-top: 2px; font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cal-embed { border: 0; width: 100%; height: 600px; border-radius: 10px; }
 
 .compute-pooling-row{margin:6px 0 18px;justify-content:flex-start}

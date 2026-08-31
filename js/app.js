@@ -274,9 +274,9 @@
     const byDay = {}; exps.forEach((e) => { const d = dOf(e); if (d.slice(0, 7) === (y + '-' + String(m + 1).padStart(2, '0'))) { const day = parseInt(d.slice(8, 10), 10); (byDay[day] = byDay[day] || []).push(e.name || 'exp'); } });
     const first = new Date(y, m, 1).getDay(); const days = new Date(y, m + 1, 0).getDate();
     const monthName = now.toLocaleString('en-US', { month: 'long', year: 'numeric' });
-    let cells = ''; for (let i = 0; i < first; i++) cells += '<td class="cal-empty"></td>';
-    for (let d = 1; d <= days; d++) { const evs = byDay[d] || []; cells += '<td class="cal-day' + (evs.length ? ' cal-has' : '') + '"><span class="cal-n">' + d + '</span>' + evs.map((n) => '<span class="cal-ev">' + esc(n) + '</span>').join('') + '</td>'; if ((first + d) % 7 === 0) cells += '</tr><tr>'; }
-    h += '<h3>' + esc(monthName) + '</h3><table class="cal-grid"><thead><tr><th>Sun</th><th>Mon</th><th>Tue</th><th>Wed</th><th>Thu</th><th>Fri</th><th>Sat</th></tr></thead><tbody><tr>' + cells + '</tr></tbody></table>';
+    let cells = ''; for (let i = 0; i < first; i++) cells += '<td class="mcal-empty"></td>';
+    for (let d = 1; d <= days; d++) { const evs = byDay[d] || []; cells += '<td class="mcal-day' + (evs.length ? ' mcal-has' : '') + '"><span class="mcal-n">' + d + '</span>' + evs.map((n) => '<span class="mcal-ev">' + esc(n) + '</span>').join('') + '</td>'; if ((first + d) % 7 === 0) cells += '</tr><tr>'; }
+    h += '<h3>' + esc(monthName) + '</h3><table class="mcal"><thead><tr><th>Sun</th><th>Mon</th><th>Tue</th><th>Wed</th><th>Thu</th><th>Fri</th><th>Sat</th></tr></thead><tbody><tr>' + cells + '</tr></tbody></table>';
     // weekly equipment (view-only)
     const embed = (window.Scheduling && Scheduling.mergedEmbedUrl) ? Scheduling.mergedEmbedUrl() : '';
     h += '<h3>Equipment schedule (this week)</h3><p class="muted small">View only \u2014 book equipment on the Plan \u2192 Scheduling step.</p>'
