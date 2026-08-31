@@ -2827,7 +2827,7 @@
     // ID, Line 2 = short tube name, Line 3 = batch date (YYMMDD).
     const rows2 = [['Strip #', 'Tube', 'Modality', 'Type', 'Line 1 (Experiment ID)', 'Line 2', 'Line 3']];
     const dateYY = (function () { const d = (curRec && curRec.date) ? curRec.date : ''; const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(d); return m ? (m[1].slice(2) + m[2] + m[3]) : ''; })();
-    const baseName = (letter, g, perChip, total) => { const nChips = Math.ceil(total / perChip); const chip = Math.floor(g / perChip) + 1; const lane = (g % perChip) + 1; return letter + lane + (nChips > 1 ? '-' + chip : ''); };
+    const baseName = (letter, g) => letter + (g + 1);   // sequential across all chips (no -chip suffix)
     const rangeN = (n) => Array.from({ length: n }, (_, i) => i);
     // Build groups; each group prints on its own tube strip(s) of 8 (no mixing types/modalities).
     const groups = [];
@@ -2954,7 +2954,7 @@
     const hasSort = arms.some((a) => a.population === 'sorted' || a.laneMode === 'perSortPop');
     const vdjOn = (key) => !!(SEL[key] && SEL[key].vdj);
     const lanes = laneOverridesFromCost(calc.samples.length, calc.poolRes.nPools, calc.samples) || { unsort: 0, asap: 0, sort: 0 };
-    const bn = (letter, g, perChip, total) => { const nChips = Math.ceil(total / perChip); const chip = Math.floor(g / perChip) + 1; const lane = (g % perChip) + 1; return letter + lane + (nChips > 1 ? '-' + chip : ''); };
+    const bn = (letter, g) => letter + (g + 1);   // sequential across all chips (no -chip suffix)
     const ctr = {};
     const idxId = (kind) => { const n = (ctr[kind] = (ctr[kind] || 0) + 1) - 1; if (kind === 'rpi') return 'RPI' + ((n % 16) + 1); if (kind === 'd7xx') return 'D7' + String((n % 12) + 1).padStart(2, '0'); const w = n % 96; return String.fromCharCode(65 + Math.floor(w / 12)) + (w % 12 + 1); };
     const IDX = { gex: ['Dual Index TT Set A', 'plate'], csp: ['Dual Index TN Set A', 'plate'], vdj: ['Dual Index TT Set A (VDJ plate)', 'plate'], atac: ['Single Index N Set A', 'plate'], asapAdt: ['RPI oligos (ASAP ADT)', 'rpi'], asapHto: ['D7xx oligos (ASAP HTO)', 'd7xx'] };
@@ -3606,15 +3606,15 @@
         cc2.push([dataRows.length === 1 ? ('Pool ' + pk) : '', nC, sm.patientId || '', sm.sampleId, '', pk, '', '', '',
           { t: 'n', f: 'H' + r + '*I' + r },        // J: total viable = Live Cells/mL * Vol dilute
           { t: 'n', f: CPS },                        // K: cells pooled = $I$8
-          { t: 'n', f: 'IFERROR(ROUNDUP(K' + r + '/H' + r + '*1000,0),"")' }, // L: pool volume
+          { t: 'n', f: 'K' + r + '/H' + r + '*1000' }, // L: pool volume = cells pooled / (cells/mL) * 1000
           '', '', '', '', '']);
       });
       const totRow = cc2.length + 1;
       // fill per-sample modality cells now that we know the pool total row
       dataRows.forEach((r) => {
         const row = cc2[r - 1];
-        if (hasUnsortArm) row[12] = { t: 'n', f: 'IFERROR(' + UNS + '*(K' + r + '/$K$' + totRow + '),"")' }; // M
-        if (hasAsapArm) row[14] = { t: 'n', f: 'IFERROR(' + ASA + '*(K' + r + '/$K$' + totRow + '),"")' };   // O
+        if (hasUnsortArm) row[12] = { t: 'n', f: UNS + '*($K' + r + '/$K$' + totRow + ')' }; // M
+        if (hasAsapArm) row[14] = { t: 'n', f: ASA + '*($K' + r + '/$K$' + totRow + ')' };   // O
       });
       if (dataRows.length > 1) merges.push({ s: { r: startIdx, c: 0 }, e: { r: startIdx + dataRows.length - 1, c: 0 } });
       const firstR = dataRows[0], lastR = dataRows[dataRows.length - 1];
@@ -3622,11 +3622,11 @@
         { t: 'n', f: 'SUM(J' + firstR + ':J' + lastR + ')' },
         { t: 'n', f: 'SUM(K' + firstR + ':K' + lastR + ')' },
         { t: 'n', f: 'SUM(L' + firstR + ':L' + lastR + ')' },
-        hasUnsortArm ? { t: 'n', f: UNS } : '',
-        hasUnsortArm ? { t: 'n', f: 'IFERROR(ROUNDUP(' + UNS + '/L' + totRow + ',1),"")' } : '',
-        hasAsapArm ? { t: 'n', f: ASA } : '',
-        hasAsapArm ? { t: 'n', f: 'IFERROR(ROUNDUP(' + ASA + '/L' + totRow + ',1),"")' } : '',
-        hasSortArm ? { t: 'n', f: 'K' + totRow + (hasUnsortArm ? '-' + UNS : '') + (hasAsapArm ? '-' + ASA : '') } : ''];
+        hasUnsortArm ? { t: 'n', f: 'SUM(M' + firstR + ':M' + lastR + ')' } : '',
+        hasUnsortArm ? { t: 'n', f: '(M' + totRow + '/K' + totRow + ')*L' + totRow } : '',
+        hasAsapArm ? { t: 'n', f: 'SUM(O' + firstR + ':O' + lastR + ')' } : '',
+        hasAsapArm ? { t: 'n', f: '(O' + totRow + '/K' + totRow + ')*L' + totRow } : '',
+        hasSortArm ? { t: 'n', f: 'K' + totRow + (hasUnsortArm ? '-M' + totRow : '') + (hasAsapArm ? '-O' + totRow : '') } : ''];
       cc2.push(tot);
     });
     const wsCC = XLSX.utils.aoa_to_sheet(cc2);
@@ -3673,7 +3673,7 @@
       lanes.unsort, 8, (g) => 'U' + (g + 1));
     chipDiagram('ASAPseq (ATAC v2)', 'ATAC v2', 'CG000496 | Rev B', 'Next GEM Chip H + Chromium Next GEM Chip Holder (silver)',
       [['3: Oil (40ul)', '40ul'], ['2: Gel beads (50ul)', '50ul'], ['1: Sample (MM + nuclei: 70ul)', '70ul'], ['NO FILL - GEM RECOVERY', 'DO NOT ADD']],
-      lanes.asap, 8, (g) => 'A' + ((g % 8) + 1) + (Math.ceil(lanes.asap / 8) > 1 ? '-' + (Math.floor(g / 8) + 1) : ''));
+      lanes.asap, 8, (g) => 'A' + (g + 1));
     chipDiagram("Sort 5' scRNAseq w/ HTO (5' v3)", "5' v3", 'CG000734 | Rev A', "GEM-X 5' Chip + Chromium X/iX Chip Holder (black)",
       [['NO FILL - GEM RECOVERY', 'DO NOT ADD'], ['2: Gel beads (60ul)', '60ul'], ['1: Sample (MM + cells) (60ul)', '60ul'], ['3: Oil (250ul)', '250ul']],
       lanes.sort, 8, (g) => 'S' + (g + 1));
@@ -3683,7 +3683,7 @@
 
     // ---- Library indexes tab (labels + recommended indexes + kits) --------
     // Base ID {U/A/S}{lane}, -{chip} only when >1 chip (matches the tube labels).
-    const bn = (letter, g, perChip, total) => { const nChips = Math.ceil(total / perChip); const chip = Math.floor(g / perChip) + 1; const lane = (g % perChip) + 1; return letter + lane + (nChips > 1 ? '-' + chip : ''); };
+    const bn = (letter, g) => letter + (g + 1);   // sequential across all chips (no -chip suffix)
     // Recommended index kit per library type (from the lab's 10X inventory + ASAP oligos).
     const IDX = {
       gex:     { type: 'Dual Index TT Set A', cat: '1000215', gen: 'plate' },
