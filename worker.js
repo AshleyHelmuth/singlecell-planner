@@ -1212,7 +1212,9 @@ async function handleDrivePost(request, env) {
       const projectId = await driveEnsureFolder(token, body.project, projectsParent);
       let experimentId = null;
       if (body.experiment) experimentId = await driveEnsureFolder(token, body.experiment, projectId);
-      return json({ ok: true, projectId: projectId, experimentId: experimentId });
+      let subId = projectId;   // walk/create nested subfolders (e.g. ['Data','cellaca counts'])
+      if (Array.isArray(body.subPath)) { for (const seg of body.subPath) { if (seg) subId = await driveEnsureFolder(token, String(seg), subId); } }
+      return json({ ok: true, projectId: projectId, experimentId: experimentId, subId: subId });
     }
     if (body.action === 'upload') {
       if (!body.name || !body.folderId || !body.base64 || !body.sourceMime) return json({ error: 'missing_fields' }, 400);
