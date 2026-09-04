@@ -190,10 +190,15 @@
     });
     return { byWell: byWell, order: order };
   }
-  function cellacaSampleOptions(sel) {
+  // Map between canonical sample # (pool-grouped order, same as the labels /
+  // Cell count) and sampleId, so Cellaca wells can be entered by sample number.
+  function sampleNoMap() {
     const calc = computePooling();
-    const ids = calc && calc.samples ? calc.samples.map((s) => s.sampleId).filter(Boolean) : [];
-    return '<option value="">\u2014</option>' + ids.map((id) => '<option value="' + escAttr(id) + '"' + (id === sel ? ' selected' : '') + '>' + esc(id) + '</option>').join('');
+    const byId = {}, byNo = {}; let n = 0;
+    if (calc && calc.poolRes && calc.poolRes.pools) {
+      calc.poolRes.pools.forEach((pool) => pool.forEach((s) => { n += 1; byId[s.sampleId] = n; byNo[n] = s.sampleId; }));
+    }
+    return { byId: byId, byNo: byNo, max: n };
   }
   function renderCellaca() {
     const host = $('#recCellacaContent'); if (!host) return;
@@ -201,28 +206,32 @@
     if (!rec) { host.innerHTML = '<h2>Cellaca counts</h2><p class="empty">Select a project and experiment in the sidebar first.</p>'; return; }
     const stored = rec.cellacaCounts || {};
     const storedRows = Object.keys(stored).map((sid) => { const c = stored[sid];
-      return '<tr><td>' + esc(sid) + '</td><td class="who">' + esc(c.well || '') + (c.plate ? ' \u00b7 ' + esc(c.plate) : '') + '</td>'
+      return '<tr><td class="num">' + (c.sampleNo != null ? c.sampleNo : '\u2014') + '</td><td>' + esc(sid) + '</td><td class="who">' + esc(c.well || '') + (c.plate ? ' \u00b7 ' + esc(c.plate) : '') + '</td>'
         + '<td class="num">' + (c.live != null ? Number(c.live).toLocaleString() : '\u2014') + '</td>'
         + '<td class="num">' + (c.viability != null ? c.viability + '%' : '\u2014') + '</td>'
         + '<td class="num">' + (c.total != null ? Number(c.total).toLocaleString() : '\u2014') + '</td>'
         + '<td><button class="btn tiny" data-cc-del="' + escAttr(sid) + '">\u2715</button></td></tr>'; }).join('');
     const storedTable = Object.keys(stored).length
-      ? '<h3>Stored counts (' + Object.keys(stored).length + ' samples)</h3><table class="cost-table"><thead><tr><th>Sample ID</th><th>Well</th><th class="num">Live (cells/mL)</th><th class="num">Viability</th><th class="num">Total (cells/mL)</th><th></th></tr></thead><tbody>' + storedRows + '</tbody></table>'
+      ? '<h3>Stored counts (' + Object.keys(stored).length + ' samples)</h3><table class="cost-table"><thead><tr><th class="num">Sample #</th><th>Sample ID</th><th>Well</th><th class="num">Live (cells/mL)</th><th class="num">Viability</th><th class="num">Total (cells/mL)</th><th></th></tr></thead><tbody>' + storedRows + '</tbody></table>'
       : '<p class="muted">No counts stored yet for this experiment.</p>';
 
     let mapUI = '';
     if (CELLACA_PENDING) {
+      const nmap = sampleNoMap();
       const wells = CELLACA_PENDING.order;
       const grid = wells.map((w) => {
         const c = CELLACA_PENDING.byWell[w];
+        const cur = CELLACA_PENDING.assign && CELLACA_PENDING.assign[w];
+        const sid = (cur && nmap.byNo[cur]) ? nmap.byNo[cur] : '';
         return '<div class="cc-well"><div class="cc-wname">' + esc(w) + '</div>'
-          + '<select class="cc-sample" data-well="' + escAttr(w) + '">' + cellacaSampleOptions(CELLACA_PENDING.assign && CELLACA_PENDING.assign[w]) + '</select>'
-          + '<div class="cc-metrics">' + (c.live != null ? (Math.round(c.live / 1000) / 1000) + 'M/mL' : '\u2014') + ' \u00b7 ' + (c.viability != null ? c.viability + '%' : '\u2014') + '</div></div>';
+          + '<input type="number" min="1" class="cc-sample" data-well="' + escAttr(w) + '" placeholder="sample #" value="' + (cur || '') + '">'
+          + '<div class="cc-metrics">' + (sid ? esc(sid) + ' \u00b7 ' : '') + (c.live != null ? (Math.round(c.live / 1000) / 1000) + 'M/mL' : '\u2014') + ' \u00b7 ' + (c.viability != null ? c.viability + '%' : '\u2014') + '</div></div>';
       }).join('');
-      mapUI = '<h3>Assign samples to wells <span class="who">' + esc(CELLACA_PENDING.fileName) + '</span></h3>'
-        + '<p class="step-hint">Pick the sample ID loaded in each well. Tip: use <em>Fill in sample order</em> to auto-assign the wells to your sample list top-to-bottom, then just fix any exceptions.</p>'
-        + '<div class="row-actions" style="margin:6px 0"><input id="ccPlate" placeholder="Plate / thawer label (optional)" style="width:220px"> '
-        + '<button class="btn ghost" id="ccFillOrder">Fill in sample order</button> <button class="btn ghost" id="ccClearAssign">Clear</button></div>'
+      mapUI = '<h3>Enter the sample # in each well <span class="who">' + esc(CELLACA_PENDING.fileName) + '</span></h3>'
+        + '<p class="step-hint">Type the sample number loaded in each well (the same numbering as the labels / Cell count tab). Or use <em>Fill in order from #</em> to auto-number the wells sequentially, then fix any exceptions.</p>'
+        + '<div class="row-actions" style="margin:6px 0"><input id="ccPlate" placeholder="Plate / thawer label (optional)" style="width:200px"> '
+        + 'start at # <input id="ccStartNo" type="number" min="1" value="1" style="width:70px"> '
+        + '<button class="btn ghost" id="ccFillOrder">Fill in order from #</button> <button class="btn ghost" id="ccClearAssign">Clear</button></div>'
         + '<div class="cc-grid">' + grid + '</div>'
         + '<div class="row-actions" style="margin-top:12px"><button class="btn primary" id="ccSave">Save counts + upload to Drive</button> <button class="btn ghost" id="ccCancel">Cancel</button></div>'
         + '<div id="ccStatus" class="muted" style="margin-top:8px"></div>';
@@ -259,13 +268,22 @@
     }
     if (fileInput) fileInput.addEventListener('change', () => handleFile(fileInput.files[0]));
 
-    // wire assignment helpers
-    host.querySelectorAll('.cc-sample').forEach((s) => s.addEventListener('change', () => { if (CELLACA_PENDING) { CELLACA_PENDING.assign = CELLACA_PENDING.assign || {}; CELLACA_PENDING.assign[s.dataset.well] = s.value; } }));
+    // wire assignment helpers (store the typed sample #, refresh the id preview)
+    host.querySelectorAll('.cc-sample').forEach((s) => s.addEventListener('input', () => {
+      if (!CELLACA_PENDING) return;
+      CELLACA_PENDING.assign = CELLACA_PENDING.assign || {};
+      const v = parseInt(s.value, 10);
+      CELLACA_PENDING.assign[s.dataset.well] = (isNaN(v) || v < 1) ? '' : v;
+      const nmap = sampleNoMap(); const sid = nmap.byNo[v];
+      const metric = s.parentNode.querySelector('.cc-metrics');
+      const c = CELLACA_PENDING.byWell[s.dataset.well];
+      if (metric) metric.innerHTML = (sid ? esc(sid) + ' \u00b7 ' : '') + (c.live != null ? (Math.round(c.live / 1000) / 1000) + 'M/mL' : '\u2014') + ' \u00b7 ' + (c.viability != null ? c.viability + '%' : '\u2014');
+    }));
     const fillOrder = $('#ccFillOrder');
     if (fillOrder) fillOrder.addEventListener('click', () => {
-      const calc = computePooling(); const ids = calc && calc.samples ? calc.samples.map((s) => s.sampleId) : [];
+      let start = parseInt($('#ccStartNo') && $('#ccStartNo').value, 10); if (isNaN(start) || start < 1) start = 1;
       CELLACA_PENDING.assign = {};
-      CELLACA_PENDING.order.forEach((w, i) => { if (i < ids.length) CELLACA_PENDING.assign[w] = ids[i]; });
+      CELLACA_PENDING.order.forEach((w, i) => { CELLACA_PENDING.assign[w] = start + i; });
       renderCellaca();
     });
     const clearAssign = $('#ccClearAssign');
@@ -280,8 +298,10 @@
     if (!CELLACA_PENDING) return;
     const stEl = $('#ccStatus'); const plate = ($('#ccPlate') && $('#ccPlate').value || '').trim();
     const assign = CELLACA_PENDING.assign || {};
-    const mapped = Object.keys(assign).filter((w) => assign[w]);
-    if (!mapped.length) { stEl.textContent = 'Assign at least one well to a sample first.'; return; }
+    const nmap = sampleNoMap();
+    const mapped = Object.keys(assign).filter((w) => assign[w] && nmap.byNo[assign[w]]);
+    const unresolved = Object.keys(assign).filter((w) => assign[w] && !nmap.byNo[assign[w]]);
+    if (!mapped.length) { stEl.textContent = unresolved.length ? ('No entered sample # matches a sample (max is ' + nmap.max + ').') : 'Enter a sample # in at least one well first.'; return; }
     stEl.textContent = 'Uploading to Drive\u2026';
     const project = rec.project || CURRENT_PROJECT;
     driveApi({ action: 'ensurePath', project: project, subPath: ['Data', 'cellaca counts'] })
@@ -291,10 +311,12 @@
       })
       .then(() => {
         rec.cellacaCounts = rec.cellacaCounts || {};
-        mapped.forEach((w) => { const c = CELLACA_PENDING.byWell[w]; rec.cellacaCounts[assign[w]] = { well: w, plate: plate, live: c.live != null ? c.live : null, viability: c.viability != null ? c.viability : null, total: c.total != null ? c.total : null, file: CELLACA_PENDING.fileName }; });
+        mapped.forEach((w) => { const c = CELLACA_PENDING.byWell[w]; const no = assign[w]; const sid = nmap.byNo[no];
+          rec.cellacaCounts[sid] = { sampleNo: no, well: w, plate: plate, live: c.live != null ? c.live : null, viability: c.viability != null ? c.viability : null, total: c.total != null ? c.total : null, file: CELLACA_PENDING.fileName }; });
         Store.saveExperiment(rec);
         CELLACA_PENDING = null;
         renderCellaca();
+        if (unresolved.length) alert('Saved ' + mapped.length + ' wells. ' + unresolved.length + ' well(s) had a sample # with no matching sample and were skipped.');
       })
       .catch((e) => { stEl.textContent = 'Save failed: ' + e; });
   }
@@ -3818,16 +3840,18 @@
     // ---- Counts tab (Cellaca readouts entered on Record -> Cellaca counts) ----
     const cellCts = (rec && rec.cellacaCounts) || {};
     const ctRows = [['How to use: populated from the Cellaca WellLevel files uploaded on Record \u2192 Cellaca counts.'], [],
-      ['Sample ID', 'Well', 'Plate / thawer', 'Live (cells/mL)', 'Viability (%)', 'Total (cells/mL)']];
-    // list samples in the pooling order, then any extra mapped samples
+      ['Sample #', 'Sample ID', 'Well', 'Plate / thawer', 'Live (cells/mL)', 'Viability (%)', 'Total (cells/mL)']];
+    // canonical pool-grouped sample number (same as labels / Cell count)
+    const ctNo = {}; let _ctn = 0;
+    (s.batches || []).forEach((b) => b.samples.forEach((sm) => { _ctn += 1; ctNo[sm.sampleId] = _ctn; }));
     const seenS = {};
     (s.batches || []).forEach((b) => b.samples.forEach((sm) => {
       const c = cellCts[sm.sampleId]; seenS[sm.sampleId] = 1;
-      ctRows.push([sm.sampleId, c ? (c.well || '') : '', c ? (c.plate || '') : '', c && c.live != null ? c.live : '', c && c.viability != null ? c.viability : '', c && c.total != null ? c.total : '']);
+      ctRows.push([ctNo[sm.sampleId] || '', sm.sampleId, c ? (c.well || '') : '', c ? (c.plate || '') : '', c && c.live != null ? c.live : '', c && c.viability != null ? c.viability : '', c && c.total != null ? c.total : '']);
     }));
-    Object.keys(cellCts).forEach((sid) => { if (!seenS[sid]) { const c = cellCts[sid]; ctRows.push([sid, c.well || '', c.plate || '', c.live != null ? c.live : '', c.viability != null ? c.viability : '', c.total != null ? c.total : '']); } });
+    Object.keys(cellCts).forEach((sid) => { if (!seenS[sid]) { const c = cellCts[sid]; ctRows.push([c.sampleNo || '', sid, c.well || '', c.plate || '', c.live != null ? c.live : '', c.viability != null ? c.viability : '', c.total != null ? c.total : '']); } });
     const wsCT = XLSX.utils.aoa_to_sheet(ctRows);
-    wsCT['!cols'] = [{ wch: 22 }, { wch: 8 }, { wch: 16 }, { wch: 16 }, { wch: 13 }, { wch: 16 }];
+    wsCT['!cols'] = [{ wch: 9 }, { wch: 22 }, { wch: 8 }, { wch: 16 }, { wch: 16 }, { wch: 13 }, { wch: 16 }];
     XLSX.utils.book_append_sheet(wb, wsCT, 'Counts');
 
     // ---- 10X Library Tubes tab (naming grid, per reference) ----------------
