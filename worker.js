@@ -1212,7 +1212,7 @@ async function handleDrivePost(request, env) {
       const projectId = await driveEnsureFolder(token, body.project, projectsParent);
       let experimentId = null;
       if (body.experiment) experimentId = await driveEnsureFolder(token, body.experiment, projectId);
-      let subId = projectId;   // walk/create nested subfolders (e.g. ['Data','cellaca counts'])
+      let subId = experimentId || projectId;   // subfolders nest under the experiment folder when given
       if (Array.isArray(body.subPath)) { for (const seg of body.subPath) { if (seg) subId = await driveEnsureFolder(token, String(seg), subId); } }
       return json({ ok: true, projectId: projectId, experimentId: experimentId, subId: subId });
     }

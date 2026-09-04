@@ -227,18 +227,31 @@
           + '<input type="number" min="1" class="cc-sample" data-well="' + escAttr(w) + '" placeholder="sample #" value="' + (cur || '') + '">'
           + '<div class="cc-metrics">' + (sid ? esc(sid) + ' \u00b7 ' : '') + (c.live != null ? (Math.round(c.live / 1000) / 1000) + 'M/mL' : '\u2014') + ' \u00b7 ' + (c.viability != null ? c.viability + '%' : '\u2014') + '</div></div>';
       }).join('');
-      mapUI = '<h3>Enter the sample # in each well <span class="who">' + esc(CELLACA_PENDING.fileName) + '</span></h3>'
-        + '<p class="step-hint">Type the sample number loaded in each well (the same numbering as the labels / Cell count tab). Or use <em>Fill in order from #</em> to auto-number the wells sequentially, then fix any exceptions.</p>'
-        + '<div class="row-actions" style="margin:6px 0"><input id="ccPlate" placeholder="Plate / thawer label (optional)" style="width:200px"> '
-        + 'start at # <input id="ccStartNo" type="number" min="1" value="1" style="width:70px"> '
+      const PURPOSES = ['Thawing count', 'ASAP pre-load', "5' unsort pre-load", 'Sort pre-load'];
+      const purposeOpts = PURPOSES.map((p) => '<option value="' + escAttr(p) + '"' + (CELLACA_PENDING.purpose === p ? ' selected' : '') + '>' + esc(p) + '</option>').join('')
+        + '<option value="__other__"' + (CELLACA_PENDING.purpose === '__other__' ? ' selected' : '') + '>Other\u2026</option>';
+      mapUI = '<h3>This upload <span class="who">' + esc(CELLACA_PENDING.fileName) + '</span></h3>'
+        + '<div class="row-actions" style="margin:6px 0;flex-wrap:wrap">'
+        + '<label>Count for <select id="ccPurpose">' + purposeOpts + '</select></label>'
+        + '<input id="ccPurposeOther" placeholder="describe count" style="width:180px;' + (CELLACA_PENDING.purpose === '__other__' ? '' : 'display:none') + '" value="' + escAttr(CELLACA_PENDING.purposeOther || '') + '">'
+        + '<label>Thawer <input id="ccPlate" placeholder="thawer / plate" style="width:160px" value="' + escAttr(CELLACA_PENDING.plate || '') + '"></label>'
+        + '</div>'
+        + '<h4 style="margin:12px 0 4px">Enter the sample # in each well</h4>'
+        + '<p class="step-hint">Type the sample number loaded in each well (same numbering as the labels / Cell count tab), or use <em>Fill in order from #</em> to auto-number.</p>'
+        + '<div class="row-actions" style="margin:6px 0">start at # <input id="ccStartNo" type="number" min="1" value="1" style="width:70px"> '
         + '<button class="btn ghost" id="ccFillOrder">Fill in order from #</button> <button class="btn ghost" id="ccClearAssign">Clear</button></div>'
         + '<div class="cc-grid">' + grid + '</div>'
-        + '<div class="row-actions" style="margin-top:12px"><button class="btn primary" id="ccSave">Save counts + upload to Drive</button> <button class="btn ghost" id="ccCancel">Cancel</button></div>'
+        + '<div class="row-actions" style="margin-top:12px"><button class="btn primary" id="ccSave">Save this count + upload to Drive</button> <button class="btn ghost" id="ccCancel">Cancel</button></div>'
         + '<div id="ccStatus" class="muted" style="margin-top:8px"></div>';
     }
 
+    const topActions = Object.keys(stored).length
+      ? '<div class="row-actions" style="margin:4px 0 14px"><button class="btn" id="ccSaveAll">Save all counts to spreadsheet (Drive)</button><span id="ccAllStatus" class="muted"></span></div>'
+      : '';
+
     host.innerHTML = '<h2>Cellaca counts <span class="who">' + esc(rec.name || '') + '</span></h2>'
-      + '<p class="step-hint">Drag a Cellaca <strong>WellLevel .xlsx</strong> here (one plate at a time). The file is saved to the project\u2019s <strong>Data \u203a cellaca counts</strong> folder, and the per-well live / viability / total counts are stored against each sample.</p>'
+      + '<p class="step-hint">Drag a Cellaca <strong>WellLevel .xlsx</strong> here (one plate at a time). Each file is renamed and saved to the experiment\u2019s <strong>data \u203a cellaca counts</strong> folder with thawer + count-purpose metadata, and the per-sample counts are stored on the experiment.</p>'
+      + topActions
       + '<div id="ccDrop" class="cc-drop">Drop a WellLevel .xlsx here, or click to browse<input type="file" id="ccFile" accept=".xlsx" hidden></div>'
       + mapUI + '<div style="margin-top:20px"></div>' + storedTable;
 
@@ -254,7 +267,7 @@
           const parsed = parseCellacaWorkbook(wb);
           if (!parsed.order.length) { alert('No wells found in that file \u2014 is it a Cellaca WellLevel export?'); return; }
           let bin = ''; for (let i = 0; i < data.length; i++) bin += String.fromCharCode(data[i]);
-          CELLACA_PENDING = { fileName: file.name, base64: btoa(bin), byWell: parsed.byWell, order: parsed.order, assign: {} };
+          CELLACA_PENDING = { fileName: file.name, base64: btoa(bin), wb: wb, byWell: parsed.byWell, order: parsed.order, assign: {}, purpose: 'Thawing count', purposeOther: '', plate: '' };
           renderCellaca();
         } catch (err) { alert('Could not read that file: ' + err); }
       };
@@ -288,37 +301,102 @@
     });
     const clearAssign = $('#ccClearAssign');
     if (clearAssign) clearAssign.addEventListener('click', () => { CELLACA_PENDING.assign = {}; renderCellaca(); });
+    const purposeSel = $('#ccPurpose');
+    if (purposeSel) purposeSel.addEventListener('change', () => { CELLACA_PENDING.purpose = purposeSel.value; const o = $('#ccPurposeOther'); if (o) o.style.display = (purposeSel.value === '__other__') ? '' : 'none'; });
+    const purposeOther = $('#ccPurposeOther'); if (purposeOther) purposeOther.addEventListener('input', () => { CELLACA_PENDING.purposeOther = purposeOther.value; });
+    const plateInp = $('#ccPlate'); if (plateInp) plateInp.addEventListener('input', () => { CELLACA_PENDING.plate = plateInp.value; });
+    const saveAll = $('#ccSaveAll'); if (saveAll) saveAll.addEventListener('click', () => saveAllCounts(rec));
     const cancel = $('#ccCancel'); if (cancel) cancel.addEventListener('click', () => { CELLACA_PENDING = null; renderCellaca(); });
     const save = $('#ccSave'); if (save) save.addEventListener('click', () => saveCellaca(rec));
     host.querySelectorAll('button[data-cc-del]').forEach((b) => b.addEventListener('click', () => {
       const sid = b.dataset.ccDel; if (rec.cellacaCounts) { delete rec.cellacaCounts[sid]; Store.saveExperiment(rec); renderCellaca(); }
     }));
   }
+  function confirmOverwrite(name) {
+    return confirm('This will save \u201c' + name + '\u201d to Drive and OVERWRITE any existing file with that name in the experiment folder. Continue?');
+  }
+  function cellacaPurposeOf(p) {
+    if (p && p.purpose === '__other__') return (p.purposeOther || 'Other').trim();
+    return p ? (p.purpose || '') : '';
+  }
+  function sanitizeName(s) { return String(s || '').replace(/[\\/:*?"<>|]+/g, '-').replace(/\s+/g, ' ').trim(); }
+
   function saveCellaca(rec) {
     if (!CELLACA_PENDING) return;
-    const stEl = $('#ccStatus'); const plate = ($('#ccPlate') && $('#ccPlate').value || '').trim();
+    const stEl = $('#ccStatus'); const plate = (CELLACA_PENDING.plate || '').trim();
+    const purpose = cellacaPurposeOf(CELLACA_PENDING) || 'count';
     const assign = CELLACA_PENDING.assign || {};
     const nmap = sampleNoMap();
     const mapped = Object.keys(assign).filter((w) => assign[w] && nmap.byNo[assign[w]]);
     const unresolved = Object.keys(assign).filter((w) => assign[w] && !nmap.byNo[assign[w]]);
     if (!mapped.length) { stEl.textContent = unresolved.length ? ('No entered sample # matches a sample (max is ' + nmap.max + ').') : 'Enter a sample # in at least one well first.'; return; }
-    stEl.textContent = 'Uploading to Drive\u2026';
+    const expId = rec.experimentId || projectLabel(rec.name || 'experiment');
+    const fileName = sanitizeName(expId + ' cellaca counts - ' + purpose) + '.xlsx';
+    if (!confirmOverwrite(fileName)) return;
+    stEl.textContent = 'Building file + uploading to Drive\u2026';
+    // enrich the uploaded workbook with a metadata sheet (thawer, purpose, mapping)
+    let base64 = CELLACA_PENDING.base64;
+    try {
+      const wb = CELLACA_PENDING.wb;
+      const meta = [['Cellaca counts \u2014 metadata'], [],
+        ['Experiment', rec.name || ''], ['Experiment ID', expId], ['Project', rec.project || ''],
+        ['Count for', purpose], ['Thawer', plate], ['Saved', new Date().toISOString().slice(0, 16).replace('T', ' ')], [],
+        ['Well', 'Sample #', 'Sample ID', 'Live (cells/mL)', 'Viability (%)', 'Total (cells/mL)']];
+      mapped.forEach((w) => { const c = CELLACA_PENDING.byWell[w]; const no = assign[w];
+        meta.push([w, no, nmap.byNo[no], c.live != null ? c.live : '', c.viability != null ? c.viability : '', c.total != null ? c.total : '']); });
+      const wsM = XLSX.utils.aoa_to_sheet(meta);
+      if (wb.Sheets['Metadata']) delete wb.Sheets['Metadata'];
+      const names = wb.SheetNames.filter((n) => n !== 'Metadata');
+      wb.Sheets['Metadata'] = wsM; wb.SheetNames = ['Metadata'].concat(names);
+      base64 = XLSX.write(wb, { type: 'base64', bookType: 'xlsx' });
+    } catch (e) { /* fall back to the raw file if enrichment fails */ }
     const project = rec.project || CURRENT_PROJECT;
-    driveApi({ action: 'ensurePath', project: project, subPath: ['Data', 'cellaca counts'] })
+    driveApi({ action: 'ensurePath', project: project, experiment: rec.name || 'Experiment', subPath: ['data', 'cellaca counts'] })
       .then((path) => {
-        if (!path || !path.subId) throw new Error('could not reach Data/cellaca counts folder');
-        return driveApi({ action: 'upload', name: CELLACA_PENDING.fileName, folderId: path.subId, base64: CELLACA_PENDING.base64, sourceMime: XLSX_MIME });
+        if (!path || !path.subId) throw new Error('could not reach the experiment\u2019s data/cellaca counts folder');
+        return driveApi({ action: 'upload', name: fileName, folderId: path.subId, base64: base64, sourceMime: XLSX_MIME });
       })
       .then(() => {
         rec.cellacaCounts = rec.cellacaCounts || {};
         mapped.forEach((w) => { const c = CELLACA_PENDING.byWell[w]; const no = assign[w]; const sid = nmap.byNo[no];
-          rec.cellacaCounts[sid] = { sampleNo: no, well: w, plate: plate, live: c.live != null ? c.live : null, viability: c.viability != null ? c.viability : null, total: c.total != null ? c.total : null, file: CELLACA_PENDING.fileName }; });
+          rec.cellacaCounts[sid] = { sampleNo: no, well: w, plate: plate, purpose: purpose, live: c.live != null ? c.live : null, viability: c.viability != null ? c.viability : null, total: c.total != null ? c.total : null, file: fileName }; });
         Store.saveExperiment(rec);
         CELLACA_PENDING = null;
         renderCellaca();
         if (unresolved.length) alert('Saved ' + mapped.length + ' wells. ' + unresolved.length + ' well(s) had a sample # with no matching sample and were skipped.');
       })
       .catch((e) => { stEl.textContent = 'Save failed: ' + e; });
+  }
+
+  // Standalone counts spreadsheet: all stored counts -> the experiment's
+  // data/cellaca counts folder. Does NOT touch the experiment summary.
+  function saveAllCounts(rec) {
+    const stEl = $('#ccAllStatus');
+    const stored = rec.cellacaCounts || {};
+    if (!Object.keys(stored).length) { if (stEl) stEl.textContent = 'No counts to save yet.'; return; }
+    const expId = rec.experimentId || projectLabel(rec.name || 'experiment');
+    const fileName = sanitizeName(expId + ' cellaca counts - all') + '.xlsx';
+    if (!confirmOverwrite(fileName)) return;
+    if (stEl) stEl.textContent = 'Building spreadsheet\u2026';
+    // order by sample #
+    const rows = [['Cellaca counts \u2014 ' + (rec.name || '')], ['Experiment ID', expId], ['Project', rec.project || ''], ['Saved', new Date().toISOString().slice(0, 16).replace('T', ' ')], [],
+      ['Sample #', 'Sample ID', 'Well', 'Count for', 'Thawer', 'Live (cells/mL)', 'Viability (%)', 'Total (cells/mL)']];
+    Object.keys(stored).map((sid) => ({ sid: sid, c: stored[sid] })).sort((a, b) => (a.c.sampleNo || 0) - (b.c.sampleNo || 0))
+      .forEach(({ sid, c }) => rows.push([c.sampleNo != null ? c.sampleNo : '', sid, c.well || '', c.purpose || '', c.plate || '', c.live != null ? c.live : '', c.viability != null ? c.viability : '', c.total != null ? c.total : '']));
+    const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.aoa_to_sheet(rows);
+    ws['!cols'] = [{ wch: 9 }, { wch: 22 }, { wch: 7 }, { wch: 16 }, { wch: 14 }, { wch: 16 }, { wch: 13 }, { wch: 16 }];
+    XLSX.utils.book_append_sheet(wb, ws, 'Counts');
+    const base64 = XLSX.write(wb, { type: 'base64', bookType: 'xlsx' });
+    if (stEl) stEl.textContent = 'Uploading to Drive\u2026';
+    const project = rec.project || CURRENT_PROJECT;
+    driveApi({ action: 'ensurePath', project: project, experiment: rec.name || 'Experiment', subPath: ['data', 'cellaca counts'] })
+      .then((path) => {
+        if (!path || !path.subId) throw new Error('could not reach the experiment\u2019s data/cellaca counts folder');
+        return driveApi({ action: 'upload', name: fileName, folderId: path.subId, base64: base64, sourceMime: XLSX_MIME, targetMime: GSHEET_MIME });
+      })
+      .then((res) => { if (stEl) stEl.innerHTML = 'Saved <strong>' + esc(fileName.replace('.xlsx', '')) + '</strong> to the experiment\u2019s data \u203a cellaca counts folder.' + (res && res.id ? ' <a href="https://docs.google.com/spreadsheets/d/' + escAttr(res.id) + '/edit" target="_blank" rel="noopener">Open</a>' : ''); })
+      .catch((e) => { if (stEl) stEl.textContent = 'Save failed: ' + e; });
   }
 
   // Supply Usage — a per-experiment pick-list that logs reagent/kit usage to
@@ -3524,6 +3602,7 @@
 
   async function exportProjectSummaryToDrive(project) {
     if (!withSnapshotExps(project).length) { alert('No saved experiments with computed plans in this project yet.'); return; }
+    if (!confirm('This will save the Project summary to Drive, OVERWRITING the current copy in the project folder. Continue?')) return;
     try {
       const path = await driveApi({ action: 'ensurePath', project: project });
       if (!path || !path.projectId) { alert('Could not reach the project\u2019s Drive folder.'); return; }
@@ -4591,6 +4670,7 @@
       else if (act === 'drive') {
         const r = Store.getExperiment(id);
         if (!r || !r.snapshot) { alert('Build the experiment first (Open in planner \u2192 build), then it can be exported to Drive.'); return; }
+        if (!confirm('This will save the Experiment summary, Protocol, labels and library sheets to Drive, OVERWRITING the current copies for this experiment. Continue?')) return;
         openExperiment(id);
         try { openExperimentProtocols(id); } catch (err) { /* protocol render optional */ }
         exportExperimentToDrive(r).then(() => renderManage()).catch(() => renderManage());
