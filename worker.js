@@ -1208,11 +1208,16 @@ async function handleDrivePost(request, env) {
     const token = await driveToken(env);
 
     if (body.action === 'ensurePath') {
-      if (!body.project) return json({ error: 'missing_project' }, 400);
-      const projectId = await driveEnsureFolder(token, body.project, projectsParent);
-      let experimentId = null;
-      if (body.experiment) experimentId = await driveEnsureFolder(token, body.experiment, projectId);
-      let subId = experimentId || projectId;   // subfolders nest under the experiment folder when given
+      let projectId = null, experimentId = null, base;
+      if (body.parentId) {
+        base = body.parentId;   // reuse an already-known folder (avoids creating a duplicate by name)
+      } else {
+        if (!body.project) return json({ error: 'missing_project' }, 400);
+        projectId = await driveEnsureFolder(token, body.project, projectsParent);
+        base = projectId;
+        if (body.experiment) { experimentId = await driveEnsureFolder(token, body.experiment, projectId); base = experimentId; }
+      }
+      let subId = base;   // subfolders nest under the experiment (or the given parent)
       if (Array.isArray(body.subPath)) { for (const seg of body.subPath) { if (seg) subId = await driveEnsureFolder(token, String(seg), subId); } }
       return json({ ok: true, projectId: projectId, experimentId: experimentId, subId: subId });
     }

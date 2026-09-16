@@ -167,7 +167,134 @@
   function renderRecord(id) {
     if (id === 'rec-supply') { renderSupplyUsage(); return; }
     if (id === 'rec-cellaca') { renderCellaca(); return; }
+    if (id === 'rec-tapestation') { renderTapestation(); return; }
     const s = REC_STUBS[id]; if (s) stubPage(s[0], s[1], s[2]);
+  }
+
+  // ===== TapeStation: drag-drop a run .zip, tag it with the experiment part,
+  // edit lane names / dilutions / notes, store to Drive + on the record. =====
+  const TS_PARTS = ['ASAP', "5' unsort GEX", "5' unsort V(D)J", "5' unsort ADT/CSP", "5' sort GEX", "5' sort V(D)J", "5' sort ADT/CSP", 'cDNA', 'Pooled libraries'];
+  let TS_PENDING = null;   // { fileName, base64(zip), runName, part, notes, wells:[{well,description,name,conc,dilution,note,img}] }
+  function parseCsvText(text) {
+    const rows = []; let i = 0, field = '', row = [], inQ = false;
+    while (i < text.length) { const ch = text[i];
+      if (inQ) { if (ch === '"') { if (text[i + 1] === '"') { field += '"'; i++; } else inQ = false; } else field += ch; }
+      else { if (ch === '"') inQ = true; else if (ch === ',') { row.push(field); field = ''; } else if (ch === '\n' || ch === '\r') { if (ch === '\r' && text[i + 1] === '\n') i++; row.push(field); rows.push(row); row = []; field = ''; } else field += ch; }
+      i++; }
+    if (field !== '' || row.length) { row.push(field); rows.push(row); }
+    return rows.filter((r) => r.length && r.some((c) => c !== ''));
+  }
+  async function handleTsZip(file) {
+    if (!window.JSZip) { alert('Zip reader not loaded \u2014 reload the page and try again.'); return; }
+    const buf = await file.arrayBuffer();
+    const zip = await JSZip.loadAsync(buf);
+    let sampleCsv = null, sampleName = ''; const imgs = {};
+    const names = Object.keys(zip.files);
+    for (const n of names) { const base = n.split('/').pop();
+      if (/sampletable\.csv$/i.test(base)) { sampleCsv = await zip.files[n].async('string'); sampleName = base; }
+    }
+    if (!sampleCsv) { alert('No sampleTable.csv found in that zip \u2014 is it a TapeStation run export?'); return; }
+    const rows = parseCsvText(sampleCsv);
+    const hdr = rows[0].map((h) => h.toLowerCase());
+    const iWell = hdr.findIndex((h) => h === 'well'), iConc = hdr.findIndex((h) => h.indexOf('conc') === 0), iDesc = hdr.findIndex((h) => h.indexOf('sample description') === 0);
+    const wells = [];
+    rows.slice(1).forEach((r) => {
+      const well = (r[iWell] || '').trim(); const desc = (r[iDesc] || '').trim();
+      if (!well || /ladder/i.test(desc)) return;   // skip the ladder well
+      wells.push({ well: well, description: desc, name: desc, conc: (r[iConc] || '').trim(), dilution: '', note: '' });
+    });
+    // pull the per-well PNG traces (base64) keyed by well
+    for (const n of names) { const base = n.split('/').pop();
+      if (/\.png$/i.test(base)) { const m = base.match(/_([A-H]\d{1,2})_/); if (m) { imgs[m[1]] = await zip.files[n].async('base64'); } }
+    }
+    wells.forEach((w) => { w.img = imgs[w.well] || null; });
+    let bin = ''; const u8 = new Uint8Array(buf); for (let k = 0; k < u8.length; k++) bin += String.fromCharCode(u8[k]);
+    const runName = file.name.replace(/\.zip$/i, '');
+    TS_PENDING = { fileName: file.name, base64: btoa(bin), runName: runName, part: TS_PARTS[0], notes: '', wells: wells };
+    renderTapestation();
+  }
+  function renderTapestation() {
+    const host = $('#recTapestationContent'); if (!host) return;
+    const rec = CURRENT_EXP_ID ? Store.getExperiment(CURRENT_EXP_ID) : null;
+    if (!rec) { host.innerHTML = '<h2>Tapestation Output</h2><p class="empty">Select a project and experiment in the sidebar first.</p>'; return; }
+    const runs = rec.tapestation || [];
+    const runList = runs.length
+      ? '<h3>Saved runs (' + runs.length + ')</h3><table class="cost-table"><thead><tr><th>Run</th><th>Part</th><th class="num">Lanes</th><th>Notes</th><th></th></tr></thead><tbody>'
+        + runs.map((r, i) => '<tr><td>' + esc(r.runName || '') + '</td><td>' + esc(r.part || '') + '</td><td class="num">' + (r.wells || []).length + '</td><td class="who">' + esc(r.notes || '') + '</td><td><button class="btn tiny" data-ts-del="' + i + '">\u2715</button></td></tr>').join('')
+        + '</tbody></table>'
+      : '<p class="muted">No TapeStation runs saved yet.</p>';
+
+    let editUI = '';
+    if (TS_PENDING) {
+      const partOpts = TS_PARTS.map((p) => '<option' + (TS_PENDING.part === p ? ' selected' : '') + '>' + esc(p) + '</option>').join('') + '<option value="__other__"' + (TS_PARTS.indexOf(TS_PENDING.part) < 0 ? ' selected' : '') + '>Other\u2026</option>';
+      const rows = TS_PENDING.wells.map((w, i) => '<tr><td class="num">' + esc(w.well) + '</td>'
+        + '<td><input class="ts-name" data-i="' + i + '" value="' + escAttr(w.name) + '" style="width:190px"></td>'
+        + '<td class="num">' + esc(w.conc) + '</td>'
+        + '<td><input class="ts-dil" data-i="' + i + '" value="' + escAttr(w.dilution) + '" placeholder="e.g. 1:5" style="width:70px"></td>'
+        + '<td><input class="ts-note" data-i="' + i + '" value="' + escAttr(w.note) + '" placeholder="notes" style="width:150px"></td>'
+        + '<td>' + (w.img ? '<img src="data:image/png;base64,' + w.img + '" style="height:38px;border:1px solid #e4e9ef;border-radius:4px">' : '') + '</td></tr>').join('');
+      editUI = '<h3>This run <span class="who">' + esc(TS_PENDING.fileName) + '</span></h3>'
+        + '<div class="row-actions" style="margin:6px 0;flex-wrap:wrap">'
+        + '<label>Experiment part <select id="tsPart">' + partOpts + '</select></label>'
+        + '<input id="tsPartOther" placeholder="describe part" style="width:170px;' + (TS_PARTS.indexOf(TS_PENDING.part) < 0 ? '' : 'display:none') + '" value="' + escAttr(TS_PARTS.indexOf(TS_PENDING.part) < 0 ? TS_PENDING.part : '') + '">'
+        + '<label>Run notes <input id="tsNotes" style="width:260px" value="' + escAttr(TS_PENDING.notes) + '"></label></div>'
+        + '<p class="step-hint">Edit lane names, enter the dilution used, and add per-lane notes. The raw run (.zip) is saved to the experiment\u2019s <strong>data \u203a tapestation</strong> folder.</p>'
+        + '<div style="overflow:auto"><table class="cost-table"><thead><tr><th>Well</th><th>Sample / lane name</th><th class="num">Conc [pg/\u00b5l]</th><th>Dilution</th><th>Notes</th><th>Trace</th></tr></thead><tbody>' + rows + '</tbody></table></div>'
+        + '<div class="row-actions" style="margin-top:12px"><button class="btn primary" id="tsSave">Save run + upload to Drive</button> <button class="btn ghost" id="tsCancel">Cancel</button></div>'
+        + '<div id="tsStatus" class="muted" style="margin-top:8px"></div>';
+    }
+
+    host.innerHTML = '<h2>Tapestation Output <span class="who">' + esc(rec.name || '') + '</span></h2>'
+      + '<p class="step-hint">Drag a TapeStation run <strong>.zip</strong> (the exported run folder) here. It reads the concentration summary + traces, lets you tag the experiment part and dilutions, and stores it in the experiment\u2019s <strong>data \u203a tapestation</strong> folder.</p>'
+      + '<div id="tsDrop" class="cc-drop">Drop a TapeStation run .zip here, or click to browse<input type="file" id="tsFile" accept=".zip" hidden></div>'
+      + editUI + '<div style="margin-top:20px"></div>' + runList;
+
+    const drop = $('#tsDrop'), fileInput = $('#tsFile');
+    const onFile = (f) => { if (f) handleTsZip(f).catch((e) => alert('Could not read that zip: ' + e)); };
+    if (drop) {
+      drop.addEventListener('click', () => fileInput && fileInput.click());
+      drop.addEventListener('dragover', (e) => { e.preventDefault(); drop.classList.add('drag'); });
+      drop.addEventListener('dragleave', () => drop.classList.remove('drag'));
+      drop.addEventListener('drop', (e) => { e.preventDefault(); drop.classList.remove('drag'); onFile(e.dataTransfer.files[0]); });
+    }
+    if (fileInput) fileInput.addEventListener('change', () => onFile(fileInput.files[0]));
+    const partSel = $('#tsPart'); if (partSel) partSel.addEventListener('change', () => { const v = partSel.value; const o = $('#tsPartOther'); if (v === '__other__') { if (o) o.style.display = ''; TS_PENDING.part = (o && o.value) || 'Other'; } else { if (o) o.style.display = 'none'; TS_PENDING.part = v; } });
+    const partOther = $('#tsPartOther'); if (partOther) partOther.addEventListener('input', () => { TS_PENDING.part = partOther.value; });
+    const notesInp = $('#tsNotes'); if (notesInp) notesInp.addEventListener('input', () => { TS_PENDING.notes = notesInp.value; });
+    host.querySelectorAll('.ts-name').forEach((el) => el.addEventListener('input', () => { TS_PENDING.wells[+el.dataset.i].name = el.value; }));
+    host.querySelectorAll('.ts-dil').forEach((el) => el.addEventListener('input', () => { TS_PENDING.wells[+el.dataset.i].dilution = el.value; }));
+    host.querySelectorAll('.ts-note').forEach((el) => el.addEventListener('input', () => { TS_PENDING.wells[+el.dataset.i].note = el.value; }));
+    const cancel = $('#tsCancel'); if (cancel) cancel.addEventListener('click', () => { TS_PENDING = null; renderTapestation(); });
+    const saveBtn = $('#tsSave'); if (saveBtn) saveBtn.addEventListener('click', () => saveTapestation(rec));
+    host.querySelectorAll('button[data-ts-del]').forEach((b) => b.addEventListener('click', () => {
+      const i = +b.dataset.tsDel; if (rec.tapestation && !isNaN(i)) { rec.tapestation.splice(i, 1); Store.saveExperiment(rec); renderTapestation(); }
+    }));
+  }
+  function saveTapestation(rec) {
+    if (!TS_PENDING) return;
+    const stEl = $('#tsStatus');
+    const part = TS_PENDING.part || 'Other';
+    const expId = rec.experimentId || projectLabel(rec.name || 'experiment');
+    const fileName = sanitizeName(expId + ' tapestation ' + part + ' ' + TS_PENDING.runName) + '.zip';
+    if (!confirm('Save this TapeStation run to the experiment\u2019s data/tapestation folder as \u201c' + fileName + '\u201d (overwrites a file of the same name)? The lane summary + traces are stored on the experiment for the Review tab.')) return;
+    stEl.textContent = 'Uploading to Drive\u2026';
+    const req = rec.driveFolderId
+      ? { action: 'ensurePath', parentId: rec.driveFolderId, subPath: ['data', 'tapestation'] }
+      : { action: 'ensurePath', project: rec.project || CURRENT_PROJECT, experiment: rec.name || 'Experiment', subPath: ['data', 'tapestation'] };
+    driveApi(req)
+      .then((path) => {
+        if (path && path.experimentId && rec.driveFolderId !== path.experimentId) { rec.driveFolderId = path.experimentId; }
+        if (!path || !path.subId) throw new Error('could not reach the experiment\u2019s data/tapestation folder');
+        return driveApi({ action: 'upload', name: fileName, folderId: path.subId, base64: TS_PENDING.base64, sourceMime: 'application/zip' });
+      })
+      .then(() => {
+        rec.tapestation = rec.tapestation || [];
+        rec.tapestation.push({ runName: TS_PENDING.runName, part: part, notes: TS_PENDING.notes || '', file: fileName, savedAt: new Date().toISOString().slice(0, 10),
+          wells: TS_PENDING.wells.map((w) => ({ well: w.well, name: w.name, description: w.description, conc: w.conc, dilution: w.dilution, note: w.note, img: w.img })) });
+        Store.saveExperiment(rec);
+        TS_PENDING = null; renderTapestation();
+      })
+      .catch((e) => { stEl.textContent = 'Save failed: ' + e; });
   }
 
   // ---- Cellaca counts: drag-drop a WellLevel .xlsx, map wells -> sample IDs,
@@ -204,15 +331,16 @@
     const host = $('#recCellacaContent'); if (!host) return;
     const rec = CURRENT_EXP_ID ? Store.getExperiment(CURRENT_EXP_ID) : null;
     if (!rec) { host.innerHTML = '<h2>Cellaca counts</h2><p class="empty">Select a project and experiment in the sidebar first.</p>'; return; }
-    const stored = rec.cellacaCounts || {};
-    const storedRows = Object.keys(stored).map((sid) => { const c = stored[sid];
-      return '<tr><td class="num">' + (c.sampleNo != null ? c.sampleNo : '\u2014') + '</td><td>' + esc(sid) + '</td><td class="who">' + esc(c.well || '') + (c.plate ? ' \u00b7 ' + esc(c.plate) : '') + '</td>'
+    const list = (rec.cellacaCountsList || []).slice();
+    const storedRows = list.map((c, i) => {
+      return '<tr><td class="num">' + (c.sampleNo != null ? c.sampleNo : '\u2014') + '</td><td>' + esc(c.sampleId || '') + '</td>'
+        + '<td class="who">' + esc(c.well || '') + '</td><td>' + esc(c.purpose || '') + '</td><td>' + esc(c.thawer || '') + '</td>'
         + '<td class="num">' + (c.live != null ? Number(c.live).toLocaleString() : '\u2014') + '</td>'
         + '<td class="num">' + (c.viability != null ? c.viability + '%' : '\u2014') + '</td>'
         + '<td class="num">' + (c.total != null ? Number(c.total).toLocaleString() : '\u2014') + '</td>'
-        + '<td><button class="btn tiny" data-cc-del="' + escAttr(sid) + '">\u2715</button></td></tr>'; }).join('');
-    const storedTable = Object.keys(stored).length
-      ? '<h3>Stored counts (' + Object.keys(stored).length + ' samples)</h3><table class="cost-table"><thead><tr><th class="num">Sample #</th><th>Sample ID</th><th>Well</th><th class="num">Live (cells/mL)</th><th class="num">Viability</th><th class="num">Total (cells/mL)</th><th></th></tr></thead><tbody>' + storedRows + '</tbody></table>'
+        + '<td><button class="btn tiny" data-cc-del="' + i + '">\u2715</button></td></tr>'; }).join('');
+    const storedTable = list.length
+      ? '<h3>Stored counts (' + list.length + ' rows)</h3><table class="cost-table"><thead><tr><th class="num">Sample #</th><th>Sample ID</th><th>Well</th><th>Count for</th><th>Thawer</th><th class="num">Live (cells/mL)</th><th class="num">Viability</th><th class="num">Total (cells/mL)</th><th></th></tr></thead><tbody>' + storedRows + '</tbody></table>'
       : '<p class="muted">No counts stored yet for this experiment.</p>';
 
     let mapUI = '';
@@ -245,8 +373,8 @@
         + '<div id="ccStatus" class="muted" style="margin-top:8px"></div>';
     }
 
-    const topActions = Object.keys(stored).length
-      ? '<div class="row-actions" style="margin:4px 0 14px"><button class="btn" id="ccSaveAll">Save all counts to spreadsheet (Drive)</button><span id="ccAllStatus" class="muted"></span></div>'
+    const topActions = list.length
+      ? '<div class="row-actions" style="margin:4px 0 14px"><button class="btn" id="ccSaveAll">Re-save counts spreadsheet to Drive</button><span id="ccAllStatus" class="muted"></span></div>'
       : '';
 
     host.innerHTML = '<h2>Cellaca counts <span class="who">' + esc(rec.name || '') + '</span></h2>'
@@ -309,7 +437,8 @@
     const cancel = $('#ccCancel'); if (cancel) cancel.addEventListener('click', () => { CELLACA_PENDING = null; renderCellaca(); });
     const save = $('#ccSave'); if (save) save.addEventListener('click', () => saveCellaca(rec));
     host.querySelectorAll('button[data-cc-del]').forEach((b) => b.addEventListener('click', () => {
-      const sid = b.dataset.ccDel; if (rec.cellacaCounts) { delete rec.cellacaCounts[sid]; Store.saveExperiment(rec); renderCellaca(); }
+      const i = parseInt(b.dataset.ccDel, 10);
+      if (rec.cellacaCountsList && !isNaN(i)) { rec.cellacaCountsList.splice(i, 1); Store.saveExperiment(rec); renderCellaca(); }
     }));
   }
   function confirmOverwrite(name) {
@@ -321,81 +450,76 @@
   }
   function sanitizeName(s) { return String(s || '').replace(/[\\/:*?"<>|]+/g, '-').replace(/\s+/g, ' ').trim(); }
 
+  // Resolve the experiment's data/cellaca counts folder, reusing the already-known
+  // experiment folder id when we have it (so we never create a duplicate by name).
+  function ensureCellacaFolder(rec) {
+    const req = rec.driveFolderId
+      ? { action: 'ensurePath', parentId: rec.driveFolderId, subPath: ['data', 'cellaca counts'] }
+      : { action: 'ensurePath', project: rec.project || CURRENT_PROJECT, experiment: rec.name || 'Experiment', subPath: ['data', 'cellaca counts'] };
+    return driveApi(req).then((path) => {
+      if (path && path.experimentId && rec.driveFolderId !== path.experimentId) { rec.driveFolderId = path.experimentId; Store.saveExperiment(rec); }
+      return path;
+    });
+  }
+  // One spreadsheet, one tab per count purpose; metadata (thawer) as columns so
+  // every thawer's rows accumulate on the same tab.
+  function buildCellacaWb(rec) {
+    const listAll = rec.cellacaCountsList || [];
+    const wb = XLSX.utils.book_new();
+    const byPurpose = {}; const order = [];
+    listAll.forEach((r) => { const p = r.purpose || 'Other'; if (!byPurpose[p]) { byPurpose[p] = []; order.push(p); } byPurpose[p].push(r); });
+    if (!order.length) { XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([['No counts yet']]), 'Counts'); return wb; }
+    const used = {};
+    order.forEach((p) => {
+      const rows = [['Sample #', 'Sample ID', 'Well', 'Thawer', 'Live (cells/mL)', 'Viability (%)', 'Total (cells/mL)', 'Uploaded']];
+      byPurpose[p].slice().sort((a, b) => (a.sampleNo || 0) - (b.sampleNo || 0))
+        .forEach((r) => rows.push([r.sampleNo, r.sampleId, r.well, r.thawer || '', r.live != null ? r.live : '', r.viability != null ? r.viability : '', r.total != null ? r.total : '', r.uploadedAt || '']));
+      const ws = XLSX.utils.aoa_to_sheet(rows);
+      ws['!cols'] = [{ wch: 9 }, { wch: 22 }, { wch: 7 }, { wch: 14 }, { wch: 16 }, { wch: 13 }, { wch: 16 }, { wch: 17 }];
+      let tab = (sanitizeName(p) || 'Counts').slice(0, 28); let t = tab, n = 2; while (used[t]) { t = tab + ' ' + (n++); } used[t] = 1;
+      XLSX.utils.book_append_sheet(wb, ws, t);
+    });
+    return wb;
+  }
+
   function saveCellaca(rec) {
     if (!CELLACA_PENDING) return;
-    const stEl = $('#ccStatus'); const plate = (CELLACA_PENDING.plate || '').trim();
-    const purpose = cellacaPurposeOf(CELLACA_PENDING) || 'count';
+    const stEl = $('#ccStatus'); const thawer = (CELLACA_PENDING.plate || '').trim();
+    const purpose = cellacaPurposeOf(CELLACA_PENDING) || 'Other';
     const assign = CELLACA_PENDING.assign || {};
     const nmap = sampleNoMap();
     const mapped = Object.keys(assign).filter((w) => assign[w] && nmap.byNo[assign[w]]);
     const unresolved = Object.keys(assign).filter((w) => assign[w] && !nmap.byNo[assign[w]]);
     if (!mapped.length) { stEl.textContent = unresolved.length ? ('No entered sample # matches a sample (max is ' + nmap.max + ').') : 'Enter a sample # in at least one well first.'; return; }
     const expId = rec.experimentId || projectLabel(rec.name || 'experiment');
-    const fileName = sanitizeName(expId + ' cellaca counts - ' + purpose) + '.xlsx';
-    if (!confirmOverwrite(fileName)) return;
-    stEl.textContent = 'Building file + uploading to Drive\u2026';
-    // enrich the uploaded workbook with a metadata sheet (thawer, purpose, mapping)
-    let base64 = CELLACA_PENDING.base64;
-    try {
-      const wb = CELLACA_PENDING.wb;
-      const meta = [['Cellaca counts \u2014 metadata'], [],
-        ['Experiment', rec.name || ''], ['Experiment ID', expId], ['Project', rec.project || ''],
-        ['Count for', purpose], ['Thawer', plate], ['Saved', new Date().toISOString().slice(0, 16).replace('T', ' ')], [],
-        ['Well', 'Sample #', 'Sample ID', 'Live (cells/mL)', 'Viability (%)', 'Total (cells/mL)']];
-      mapped.forEach((w) => { const c = CELLACA_PENDING.byWell[w]; const no = assign[w];
-        meta.push([w, no, nmap.byNo[no], c.live != null ? c.live : '', c.viability != null ? c.viability : '', c.total != null ? c.total : '']); });
-      const wsM = XLSX.utils.aoa_to_sheet(meta);
-      if (wb.Sheets['Metadata']) delete wb.Sheets['Metadata'];
-      const names = wb.SheetNames.filter((n) => n !== 'Metadata');
-      wb.Sheets['Metadata'] = wsM; wb.SheetNames = ['Metadata'].concat(names);
-      base64 = XLSX.write(wb, { type: 'base64', bookType: 'xlsx' });
-    } catch (e) { /* fall back to the raw file if enrichment fails */ }
-    const project = rec.project || CURRENT_PROJECT;
-    driveApi({ action: 'ensurePath', project: project, experiment: rec.name || 'Experiment', subPath: ['data', 'cellaca counts'] })
-      .then((path) => {
-        if (!path || !path.subId) throw new Error('could not reach the experiment\u2019s data/cellaca counts folder');
-        return driveApi({ action: 'upload', name: fileName, folderId: path.subId, base64: base64, sourceMime: XLSX_MIME });
-      })
-      .then(() => {
-        rec.cellacaCounts = rec.cellacaCounts || {};
-        mapped.forEach((w) => { const c = CELLACA_PENDING.byWell[w]; const no = assign[w]; const sid = nmap.byNo[no];
-          rec.cellacaCounts[sid] = { sampleNo: no, well: w, plate: plate, purpose: purpose, live: c.live != null ? c.live : null, viability: c.viability != null ? c.viability : null, total: c.total != null ? c.total : null, file: fileName }; });
-        Store.saveExperiment(rec);
-        CELLACA_PENDING = null;
-        renderCellaca();
-        if (unresolved.length) alert('Saved ' + mapped.length + ' wells. ' + unresolved.length + ' well(s) had a sample # with no matching sample and were skipped.');
-      })
+    const fileName = sanitizeName(expId + ' cellaca counts');
+    if (!confirm('Add these ' + mapped.length + ' counts (' + purpose + (thawer ? ', ' + thawer : '') + ') to the \u201c' + fileName + '\u201d spreadsheet in Drive? Existing counts are kept \u2014 the new rows are appended.')) return;
+    stEl.textContent = 'Saving\u2026';
+    const uploadedAt = new Date().toISOString().slice(0, 16).replace('T', ' ');
+    rec.cellacaCountsList = rec.cellacaCountsList || [];
+    mapped.forEach((w) => { const c = CELLACA_PENDING.byWell[w]; const no = assign[w]; const sid = nmap.byNo[no];
+      rec.cellacaCountsList.push({ sampleNo: no, sampleId: sid, well: w, thawer: thawer, purpose: purpose, live: c.live != null ? c.live : null, viability: c.viability != null ? c.viability : null, total: c.total != null ? c.total : null, uploadedAt: uploadedAt }); });
+    Store.saveExperiment(rec);
+    const base64 = XLSX.write(buildCellacaWb(rec), { type: 'base64', bookType: 'xlsx' });
+    ensureCellacaFolder(rec)
+      .then((path) => { if (!path || !path.subId) throw new Error('could not reach the experiment\u2019s data/cellaca counts folder');
+        return driveApi({ action: 'upload', name: fileName, folderId: path.subId, base64: base64, sourceMime: XLSX_MIME, targetMime: GSHEET_MIME }); })
+      .then(() => { CELLACA_PENDING = null; renderCellaca(); if (unresolved.length) alert('Saved ' + mapped.length + ' wells. ' + unresolved.length + ' well(s) had a sample # with no matching sample and were skipped.'); })
       .catch((e) => { stEl.textContent = 'Save failed: ' + e; });
   }
 
-  // Standalone counts spreadsheet: all stored counts -> the experiment's
-  // data/cellaca counts folder. Does NOT touch the experiment summary.
+  // Re-generate the consolidated counts spreadsheet from the stored list.
   function saveAllCounts(rec) {
     const stEl = $('#ccAllStatus');
-    const stored = rec.cellacaCounts || {};
-    if (!Object.keys(stored).length) { if (stEl) stEl.textContent = 'No counts to save yet.'; return; }
+    if (!(rec.cellacaCountsList || []).length) { if (stEl) stEl.textContent = 'No counts to save yet.'; return; }
     const expId = rec.experimentId || projectLabel(rec.name || 'experiment');
-    const fileName = sanitizeName(expId + ' cellaca counts - all') + '.xlsx';
-    if (!confirmOverwrite(fileName)) return;
-    if (stEl) stEl.textContent = 'Building spreadsheet\u2026';
-    // order by sample #
-    const rows = [['Cellaca counts \u2014 ' + (rec.name || '')], ['Experiment ID', expId], ['Project', rec.project || ''], ['Saved', new Date().toISOString().slice(0, 16).replace('T', ' ')], [],
-      ['Sample #', 'Sample ID', 'Well', 'Count for', 'Thawer', 'Live (cells/mL)', 'Viability (%)', 'Total (cells/mL)']];
-    Object.keys(stored).map((sid) => ({ sid: sid, c: stored[sid] })).sort((a, b) => (a.c.sampleNo || 0) - (b.c.sampleNo || 0))
-      .forEach(({ sid, c }) => rows.push([c.sampleNo != null ? c.sampleNo : '', sid, c.well || '', c.purpose || '', c.plate || '', c.live != null ? c.live : '', c.viability != null ? c.viability : '', c.total != null ? c.total : '']));
-    const wb = XLSX.utils.book_new();
-    const ws = XLSX.utils.aoa_to_sheet(rows);
-    ws['!cols'] = [{ wch: 9 }, { wch: 22 }, { wch: 7 }, { wch: 16 }, { wch: 14 }, { wch: 16 }, { wch: 13 }, { wch: 16 }];
-    XLSX.utils.book_append_sheet(wb, ws, 'Counts');
-    const base64 = XLSX.write(wb, { type: 'base64', bookType: 'xlsx' });
+    const fileName = sanitizeName(expId + ' cellaca counts');
     if (stEl) stEl.textContent = 'Uploading to Drive\u2026';
-    const project = rec.project || CURRENT_PROJECT;
-    driveApi({ action: 'ensurePath', project: project, experiment: rec.name || 'Experiment', subPath: ['data', 'cellaca counts'] })
-      .then((path) => {
-        if (!path || !path.subId) throw new Error('could not reach the experiment\u2019s data/cellaca counts folder');
-        return driveApi({ action: 'upload', name: fileName, folderId: path.subId, base64: base64, sourceMime: XLSX_MIME, targetMime: GSHEET_MIME });
-      })
-      .then((res) => { if (stEl) stEl.innerHTML = 'Saved <strong>' + esc(fileName.replace('.xlsx', '')) + '</strong> to the experiment\u2019s data \u203a cellaca counts folder.' + (res && res.id ? ' <a href="https://docs.google.com/spreadsheets/d/' + escAttr(res.id) + '/edit" target="_blank" rel="noopener">Open</a>' : ''); })
+    const base64 = XLSX.write(buildCellacaWb(rec), { type: 'base64', bookType: 'xlsx' });
+    ensureCellacaFolder(rec)
+      .then((path) => { if (!path || !path.subId) throw new Error('could not reach the experiment\u2019s data/cellaca counts folder');
+        return driveApi({ action: 'upload', name: fileName, folderId: path.subId, base64: base64, sourceMime: XLSX_MIME, targetMime: GSHEET_MIME }); })
+      .then((res) => { if (stEl) stEl.innerHTML = ' Saved.' + (res && res.id ? ' <a href="https://docs.google.com/spreadsheets/d/' + escAttr(res.id) + '/edit" target="_blank" rel="noopener">Open</a>' : ''); })
       .catch((e) => { if (stEl) stEl.textContent = 'Save failed: ' + e; });
   }
 
@@ -487,7 +611,38 @@
     });
     const kitBtn = $('#suKits'); if (kitBtn) kitBtn.addEventListener('click', () => recordUsageUI(rec.id));
   }
-  function renderReview(id) { const s = REV_STUBS[id]; if (s) stubPage(s[0], s[1], s[2]); }
+  let REV_TS_PART = null, REV_TS_VIEW = 'summary';
+  function renderReview(id) {
+    if (id === 'rev-data') { renderReviewData(); return; }
+    const s = REV_STUBS[id]; if (s) stubPage(s[0], s[1], s[2]);
+  }
+  function renderReviewData() {
+    const host = $('#revDataContent'); if (!host) return;
+    const rec = CURRENT_EXP_ID ? Store.getExperiment(CURRENT_EXP_ID) : null;
+    if (!rec) { host.innerHTML = '<h2>Data \u2014 TapeStation traces</h2><p class="empty">Select a project and experiment in the sidebar first.</p>'; return; }
+    const runs = rec.tapestation || [];
+    if (!runs.length) { host.innerHTML = '<h2>Data \u2014 TapeStation traces</h2><p class="empty">No TapeStation runs yet. Upload them on Record \u2192 Tapestation Output.</p>'; return; }
+    const parts = []; runs.forEach((r) => { if (parts.indexOf(r.part) < 0) parts.push(r.part); });
+    if (!REV_TS_PART || parts.indexOf(REV_TS_PART) < 0) REV_TS_PART = parts[0];
+    const partRuns = runs.filter((r) => r.part === REV_TS_PART);
+    const partBtns = parts.map((p) => '<button class="btn ' + (p === REV_TS_PART ? 'primary' : 'ghost') + '" data-rev-part="' + escAttr(p) + '">' + esc(p) + '</button>').join(' ');
+    let body = '';
+    if (REV_TS_VIEW === 'summary') {
+      const rows = [];
+      partRuns.forEach((r) => (r.wells || []).forEach((w) => rows.push('<tr><td>' + esc(w.name || w.description || '') + '</td><td class="num">' + esc(w.well) + '</td><td class="num">' + esc(w.conc) + '</td><td>' + esc(w.dilution || '') + '</td><td class="who">' + esc(r.runName || '') + '</td><td class="who">' + esc(w.note || '') + '</td></tr>')));
+      body = '<table class="cost-table"><thead><tr><th>Sample / lane</th><th class="num">Well</th><th class="num">Conc [pg/\u00b5l]</th><th>Dilution</th><th>Run</th><th>Notes</th></tr></thead><tbody>' + rows.join('') + '</tbody></table>';
+    } else {
+      body = partRuns.map((r) => '<div style="margin-bottom:14px">' + (r.notes ? '<p class="who">' + esc(r.runName) + ' \u2014 ' + esc(r.notes) + '</p>' : '') + '<div class="ts-traces">'
+        + (r.wells || []).map((w) => w.img ? '<figure class="ts-trace"><img src="data:image/png;base64,' + w.img + '"><figcaption>' + esc(w.name || w.description || w.well) + (w.dilution ? ' \u00b7 ' + esc(w.dilution) : '') + '</figcaption></figure>' : '').join('')
+        + '</div></div>').join('');
+    }
+    host.innerHTML = '<h2>Data \u2014 TapeStation traces <span class="who">' + esc(rec.name || '') + '</span></h2>'
+      + '<div class="row-actions" style="margin:4px 0 10px">' + partBtns + '</div>'
+      + '<div class="row-actions" style="margin:0 0 12px"><button class="btn ' + (REV_TS_VIEW === 'summary' ? 'primary' : 'ghost') + '" data-rev-view="summary">Concentration summary</button> <button class="btn ' + (REV_TS_VIEW === 'traces' ? 'primary' : 'ghost') + '" data-rev-view="traces">Trace images</button></div>'
+      + body;
+    host.querySelectorAll('button[data-rev-part]').forEach((b) => b.addEventListener('click', () => { REV_TS_PART = b.dataset.revPart; renderReviewData(); }));
+    host.querySelectorAll('button[data-rev-view]').forEach((b) => b.addEventListener('click', () => { REV_TS_VIEW = b.dataset.revView; renderReviewData(); }));
+  }
 
   // ---- Calendar page (all scheduled experiments + month grid + equipment week)
   function renderCalendar() {
@@ -3917,20 +4072,13 @@
     XLSX.utils.book_append_sheet(wb, wsCC, 'Cell count');
 
     // ---- Counts tab (Cellaca readouts entered on Record -> Cellaca counts) ----
-    const cellCts = (rec && rec.cellacaCounts) || {};
+    const cellList = (rec && rec.cellacaCountsList) || [];
     const ctRows = [['How to use: populated from the Cellaca WellLevel files uploaded on Record \u2192 Cellaca counts.'], [],
-      ['Sample #', 'Sample ID', 'Well', 'Plate / thawer', 'Live (cells/mL)', 'Viability (%)', 'Total (cells/mL)']];
-    // canonical pool-grouped sample number (same as labels / Cell count)
-    const ctNo = {}; let _ctn = 0;
-    (s.batches || []).forEach((b) => b.samples.forEach((sm) => { _ctn += 1; ctNo[sm.sampleId] = _ctn; }));
-    const seenS = {};
-    (s.batches || []).forEach((b) => b.samples.forEach((sm) => {
-      const c = cellCts[sm.sampleId]; seenS[sm.sampleId] = 1;
-      ctRows.push([ctNo[sm.sampleId] || '', sm.sampleId, c ? (c.well || '') : '', c ? (c.plate || '') : '', c && c.live != null ? c.live : '', c && c.viability != null ? c.viability : '', c && c.total != null ? c.total : '']);
-    }));
-    Object.keys(cellCts).forEach((sid) => { if (!seenS[sid]) { const c = cellCts[sid]; ctRows.push([c.sampleNo || '', sid, c.well || '', c.plate || '', c.live != null ? c.live : '', c.viability != null ? c.viability : '', c.total != null ? c.total : '']); } });
+      ['Sample #', 'Sample ID', 'Well', 'Count for', 'Thawer', 'Live (cells/mL)', 'Viability (%)', 'Total (cells/mL)']];
+    cellList.slice().sort((a, b) => (a.sampleNo || 0) - (b.sampleNo || 0) || String(a.purpose || '').localeCompare(String(b.purpose || '')))
+      .forEach((c) => ctRows.push([c.sampleNo != null ? c.sampleNo : '', c.sampleId || '', c.well || '', c.purpose || '', c.thawer || '', c.live != null ? c.live : '', c.viability != null ? c.viability : '', c.total != null ? c.total : '']));
     const wsCT = XLSX.utils.aoa_to_sheet(ctRows);
-    wsCT['!cols'] = [{ wch: 9 }, { wch: 22 }, { wch: 8 }, { wch: 16 }, { wch: 16 }, { wch: 13 }, { wch: 16 }];
+    wsCT['!cols'] = [{ wch: 9 }, { wch: 22 }, { wch: 7 }, { wch: 16 }, { wch: 14 }, { wch: 16 }, { wch: 13 }, { wch: 16 }];
     XLSX.utils.book_append_sheet(wb, wsCT, 'Counts');
 
     // ---- 10X Library Tubes tab (naming grid, per reference) ----------------
