@@ -884,10 +884,11 @@
   async function parseSortPdf(arrayBuffer) {
     if (!window.pdfjsLib) throw new Error('PDF reader not loaded \u2014 reload the page.');
     const pdf = await pdfjsLib.getDocument({ data: arrayBuffer.slice(0) }).promise;   // copy: getDocument detaches its buffer
-    const out = []; const seen = {};
+    const out = []; const seen = {}; let sortPage = pdf.numPages;
     for (let p = 1; p <= pdf.numPages; p++) {
       const page = await pdf.getPage(p);
       const tc = await page.getTextContent();
+      if (tc.items.some((it) => /sorting result/i.test(it.str))) sortPage = p;
       const items = tc.items.map((it) => ({ str: it.str, x: it.transform[4], y: Math.round(it.transform[5]) }));
       const byY = {}; items.forEach((it) => { (byY[it.y] = byY[it.y] || []).push(it); });
       Object.keys(byY).map(Number).sort((a, b) => b - a).forEach((y) => {
@@ -901,7 +902,17 @@
         }
       });
     }
-    return out;
+    // Render the Sorting Result page as an image (the table is usually a raster, so
+    // this lets the user read the values and enter them by hand).
+    let pageImg = '';
+    try {
+      const page = await pdf.getPage(sortPage);
+      const vp = page.getViewport({ scale: 2 });
+      const canvas = document.createElement('canvas'); canvas.width = vp.width; canvas.height = vp.height;
+      await page.render({ canvasContext: canvas.getContext('2d'), viewport: vp }).promise;
+      pageImg = canvas.toDataURL('image/png');
+    } catch (e) { /* preview optional */ }
+    return { rows: out, pageImg: pageImg };
   }
   function renderSortRecord() {
     const host = $('#recSortContent'); if (!host) return;
@@ -922,8 +933,13 @@
         + '<td class="num">' + (Number(r.totalEvent) > 0 ? (Math.round(Number(r.sortedCount) / Number(r.totalEvent) * 1e6) / 1e4) + '%' : '\u2014') + '</td></tr>').join('');
       editUI = '<h3>This sort <span class="who">' + esc(SORT_PENDING.fileName) + '</span></h3>'
         + '<div class="row-actions" style="margin:6px 0"><label>Sample tube # <input id="sortTube" style="width:80px" value="' + escAttr(SORT_PENDING.tube || '') + '"></label> <label>Note <input id="sortNote" style="width:280px" value="' + escAttr(SORT_PENDING.note || '') + '"></label></div>'
-        + '<p class="step-hint">Auto-parsed from the Sorting Result table \u2014 verify/edit. <strong>Sort gate</strong> = sorted population, <strong>Total event</strong> = cells processed from this sample, <strong>Sorted count</strong> = cells of that population collected.</p>'
-        + (rows ? '<table class="cost-table"><thead><tr><th>Collection tube</th><th>Sort gate (population)</th><th class="num">Total event</th><th class="num">Sorted count</th><th class="num">% of total</th></tr></thead><tbody>' + rows + '</tbody></table>' : '<p class="empty">No Sorting Result table found in that PDF \u2014 you can still save it, but no counts were extracted.</p>')
+        + (SORT_PENDING.autoParsed
+            ? '<p class="step-hint">Auto-parsed from the Sorting Result table \u2014 verify/edit.</p>'
+            : '<p class="step-hint">This sorter report\u2019s Sorting Result table is a <strong>page image</strong>, so it can\u2019t be auto-read \u2014 enter the values from the preview below. <strong>Total event</strong> = cells processed from this sample, <strong>Sorted count</strong> = cells of that population collected.</p>')
+        + '<table class="cost-table"><thead><tr><th>Collection tube</th><th>Sort gate (population)</th><th class="num">Total event</th><th class="num">Sorted count</th><th class="num">% of total</th></tr></thead><tbody>' + rows + '</tbody></table>'
+        + (SORT_PENDING.pageImg ? '<h4 style="margin:14px 0 4px">Report preview \u2014 read the Sorting Result table</h4>'
+            + (SORT_PENDING.autoParsed ? '' : '<div class="row-actions" style="margin:0 0 6px"><button class="btn" id="sortOcr">Try auto-read (OCR)</button><span id="sortOcrStatus" class="muted"></span></div>')
+            + '<img src="' + SORT_PENDING.pageImg + '" class="ts-zoom" style="max-width:100%;border:1px solid #e4e9ef;border-radius:6px;cursor:zoom-in">' : '')
         + '<div class="row-actions" style="margin-top:12px"><button class="btn primary" id="sortSave">Save sort + upload PDF</button> <button class="btn ghost" id="sortCancel">Cancel</button></div>'
         + '<div id="sortStatus" class="muted" style="margin-top:8px"></div>';
     }
@@ -935,9 +951,10 @@
 
     const drop = $('#sortDrop'), fileInput = $('#sortFile');
     const onFile = (f) => { if (!f) return;
-      f.arrayBuffer().then((buf) => parseSortPdf(buf).then((rows) => {
-        SORT_PENDING = { fileName: f.name, base64: bufToB64(buf), tube: '', note: '', rows: rows };
-        if (!rows.length) alert('No Sorting Result table was found in that PDF \u2014 you can still archive it, but nothing was extracted.');
+      f.arrayBuffer().then((buf) => parseSortPdf(buf).then((res) => {
+        let rows = res.rows || [];
+        if (!rows.length) { rows = ['Far Left', 'Left', 'Right', 'Far Right'].map((c) => ({ collection: c, gate: '', totalEvent: '', sortedCount: '' })); }
+        SORT_PENDING = { fileName: f.name, base64: bufToB64(buf), tube: '', note: '', rows: rows, pageImg: res.pageImg || '', autoParsed: (res.rows || []).length > 0 };
         renderSortRecord();
       })).catch((e) => alert('Could not read that PDF: ' + e));
     };
@@ -956,9 +973,48 @@
     const cancel = $('#sortCancel'); if (cancel) cancel.addEventListener('click', () => { SORT_PENDING = null; renderSortRecord(); });
     const save = $('#sortSave'); if (save) save.addEventListener('click', () => saveSortReport(rec));
     const sortReload = $('#sortReload'); if (sortReload) sortReload.addEventListener('click', () => reloadSortFromDrive(rec));
+    const sortOcr = $('#sortOcr'); if (sortOcr) sortOcr.addEventListener('click', () => ocrSortTable());
+    host.querySelectorAll('.ts-zoom').forEach((img) => img.addEventListener('click', () => openImageLightbox(img.src)));
     host.querySelectorAll('button[data-sort-del]').forEach((b) => b.addEventListener('click', () => {
       const i = +b.dataset.sortDel; if (rec.sortReports && !isNaN(i)) { rec.sortReports.splice(i, 1); Store.saveExperiment(rec); renderSortRecord(); }
     }));
+  }
+  // OCR-assist: read the Sorting Result page image with Tesseract and try to fill
+  // the rows. OCR is imperfect on small numeric tables, so results are flagged for
+  // review against the preview, never trusted blindly.
+  function ocrSortTable() {
+    if (!SORT_PENDING || !SORT_PENDING.pageImg) return;
+    if (!window.Tesseract) { const st = $('#sortOcrStatus'); if (st) st.textContent = ' OCR library not loaded \u2014 reload the page.'; return; }
+    const st = $('#sortOcrStatus'); if (st) st.textContent = ' Reading (first run downloads the OCR engine, ~15\u201330s)\u2026';
+    Tesseract.recognize(SORT_PENDING.pageImg, 'eng', {
+      logger: (m) => { if (st && m.status === 'recognizing text') st.textContent = ' Reading\u2026 ' + Math.round((m.progress || 0) * 100) + '%'; }
+    }).then((res) => {
+      const lines = (res.data && res.data.lines ? res.data.lines : []).map((l) => l.text);
+      const gates = ['HSPCs', 'pDCs', 'cDCs', 'Tregs', 'HSPC', 'pDC', 'cDC', 'Treg'];
+      let filled = 0;
+      // Match rows: a known/again-any gate word followed by numbers; Total Event is
+      // the largest number on the line, Sorted Count the next distinct one.
+      const tubes = ['Far Left', 'Left', 'Right', 'Far Right'];
+      lines.forEach((raw) => {
+        const line = raw.replace(/[|]/g, ' ');
+        const tube = tubes.find((t) => new RegExp('^\\s*' + t.replace(' ', '\\s+'), 'i').test(line));
+        const gate = gates.find((g) => new RegExp('\\b' + g + '\\b', 'i').test(line));
+        const nums = (line.match(/[\d][\d,]{2,}/g) || []).map((n) => Number(n.replace(/,/g, ''))).filter((n) => !isNaN(n));
+        if ((tube || gate) && nums.length >= 2) {
+          // total event = max; sorted count = largest remaining that isn't the total
+          const total = Math.max.apply(null, nums);
+          const rest = nums.filter((n) => n !== total);
+          const sorted = rest.length ? Math.max.apply(null, rest) : '';
+          // place into the row matching the tube (by order) or the first empty row
+          let row = tube ? SORT_PENDING.rows.find((r) => (r.collection || '').toLowerCase() === tube.toLowerCase()) : null;
+          if (!row) row = SORT_PENDING.rows.find((r) => !r.totalEvent && !r.sortedCount);
+          if (row) { if (gate) row.gate = gate.replace(/s?$/, 's').replace('HSPCss', 'HSPCs'); row.totalEvent = String(total); row.sortedCount = String(sorted); filled += 1; }
+        }
+      });
+      if (st) st.textContent = filled ? (' Auto-read ' + filled + ' row(s) \u2014 please check every number against the preview.') : ' Couldn\u2019t confidently read the table \u2014 enter the values by hand from the preview.';
+      SORT_PENDING._ocr = true;
+      renderSortRecord();
+    }).catch((e) => { if (st) st.textContent = ' OCR failed: ' + e; });
   }
   function reloadSortFromDrive(rec) {
     const stEl = $('#sortReloadStatus'); if (stEl) stEl.textContent = ' Reading Drive\u2026';
