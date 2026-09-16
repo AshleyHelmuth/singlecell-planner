@@ -184,33 +184,67 @@
     if (field !== '' || row.length) { row.push(field); rows.push(row); }
     return rows.filter((r) => r.length && r.some((c) => c !== ''));
   }
-  async function handleTsZip(file) {
-    if (!window.JSZip) { alert('Zip reader not loaded \u2014 reload the page and try again.'); return; }
-    const buf = await file.arrayBuffer();
-    const zip = await JSZip.loadAsync(buf);
-    let sampleCsv = null, sampleName = ''; const imgs = {};
-    const names = Object.keys(zip.files);
-    for (const n of names) { const base = n.split('/').pop();
-      if (/sampletable\.csv$/i.test(base)) { sampleCsv = await zip.files[n].async('string'); sampleName = base; }
-    }
-    if (!sampleCsv) { alert('No sampleTable.csv found in that zip \u2014 is it a TapeStation run export?'); return; }
-    const rows = parseCsvText(sampleCsv);
+  function tsGuessMime(name) {
+    const n = name.toLowerCase();
+    if (n.endsWith('.pdf')) return 'application/pdf';
+    if (n.endsWith('.png')) return 'image/png';
+    if (n.endsWith('.csv')) return 'text/csv';
+    if (n.endsWith('.zip')) return 'application/zip';
+    if (n.endsWith('.xlsx')) return XLSX_MIME;
+    return 'application/octet-stream';
+  }
+  function tsParseSampleTable(csvText) {
+    const rows = parseCsvText(csvText);
+    if (!rows.length) return [];
     const hdr = rows[0].map((h) => h.toLowerCase());
     const iWell = hdr.findIndex((h) => h === 'well'), iConc = hdr.findIndex((h) => h.indexOf('conc') === 0), iDesc = hdr.findIndex((h) => h.indexOf('sample description') === 0);
     const wells = [];
     rows.slice(1).forEach((r) => {
       const well = (r[iWell] || '').trim(); const desc = (r[iDesc] || '').trim();
       if (!well || /ladder/i.test(desc)) return;   // skip the ladder well
-      wells.push({ well: well, description: desc, name: desc, conc: (r[iConc] || '').trim(), dilution: '', note: '' });
+      wells.push({ well: well, description: desc, name: desc, conc: iConc >= 0 ? (r[iConc] || '').trim() : '', dilution: '', note: '' });
     });
-    // pull the per-well PNG traces (base64) keyed by well
+    return wells;
+  }
+  function bufToB64(buf) { let bin = ''; const u8 = new Uint8Array(buf); for (let k = 0; k < u8.length; k++) bin += String.fromCharCode(u8[k]); return btoa(bin); }
+
+  async function handleTsZip(file) {
+    if (!window.JSZip) { alert('Zip reader not loaded \u2014 reload the page and try again.'); return; }
+    const buf = await file.arrayBuffer();
+    const zip = await JSZip.loadAsync(buf);
+    let sampleCsv = null; const imgs = {};
+    const names = Object.keys(zip.files);
     for (const n of names) { const base = n.split('/').pop();
-      if (/\.png$/i.test(base)) { const m = base.match(/_([A-H]\d{1,2})_/); if (m) { imgs[m[1]] = await zip.files[n].async('base64'); } }
+      if (/sampletable\.csv$/i.test(base)) sampleCsv = await zip.files[n].async('string');
+      else if (/\.png$/i.test(base)) { const m = base.match(/_([A-H]\d{1,2})_/); if (m) imgs[m[1]] = await zip.files[n].async('base64'); }
     }
+    const wells = sampleCsv ? tsParseSampleTable(sampleCsv) : [];
     wells.forEach((w) => { w.img = imgs[w.well] || null; });
-    let bin = ''; const u8 = new Uint8Array(buf); for (let k = 0; k < u8.length; k++) bin += String.fromCharCode(u8[k]);
     const runName = file.name.replace(/\.zip$/i, '');
-    TS_PENDING = { fileName: file.name, base64: btoa(bin), runName: runName, part: TS_PARTS[0], notes: '', wells: wells };
+    // the whole zip is stored/uploaded as one file
+    TS_PENDING = { fileName: file.name, files: [{ name: file.name, base64: bufToB64(buf), mime: 'application/zip' }], runName: runName, part: TS_PARTS[0], notes: '', wells: wells };
+    if (!wells.length) alert('Zip uploaded, but no sampleTable.csv was found \u2014 you can still save it (no per-lane summary).');
+    renderTapestation();
+  }
+
+  // Loose files (any mix of sampleTable.csv, per-well .png traces, and .pdf summaries),
+  // one or many. A single .zip is delegated to the zip reader.
+  async function handleTsFiles(fileList) {
+    const files = Array.prototype.slice.call(fileList || []);
+    if (!files.length) return;
+    if (files.length === 1 && /\.zip$/i.test(files[0].name)) return handleTsZip(files[0]);
+    let sampleCsv = null; const imgs = {}; const stored = []; let runName = '';
+    for (const f of files) {
+      const buf = await f.arrayBuffer(); const u8 = new Uint8Array(buf); const b64 = bufToB64(buf);
+      stored.push({ name: f.name, base64: b64, mime: f.type || tsGuessMime(f.name) });
+      if (/sampletable\.csv$/i.test(f.name)) sampleCsv = new TextDecoder('latin1').decode(u8);
+      else if (/\.png$/i.test(f.name)) { const m = f.name.match(/_([A-H]\d{1,2})_/); if (m) imgs[m[1]] = b64; }
+      if (!runName) runName = f.name.replace(/\.(csv|png|pdf|xlsx?|zip)$/i, '').replace(/[ _]*(sampleTable|compactPeakTable|Electropherogram|[A-H]\d.*)$/i, '').trim();
+    }
+    const wells = sampleCsv ? tsParseSampleTable(sampleCsv) : [];
+    wells.forEach((w) => { w.img = imgs[w.well] || null; });
+    TS_PENDING = { fileName: files.length === 1 ? files[0].name : (files.length + ' files'), files: stored, runName: runName || 'TapeStation run', part: TS_PARTS[0], notes: '', wells: wells };
+    if (!wells.length) alert('Files added' + (Object.keys(imgs).length ? '' : ' \u2014 no sampleTable.csv found, so there\u2019s no per-lane summary') + '. You can still tag the part/notes and save (e.g. to archive a PDF).');
     renderTapestation();
   }
   function renderTapestation() {
@@ -245,19 +279,19 @@
     }
 
     host.innerHTML = '<h2>Tapestation Output <span class="who">' + esc(rec.name || '') + '</span></h2>'
-      + '<p class="step-hint">Drag a TapeStation run <strong>.zip</strong> (the exported run folder) here. It reads the concentration summary + traces, lets you tag the experiment part and dilutions, and stores it in the experiment\u2019s <strong>data \u203a tapestation</strong> folder.</p>'
-      + '<div id="tsDrop" class="cc-drop">Drop a TapeStation run .zip here, or click to browse<input type="file" id="tsFile" accept=".zip" hidden></div>'
+      + '<p class="step-hint">Drag a TapeStation run <strong>.zip</strong>, or its <strong>loose files</strong> (sampleTable.csv, the .png traces, and/or the .pdf summary) \u2014 one or many at once. It reads the concentration summary + traces where present, and stores everything in the experiment\u2019s <strong>data \u203a tapestation</strong> folder.</p>'
+      + '<div id="tsDrop" class="cc-drop">Drop a .zip, or the run\u2019s .csv / .png / .pdf files here (multiple ok), or click to browse<input type="file" id="tsFile" accept=".zip,.csv,.png,.pdf,.xlsx" multiple hidden></div>'
       + editUI + '<div style="margin-top:20px"></div>' + runList;
 
     const drop = $('#tsDrop'), fileInput = $('#tsFile');
-    const onFile = (f) => { if (f) handleTsZip(f).catch((e) => alert('Could not read that zip: ' + e)); };
+    const onFiles = (fl) => { if (fl && fl.length) handleTsFiles(fl).catch((e) => alert('Could not read those files: ' + e)); };
     if (drop) {
       drop.addEventListener('click', () => fileInput && fileInput.click());
       drop.addEventListener('dragover', (e) => { e.preventDefault(); drop.classList.add('drag'); });
       drop.addEventListener('dragleave', () => drop.classList.remove('drag'));
-      drop.addEventListener('drop', (e) => { e.preventDefault(); drop.classList.remove('drag'); onFile(e.dataTransfer.files[0]); });
+      drop.addEventListener('drop', (e) => { e.preventDefault(); drop.classList.remove('drag'); onFiles(e.dataTransfer.files); });
     }
-    if (fileInput) fileInput.addEventListener('change', () => onFile(fileInput.files[0]));
+    if (fileInput) fileInput.addEventListener('change', () => onFiles(fileInput.files));
     const partSel = $('#tsPart'); if (partSel) partSel.addEventListener('change', () => { const v = partSel.value; const o = $('#tsPartOther'); if (v === '__other__') { if (o) o.style.display = ''; TS_PENDING.part = (o && o.value) || 'Other'; } else { if (o) o.style.display = 'none'; TS_PENDING.part = v; } });
     const partOther = $('#tsPartOther'); if (partOther) partOther.addEventListener('input', () => { TS_PENDING.part = partOther.value; });
     const notesInp = $('#tsNotes'); if (notesInp) notesInp.addEventListener('input', () => { TS_PENDING.notes = notesInp.value; });
@@ -274,22 +308,25 @@
     if (!TS_PENDING) return;
     const stEl = $('#tsStatus');
     const part = TS_PENDING.part || 'Other';
-    const expId = rec.experimentId || projectLabel(rec.name || 'experiment');
-    const fileName = sanitizeName(expId + ' tapestation ' + part + ' ' + TS_PENDING.runName) + '.zip';
-    if (!confirm('Save this TapeStation run to the experiment\u2019s data/tapestation folder as \u201c' + fileName + '\u201d (overwrites a file of the same name)? The lane summary + traces are stored on the experiment for the Review tab.')) return;
+    const files = TS_PENDING.files || [];
+    if (!files.length) { stEl.textContent = 'Nothing to upload.'; return; }
+    const runFolder = sanitizeName(part + ' - ' + TS_PENDING.runName).slice(0, 80) || 'TapeStation run';
+    if (!confirm('Save ' + files.length + ' file(s) to the experiment\u2019s data/tapestation/\u201c' + runFolder + '\u201d folder? Files with the same name there will be overwritten. The lane summary + traces are stored on the experiment for the Review tab.')) return;
     stEl.textContent = 'Uploading to Drive\u2026';
     const req = rec.driveFolderId
-      ? { action: 'ensurePath', parentId: rec.driveFolderId, subPath: ['data', 'tapestation'] }
-      : { action: 'ensurePath', project: rec.project || CURRENT_PROJECT, experiment: rec.name || 'Experiment', subPath: ['data', 'tapestation'] };
+      ? { action: 'ensurePath', parentId: rec.driveFolderId, subPath: ['data', 'tapestation', runFolder] }
+      : { action: 'ensurePath', project: rec.project || CURRENT_PROJECT, experiment: rec.name || 'Experiment', subPath: ['data', 'tapestation', runFolder] };
     driveApi(req)
-      .then((path) => {
+      .then(async (path) => {
         if (path && path.experimentId && rec.driveFolderId !== path.experimentId) { rec.driveFolderId = path.experimentId; }
         if (!path || !path.subId) throw new Error('could not reach the experiment\u2019s data/tapestation folder');
-        return driveApi({ action: 'upload', name: fileName, folderId: path.subId, base64: TS_PENDING.base64, sourceMime: 'application/zip' });
+        let n = 0;
+        for (const f of files) { n += 1; stEl.textContent = 'Uploading ' + n + '/' + files.length + '\u2026';
+          await driveApi({ action: 'upload', name: f.name, folderId: path.subId, base64: f.base64, sourceMime: f.mime }); }
       })
       .then(() => {
         rec.tapestation = rec.tapestation || [];
-        rec.tapestation.push({ runName: TS_PENDING.runName, part: part, notes: TS_PENDING.notes || '', file: fileName, savedAt: new Date().toISOString().slice(0, 10),
+        rec.tapestation.push({ runName: TS_PENDING.runName, part: part, notes: TS_PENDING.notes || '', folder: runFolder, fileCount: files.length, savedAt: new Date().toISOString().slice(0, 10),
           wells: TS_PENDING.wells.map((w) => ({ well: w.well, name: w.name, description: w.description, conc: w.conc, dilution: w.dilution, note: w.note, img: w.img })) });
         Store.saveExperiment(rec);
         TS_PENDING = null; renderTapestation();
