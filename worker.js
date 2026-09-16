@@ -571,6 +571,16 @@ async function handleLibraryPost(request, env) {
   } catch (e) { return json({ error: 'exception', message: (e && e.message) || String(e) }, 500); }
 }
 
+// A record row can be truncated at the Sheet's ~50k-char cell limit if an oversized
+// blob (e.g. base64 TapeStation images) was written into it. Recover the row by
+// dropping the (incomplete) tapestation field and closing the object, so the
+// experiment's plan/snapshot data still loads.
+function salvageExpJson(jsonStr) {
+  const cut = jsonStr.indexOf(',"tapestation"');
+  if (cut > 0) { try { const o = JSON.parse(jsonStr.slice(0, cut) + '}'); o._recovered = true; return o; } catch (e) { /* fall through */ } }
+  return null;
+}
+
 async function handleExperimentsGet(env) {
   try {
     if (!env.GOOGLE_SA_KEY) return json({ error: 'not_configured' }, 503);
@@ -588,7 +598,8 @@ async function handleExperimentsGet(env) {
       if (!idCell || idCell.toLowerCase() === 'id') continue;   // skip blanks and stray header rows
       const jsonStr = extractExpJson(row, headers);
       if (!jsonStr) continue;
-      try { experiments.push(JSON.parse(jsonStr)); } catch (e) { /* skip malformed */ }
+      try { experiments.push(JSON.parse(jsonStr)); }
+      catch (e) { const salv = salvageExpJson(jsonStr); if (salv && salv.id) experiments.push(salv); }
     }
     const projects = rowsToObjects(vr[1] ? vr[1].values : []).items
       .filter((p) => p['name'])
