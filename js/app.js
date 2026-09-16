@@ -173,7 +173,42 @@
 
   // ===== TapeStation: drag-drop a run .zip, tag it with the experiment part,
   // edit lane names / dilutions / notes, store to Drive + on the record. =====
-  const TS_PARTS = ['ASAP', "5' unsort GEX", "5' unsort V(D)J", "5' unsort ADT/CSP", "5' sort GEX", "5' sort V(D)J", "5' sort ADT/CSP", 'cDNA', 'Pooled libraries'];
+  const TS_ARMS = {
+    'ASAP': { prefix: 'A', types: ['ATAC', 'ADT', 'HTO'] },
+    "5' unsort": { prefix: 'U', types: ['GEX', 'V(D)J', 'ADT/CSP', 'HTO'] },
+    "5' sort": { prefix: 'S', types: ['GEX', 'V(D)J', 'ADT/CSP'] },
+    'cDNA': { prefix: 'C', types: ['cDNA'] },
+    'Other': { prefix: '', types: ['GEX', 'ATAC', 'HTO', 'ADT', 'V(D)J', 'cDNA'] }
+  };
+  const TS_ARM_NAMES = Object.keys(TS_ARMS);
+  // Guess { arm, type, no } from a TapeStation sample description, e.g. "BCP-1 ASAP ATAC A9 1:5".
+  function tsGuessTags(desc) {
+    const d = (desc || '').toUpperCase();
+    let arm = '';
+    if (/ASAP/.test(d)) arm = 'ASAP';
+    else if (/UNSORT/.test(d)) arm = "5' unsort";
+    else if (/SORT/.test(d)) arm = "5' sort";
+    else if (/CDNA/.test(d)) arm = 'cDNA';
+    let type = '';
+    if (/ATAC/.test(d)) type = 'ATAC';
+    else if (/HTO/.test(d)) type = 'HTO';
+    else if (/ADT|CSP/.test(d)) type = (arm === 'ASAP' ? 'ADT' : 'ADT/CSP');
+    else if (/GEX/.test(d)) type = 'GEX';
+    else if (/VDJ|V\(D\)J|TCR|BCR/.test(d)) type = 'V(D)J';
+    else if (/CDNA/.test(d)) type = 'cDNA';
+    let no = ''; const m = d.match(/\b[AUSC](\d+)\b/); if (m) no = m[1];
+    return { arm: arm, type: type, no: no };
+  }
+  // Full lane label, e.g. "ASAP A9-ATAC".
+  function tsLaneName(w) {
+    const a = TS_ARMS[w.arm]; const prefix = a ? a.prefix : '';
+    const lane = (w.sampleNo != null && w.sampleNo !== '') ? (prefix + w.sampleNo) : '';
+    const parts = [];
+    if (w.arm) parts.push(w.arm);
+    if (lane) parts.push(lane + (w.sampleType ? '-' + w.sampleType : ''));
+    else if (w.sampleType) parts.push(w.sampleType);
+    return parts.join(' ') || (w.description || w.well);
+  }
   let TS_PENDING = null;   // { fileName, base64(zip), runName, part, notes, wells:[{well,description,name,conc,dilution,note,img}] }
   function parseCsvText(text) {
     const rows = []; let i = 0, field = '', row = [], inQ = false;
@@ -183,6 +218,24 @@
       i++; }
     if (field !== '' || row.length) { row.push(field); rows.push(row); }
     return rows.filter((r) => r.length && r.some((c) => c !== ''));
+  }
+  // Collect files from a drop, traversing folders (dragging the run folder itself
+  // doesn't populate dataTransfer.files, so walk the directory entries).
+  async function filesFromDataTransfer(dt) {
+    const items = dt.items;
+    if (items && items.length && items[0] && items[0].webkitGetAsEntry) {
+      const roots = []; for (let i = 0; i < items.length; i++) { const e = items[i].webkitGetAsEntry && items[i].webkitGetAsEntry(); if (e) roots.push(e); }
+      if (roots.length) {
+        const out = [];
+        const walk = async (entry) => {
+          if (entry.isFile) { await new Promise((res) => entry.file((f) => { out.push(f); res(); }, res)); }
+          else if (entry.isDirectory) { const rd = entry.createReader(); let batch; do { batch = await new Promise((res) => rd.readEntries(res, () => res([]))); for (const e of batch) await walk(e); } while (batch.length); }
+        };
+        for (const r of roots) await walk(r);
+        if (out.length) return out;
+      }
+    }
+    return Array.prototype.slice.call(dt.files || []);
   }
   function tsGuessMime(name) {
     const n = name.toLowerCase();
@@ -252,7 +305,7 @@
     }
     const wells = sampleCsv ? tsParseSampleTable(sampleCsv) : [];
     const peaks = peakCsv ? tsParsePeaks(peakCsv) : {};
-    wells.forEach((w) => { w.img = imgs[w.well] || null; w.peaks = peaks[w.well] || []; });
+    wells.forEach((w) => { w.img = imgs[w.well] || null; w.peaks = peaks[w.well] || []; const g = tsGuessTags(w.description); w.arm = g.arm; w.sampleType = g.type; w.sampleNo = g.no; w.name = tsLaneName(w); });
     const runName = file.name.replace(/\.zip$/i, '');
     // the whole zip is stored/uploaded as one file
     TS_PENDING = { fileName: file.name, files: [{ name: file.name, base64: bufToB64(buf), mime: 'application/zip' }], runName: runName, part: TS_PARTS[0], notes: '', wells: wells };
@@ -277,7 +330,7 @@
     }
     const wells = sampleCsv ? tsParseSampleTable(sampleCsv) : [];
     const peaks = peakCsv ? tsParsePeaks(peakCsv) : {};
-    wells.forEach((w) => { w.img = imgs[w.well] || null; w.peaks = peaks[w.well] || []; });
+    wells.forEach((w) => { w.img = imgs[w.well] || null; w.peaks = peaks[w.well] || []; const g = tsGuessTags(w.description); w.arm = g.arm; w.sampleType = g.type; w.sampleNo = g.no; w.name = tsLaneName(w); });
     TS_PENDING = { fileName: files.length === 1 ? files[0].name : (files.length + ' files'), files: stored, runName: runName || 'TapeStation run', part: TS_PARTS[0], notes: '', wells: wells };
     if (!wells.length) alert('Files added' + (Object.keys(imgs).length ? '' : ' \u2014 no sampleTable.csv found, so there\u2019s no per-lane summary') + '. You can still tag the part/notes and save (e.g. to archive a PDF).');
     renderTapestation();
@@ -288,27 +341,30 @@
     if (!rec) { host.innerHTML = '<h2>Tapestation Output</h2><p class="empty">Select a project and experiment in the sidebar first.</p>'; return; }
     const runs = rec.tapestation || [];
     const runList = runs.length
-      ? '<h3>Saved runs (' + runs.length + ')</h3><table class="cost-table"><thead><tr><th>Run</th><th>Part</th><th class="num">Lanes</th><th>Notes</th><th></th></tr></thead><tbody>'
-        + runs.map((r, i) => '<tr><td>' + esc(r.runName || '') + '</td><td>' + esc(r.part || '') + '</td><td class="num">' + (r.wells || []).length + '</td><td class="who">' + esc(r.notes || '') + '</td><td><button class="btn tiny" data-ts-del="' + i + '">\u2715</button></td></tr>').join('')
+      ? '<h3>Saved runs (' + runs.length + ')</h3><table class="cost-table"><thead><tr><th>Run</th><th>Sections</th><th class="num">Lanes</th><th>Notes</th><th></th></tr></thead><tbody>'
+        + runs.map((r, i) => { const secs = []; (r.wells || []).forEach((w) => { if (w.arm && secs.indexOf(w.arm) < 0) secs.push(w.arm); });
+          return '<tr><td>' + esc(r.runName || '') + '</td><td>' + esc(secs.join(', ') || r.part || '') + '</td><td class="num">' + (r.wells || []).length + '</td><td class="who">' + esc(r.notes || '') + '</td><td><button class="btn tiny" data-ts-del="' + i + '">\u2715</button></td></tr>'; }).join('')
         + '</tbody></table>'
       : '<p class="muted">No TapeStation runs saved yet.</p>';
 
     let editUI = '';
     if (TS_PENDING) {
-      const partOpts = TS_PARTS.map((p) => '<option' + (TS_PENDING.part === p ? ' selected' : '') + '>' + esc(p) + '</option>').join('') + '<option value="__other__"' + (TS_PARTS.indexOf(TS_PENDING.part) < 0 ? ' selected' : '') + '>Other\u2026</option>';
+      const armOptions = (sel) => TS_ARM_NAMES.map((a) => '<option' + (sel === a ? ' selected' : '') + '>' + esc(a) + '</option>').join('');
+      const typeOptions = (arm, sel) => { const t = (TS_ARMS[arm] && TS_ARMS[arm].types) || []; return '<option value="">\u2014</option>' + t.map((x) => '<option' + (sel === x ? ' selected' : '') + '>' + esc(x) + '</option>').join(''); };
+      const noOptions = (sel) => { let o = '<option value="">\u2014</option>'; for (let k = 1; k <= 24; k++) o += '<option' + (String(sel) === String(k) ? ' selected' : '') + '>' + k + '</option>'; return o; };
       const rows = TS_PENDING.wells.map((w, i) => '<tr><td class="num">' + esc(w.well) + '</td>'
-        + '<td><input class="ts-name" data-i="' + i + '" value="' + escAttr(w.name) + '" style="width:190px"></td>'
+        + '<td><select class="ts-arm" data-i="' + i + '">' + armOptions(w.arm) + '</select></td>'
+        + '<td><select class="ts-type" data-i="' + i + '">' + typeOptions(w.arm, w.sampleType) + '</select></td>'
+        + '<td><select class="ts-no" data-i="' + i + '">' + noOptions(w.sampleNo) + '</select></td>'
+        + '<td class="who">' + esc(tsLaneName(w)) + '</td>'
         + '<td class="num">' + esc(w.conc) + '</td>'
         + '<td><input class="ts-dil" data-i="' + i + '" value="' + escAttr(w.dilution) + '" placeholder="e.g. 1:5" style="width:70px"></td>'
-        + '<td><input class="ts-note" data-i="' + i + '" value="' + escAttr(w.note) + '" placeholder="notes" style="width:150px"></td>'
+        + '<td><input class="ts-note" data-i="' + i + '" value="' + escAttr(w.note) + '" placeholder="notes" style="width:130px"></td>'
         + '<td>' + (w.img ? '<img src="data:image/png;base64,' + w.img + '" style="height:38px;border:1px solid #e4e9ef;border-radius:4px">' : '') + '</td></tr>').join('');
       editUI = '<h3>This run <span class="who">' + esc(TS_PENDING.fileName) + '</span></h3>'
-        + '<div class="row-actions" style="margin:6px 0;flex-wrap:wrap">'
-        + '<label>Experiment part <select id="tsPart">' + partOpts + '</select></label>'
-        + '<input id="tsPartOther" placeholder="describe part" style="width:170px;' + (TS_PARTS.indexOf(TS_PENDING.part) < 0 ? '' : 'display:none') + '" value="' + escAttr(TS_PARTS.indexOf(TS_PENDING.part) < 0 ? TS_PENDING.part : '') + '">'
-        + '<label>Run notes <input id="tsNotes" style="width:260px" value="' + escAttr(TS_PENDING.notes) + '"></label></div>'
-        + '<p class="step-hint">Edit lane names, enter the dilution used, and add per-lane notes. The raw run (.zip) is saved to the experiment\u2019s <strong>data \u203a tapestation</strong> folder.</p>'
-        + '<div style="overflow:auto"><table class="cost-table"><thead><tr><th>Well</th><th>Sample / lane name</th><th class="num">Conc [pg/\u00b5l]</th><th>Dilution</th><th>Notes</th><th>Trace</th></tr></thead><tbody>' + rows + '</tbody></table></div>'
+        + '<div class="row-actions" style="margin:6px 0"><label>Run notes <input id="tsNotes" style="width:300px" value="' + escAttr(TS_PENDING.notes) + '"></label></div>'
+        + '<p class="step-hint">Tag each lane: <strong>experimental section</strong> \u2192 <strong>sample type</strong> \u2192 <strong>sample #</strong> (auto-filled from the descriptions where possible). The full ID (e.g. \u201cASAP A9-ATAC\u201d) is built from those. Enter the dilution used and any notes.</p>'
+        + '<div style="overflow:auto"><table class="cost-table"><thead><tr><th>Well</th><th>Section</th><th>Type</th><th>Sample #</th><th>Full ID</th><th class="num">Conc [pg/\u00b5l]</th><th>Dilution</th><th>Notes</th><th>Trace</th></tr></thead><tbody>' + rows + '</tbody></table></div>'
         + '<div class="row-actions" style="margin-top:12px"><button class="btn primary" id="tsSave">Save run + upload to Drive</button> <button class="btn ghost" id="tsCancel">Cancel</button></div>'
         + '<div id="tsStatus" class="muted" style="margin-top:8px"></div>';
     }
@@ -324,13 +380,13 @@
       drop.addEventListener('click', () => fileInput && fileInput.click());
       drop.addEventListener('dragover', (e) => { e.preventDefault(); drop.classList.add('drag'); });
       drop.addEventListener('dragleave', () => drop.classList.remove('drag'));
-      drop.addEventListener('drop', (e) => { e.preventDefault(); drop.classList.remove('drag'); onFiles(e.dataTransfer.files); });
+      drop.addEventListener('drop', (e) => { e.preventDefault(); drop.classList.remove('drag'); filesFromDataTransfer(e.dataTransfer).then((fs) => onFiles(fs)); });
     }
     if (fileInput) fileInput.addEventListener('change', () => onFiles(fileInput.files));
-    const partSel = $('#tsPart'); if (partSel) partSel.addEventListener('change', () => { const v = partSel.value; const o = $('#tsPartOther'); if (v === '__other__') { if (o) o.style.display = ''; TS_PENDING.part = (o && o.value) || 'Other'; } else { if (o) o.style.display = 'none'; TS_PENDING.part = v; } });
-    const partOther = $('#tsPartOther'); if (partOther) partOther.addEventListener('input', () => { TS_PENDING.part = partOther.value; });
     const notesInp = $('#tsNotes'); if (notesInp) notesInp.addEventListener('input', () => { TS_PENDING.notes = notesInp.value; });
-    host.querySelectorAll('.ts-name').forEach((el) => el.addEventListener('input', () => { TS_PENDING.wells[+el.dataset.i].name = el.value; }));
+    host.querySelectorAll('.ts-arm').forEach((el) => el.addEventListener('change', () => { const w = TS_PENDING.wells[+el.dataset.i]; w.arm = el.value; const types = (TS_ARMS[w.arm] && TS_ARMS[w.arm].types) || []; if (types.indexOf(w.sampleType) < 0) w.sampleType = ''; renderTapestation(); }));
+    host.querySelectorAll('.ts-type').forEach((el) => el.addEventListener('change', () => { const w = TS_PENDING.wells[+el.dataset.i]; w.sampleType = el.value; el.closest('tr').querySelector('.who').textContent = tsLaneName(w); }));
+    host.querySelectorAll('.ts-no').forEach((el) => el.addEventListener('change', () => { const w = TS_PENDING.wells[+el.dataset.i]; w.sampleNo = el.value; el.closest('tr').querySelector('.who').textContent = tsLaneName(w); }));
     host.querySelectorAll('.ts-dil').forEach((el) => el.addEventListener('input', () => { TS_PENDING.wells[+el.dataset.i].dilution = el.value; }));
     host.querySelectorAll('.ts-note').forEach((el) => el.addEventListener('input', () => { TS_PENDING.wells[+el.dataset.i].note = el.value; }));
     const cancel = $('#tsCancel'); if (cancel) cancel.addEventListener('click', () => { TS_PENDING = null; renderTapestation(); });
@@ -342,11 +398,10 @@
   function saveTapestation(rec) {
     if (!TS_PENDING) return;
     const stEl = $('#tsStatus');
-    const part = TS_PENDING.part || 'Other';
     const files = TS_PENDING.files || [];
     if (!files.length) { stEl.textContent = 'Nothing to upload.'; return; }
-    const runFolder = sanitizeName(part + ' - ' + TS_PENDING.runName).slice(0, 80) || 'TapeStation run';
-    if (!confirm('Save ' + files.length + ' file(s) to the experiment\u2019s data/tapestation/\u201c' + runFolder + '\u201d folder? Files with the same name there will be overwritten. The lane summary + traces are stored on the experiment for the Review tab.')) return;
+    const runFolder = sanitizeName(TS_PENDING.runName).slice(0, 80) || 'TapeStation run';
+    if (!confirm('Save ' + files.length + ' file(s) to the experiment\u2019s data/tapestation/\u201c' + runFolder + '\u201d folder? Files with the same name there will be overwritten. The lane tags + traces are stored on the experiment for the Review tab.')) return;
     stEl.textContent = 'Uploading to Drive\u2026';
     const req = rec.driveFolderId
       ? { action: 'ensurePath', parentId: rec.driveFolderId, subPath: ['data', 'tapestation', runFolder] }
@@ -361,8 +416,8 @@
       })
       .then(() => {
         rec.tapestation = rec.tapestation || [];
-        rec.tapestation.push({ runName: TS_PENDING.runName, part: part, notes: TS_PENDING.notes || '', folder: runFolder, fileCount: files.length, savedAt: new Date().toISOString().slice(0, 10),
-          wells: TS_PENDING.wells.map((w) => ({ well: w.well, name: w.name, description: w.description, conc: w.conc, dilution: w.dilution, note: w.note, img: w.img, peaks: w.peaks || [] })) });
+        rec.tapestation.push({ runName: TS_PENDING.runName, notes: TS_PENDING.notes || '', folder: runFolder, fileCount: files.length, savedAt: new Date().toISOString().slice(0, 10),
+          wells: TS_PENDING.wells.map((w) => ({ well: w.well, arm: w.arm || '', sampleType: w.sampleType || '', sampleNo: w.sampleNo || '', name: tsLaneName(w), description: w.description, conc: w.conc, dilution: w.dilution, note: w.note, img: w.img, peaks: w.peaks || [] })) });
         Store.saveExperiment(rec);
         TS_PENDING = null; renderTapestation();
       })
@@ -683,7 +738,7 @@
     });
     const kitBtn = $('#suKits'); if (kitBtn) kitBtn.addEventListener('click', () => recordUsageUI(rec.id));
   }
-  let REV_TS_PART = null, REV_TS_VIEW = 'summary', REV_TS_MIN = '', REV_TS_MAX = '';
+  let REV_TS_ARM = 'all', REV_TS_TYPE = 'all', REV_TS_VIEW = 'summary', REV_TS_MIN = '', REV_TS_MAX = '';
   function renderReview(id) {
     if (id === 'rev-data') { renderReviewData(); return; }
     const s = REV_STUBS[id]; if (s) stubPage(s[0], s[1], s[2]);
@@ -694,45 +749,50 @@
     if (!rec) { host.innerHTML = '<h2>Data \u2014 TapeStation traces</h2><p class="empty">Select a project and experiment in the sidebar first.</p>'; return; }
     const runs = rec.tapestation || [];
     if (!runs.length) { host.innerHTML = '<h2>Data \u2014 TapeStation traces</h2><p class="empty">No TapeStation runs yet. Upload them on Record \u2192 Tapestation Output.</p>'; return; }
-    const parts = []; runs.forEach((r) => { if (parts.indexOf(r.part) < 0) parts.push(r.part); });
-    if (!REV_TS_PART || parts.indexOf(REV_TS_PART) < 0) REV_TS_PART = parts[0];
-    const partRuns = runs.filter((r) => r.part === REV_TS_PART);
-    const partBtns = parts.map((p) => '<button class="btn ' + (p === REV_TS_PART ? 'primary' : 'ghost') + '" data-rev-part="' + escAttr(p) + '">' + esc(p) + '</button>').join(' ');
+    // flatten all lanes across runs
+    const lanes = []; runs.forEach((r) => (r.wells || []).forEach((w) => lanes.push(Object.assign({}, w, { runName: r.runName }))));
+    const arms = []; const types = [];
+    lanes.forEach((w) => { if (w.arm && arms.indexOf(w.arm) < 0) arms.push(w.arm); if (w.sampleType && types.indexOf(w.sampleType) < 0) types.push(w.sampleType); });
+    if (REV_TS_ARM !== 'all' && arms.indexOf(REV_TS_ARM) < 0) REV_TS_ARM = 'all';
+    if (REV_TS_TYPE !== 'all' && types.indexOf(REV_TS_TYPE) < 0) REV_TS_TYPE = 'all';
+    const shown = lanes.filter((w) => (REV_TS_ARM === 'all' || w.arm === REV_TS_ARM) && (REV_TS_TYPE === 'all' || w.sampleType === REV_TS_TYPE));
+    shown.sort((a, b) => String(a.arm).localeCompare(String(b.arm)) || String(a.sampleType).localeCompare(String(b.sampleType)) || (Number(a.sampleNo) || 0) - (Number(b.sampleNo) || 0));
+
+    const armBtns = '<button class="btn ' + (REV_TS_ARM === 'all' ? 'primary' : 'ghost') + '" data-rev-arm="all">All sections</button> ' + arms.map((a) => '<button class="btn ' + (REV_TS_ARM === a ? 'primary' : 'ghost') + '" data-rev-arm="' + escAttr(a) + '">' + esc(a) + '</button>').join(' ');
+    const typeBtns = '<button class="btn ' + (REV_TS_TYPE === 'all' ? 'primary' : 'ghost') + '" data-rev-type="all">All types</button> ' + types.map((t) => '<button class="btn ' + (REV_TS_TYPE === t ? 'primary' : 'ghost') + '" data-rev-type="' + escAttr(t) + '">' + esc(t) + '</button>').join(' ');
+
     const minBp = REV_TS_MIN === '' ? null : Number(REV_TS_MIN);
     const maxBp = REV_TS_MAX === '' ? null : Number(REV_TS_MAX);
-    const hasPeaks = partRuns.some((r) => (r.wells || []).some((w) => (w.peaks || []).length));
+    const hasPeaks = shown.some((w) => (w.peaks || []).length);
     let body = '';
     if (REV_TS_VIEW === 'summary') {
       const regionUI = hasPeaks
         ? '<div class="callout info" style="margin-bottom:10px"><strong>Library region:</strong> restrict the concentration to a bp range and multiply by dilution to get total library concentration. '
           + 'From <input id="tsMin" type="number" placeholder="min bp" value="' + escAttr(REV_TS_MIN) + '" style="width:80px"> to <input id="tsMax" type="number" placeholder="max bp" value="' + escAttr(REV_TS_MAX) + '" style="width:80px"> bp '
-          + '<button class="btn ghost tiny" id="tsRegionApply">Apply</button> <button class="btn ghost tiny" id="tsRegionClear">Whole trace</button>'
-          + '<div class="who" style="margin-top:4px">Region conc = sum of peaks in range \u00b7 Total library conc = region conc \u00d7 dilution factor</div></div>'
+          + '<button class="btn ghost tiny" id="tsRegionApply">Apply</button> <button class="btn ghost tiny" id="tsRegionClear">Whole trace</button></div>'
         : '<p class="who">Upload the run\u2019s compactPeakTable.csv (or the full zip) to enable bp-range region concentrations.</p>';
-      const rows = [];
-      partRuns.forEach((r) => (r.wells || []).forEach((w) => {
+      const rows = shown.map((w) => {
         const dil = tsDilFactor(w.dilution); const reg = tsRegion(w.peaks, minBp, maxBp);
-        const hasReg = (w.peaks || []).length > 0;
-        const regConc = hasReg ? reg.conc : null;
-        const totalLib = regConc != null ? regConc * dil : null;
-        rows.push('<tr><td>' + esc(w.name || w.description || '') + '</td><td class="num">' + esc(w.well) + '</td>'
+        const hasReg = (w.peaks || []).length > 0; const regConc = hasReg ? reg.conc : null;
+        const totalLibNg = regConc != null ? (regConc * dil) / 1000 : null;
+        return '<tr><td>' + esc(w.name || w.description || '') + '</td><td>' + esc(w.arm || '') + '</td><td>' + esc(w.sampleType || '') + '</td><td class="num">' + esc(w.well) + '</td>'
           + '<td class="num">' + esc(w.conc) + '</td><td>' + esc(w.dilution || '') + '</td>'
           + '<td class="num">' + (regConc != null ? Math.round(regConc * 10) / 10 : '\u2014') + '</td>'
           + '<td class="num">' + (reg.avgBp != null ? reg.avgBp : '\u2014') + '</td>'
-          + '<td class="num"><strong>' + (totalLib != null ? Math.round(totalLib * 10) / 10 : '\u2014') + '</strong></td>'
-          + '<td class="who">' + esc(r.runName || '') + (w.note ? ' \u00b7 ' + esc(w.note) : '') + '</td></tr>');
-      }));
-      body = regionUI + '<table class="cost-table"><thead><tr><th>Sample / lane</th><th class="num">Well</th><th class="num">Trace conc [pg/\u00b5l]</th><th>Dilution</th><th class="num">Region conc [pg/\u00b5l]</th><th class="num">Avg bp</th><th class="num">Total library [pg/\u00b5l]</th><th>Run / notes</th></tr></thead><tbody>' + rows.join('') + '</tbody></table>';
+          + '<td class="num"><strong>' + (totalLibNg != null ? Math.round(totalLibNg * 100) / 100 : '\u2014') + '</strong></td>'
+          + '<td class="who">' + esc(w.runName || '') + (w.note ? ' \u00b7 ' + esc(w.note) : '') + '</td></tr>';
+      }).join('');
+      body = regionUI + '<table class="cost-table"><thead><tr><th>Full ID</th><th>Section</th><th>Type</th><th class="num">Well</th><th class="num">Trace conc [pg/\u00b5l]</th><th>Dilution</th><th class="num">Region conc [pg/\u00b5l]</th><th class="num">Avg bp</th><th class="num">Total library [ng/\u00b5l]</th><th>Run / notes</th></tr></thead><tbody>' + rows + '</tbody></table>';
     } else {
-      body = partRuns.map((r) => '<div style="margin-bottom:14px">' + (r.notes ? '<p class="who">' + esc(r.runName) + ' \u2014 ' + esc(r.notes) + '</p>' : '') + '<div class="ts-traces">'
-        + (r.wells || []).map((w) => w.img ? '<figure class="ts-trace"><img src="data:image/png;base64,' + w.img + '" class="ts-zoom" tabindex="0"><figcaption>' + esc(w.name || w.description || w.well) + (w.dilution ? ' \u00b7 ' + esc(w.dilution) : '') + '</figcaption></figure>' : '').join('')
-        + '</div></div>').join('');
+      body = '<div class="ts-traces">' + shown.map((w) => w.img ? '<figure class="ts-trace"><img src="data:image/png;base64,' + w.img + '" class="ts-zoom" tabindex="0"><figcaption>' + esc(w.name || w.description || w.well) + (w.dilution ? ' \u00b7 ' + esc(w.dilution) : '') + '</figcaption></figure>' : '').join('') + '</div>';
     }
     host.innerHTML = '<h2>Data \u2014 TapeStation traces <span class="who">' + esc(rec.name || '') + '</span></h2>'
-      + '<div class="row-actions" style="margin:4px 0 10px">' + partBtns + '</div>'
+      + '<div class="row-actions" style="margin:4px 0 6px">' + armBtns + '</div>'
+      + '<div class="row-actions" style="margin:0 0 10px">' + typeBtns + '</div>'
       + '<div class="row-actions" style="margin:0 0 12px"><button class="btn ' + (REV_TS_VIEW === 'summary' ? 'primary' : 'ghost') + '" data-rev-view="summary">Concentration summary</button> <button class="btn ' + (REV_TS_VIEW === 'traces' ? 'primary' : 'ghost') + '" data-rev-view="traces">Trace images</button></div>'
       + body;
-    host.querySelectorAll('button[data-rev-part]').forEach((b) => b.addEventListener('click', () => { REV_TS_PART = b.dataset.revPart; renderReviewData(); }));
+    host.querySelectorAll('button[data-rev-arm]').forEach((b) => b.addEventListener('click', () => { REV_TS_ARM = b.dataset.revArm; renderReviewData(); }));
+    host.querySelectorAll('button[data-rev-type]').forEach((b) => b.addEventListener('click', () => { REV_TS_TYPE = b.dataset.revType; renderReviewData(); }));
     host.querySelectorAll('button[data-rev-view]').forEach((b) => b.addEventListener('click', () => { REV_TS_VIEW = b.dataset.revView; renderReviewData(); }));
     const apply = $('#tsRegionApply'); if (apply) apply.addEventListener('click', () => { REV_TS_MIN = ($('#tsMin').value || '').trim(); REV_TS_MAX = ($('#tsMax').value || '').trim(); renderReviewData(); });
     const clr = $('#tsRegionClear'); if (clr) clr.addEventListener('click', () => { REV_TS_MIN = ''; REV_TS_MAX = ''; renderReviewData(); });
