@@ -178,10 +178,10 @@
   // edit lane names / dilutions / notes, store to Drive + on the record. =====
   const TS_ARMS = {
     'ASAP': { prefix: 'A', types: ['ATAC', 'ADT', 'HTO'] },
-    "5' unsort": { prefix: 'U', types: ['GEX', 'V(D)J', 'ADT/CSP', 'HTO'] },
-    "5' sort": { prefix: 'S', types: ['GEX', 'V(D)J', 'ADT/CSP'] },
+    "5' unsort": { prefix: 'U', types: ['GEX', 'TCR', 'BCR', 'ADT/CSP', 'HTO'] },
+    "5' sort": { prefix: 'S', types: ['GEX', 'TCR', 'BCR', 'ADT/CSP'] },
     'cDNA': { prefix: 'C', types: ['cDNA'] },
-    'Other': { prefix: '', types: ['GEX', 'ATAC', 'HTO', 'ADT', 'V(D)J', 'cDNA'] }
+    'Other': { prefix: '', types: ['GEX', 'ATAC', 'HTO', 'ADT', 'TCR', 'BCR', 'cDNA'] }
   };
   const TS_ARM_NAMES = Object.keys(TS_ARMS);
   // Trace images are large (a single PNG can be ~100k base64 chars). They must NOT
@@ -208,20 +208,24 @@
   // Guess { arm, type, no } from a TapeStation sample description, e.g. "BCP-1 ASAP ATAC A9 1:5".
   function tsGuessTags(desc) {
     const d = (desc || '').toUpperCase();
+    // sample number + its letter prefix from the lane/tube label (e.g. U1, A9, S3, C1)
+    const lane = d.match(/\b([AUSC])(\d+)\b/);
     let arm = '';
     if (/ASAP/.test(d)) arm = 'ASAP';
     else if (/UNSORT/.test(d)) arm = "5' unsort";
     else if (/SORT/.test(d)) arm = "5' sort";
     else if (/CDNA/.test(d)) arm = 'cDNA';
+    else if (lane) arm = { A: 'ASAP', U: "5' unsort", S: "5' sort", C: 'cDNA' }[lane[1]] || '';   // fall back to the label prefix
     let type = '';
     if (/ATAC/.test(d)) type = 'ATAC';
     else if (/HTO/.test(d)) type = 'HTO';
     else if (/ADT|CSP/.test(d)) type = (arm === 'ASAP' ? 'ADT' : 'ADT/CSP');
     else if (/GEX/.test(d)) type = 'GEX';
-    else if (/VDJ|V\(D\)J|TCR|BCR/.test(d)) type = 'V(D)J';
+    else if (/\bTCR\b/.test(d)) type = 'TCR';
+    else if (/\bBCR\b/.test(d)) type = 'BCR';
     else if (/CDNA/.test(d)) type = 'cDNA';
-    let no = ''; const m = d.match(/\b[AUSC](\d+)\b/); if (m) no = m[1];
-    return { arm: arm, type: type, no: no };
+    // (generic "VDJ" with no TCR/BCR is left blank so the user picks)
+    return { arm: arm, type: type, no: lane ? lane[2] : '' };
   }
   // Full lane label, e.g. "ASAP A9-ATAC".
   function tsLaneName(w) {
@@ -395,7 +399,8 @@
     }
 
     host.innerHTML = '<h2>Tapestation Output <span class="who">' + esc(rec.name || '') + '</span></h2>'
-      + '<p class="step-hint">Drag a TapeStation run <strong>.zip</strong>, or its <strong>loose files</strong> (sampleTable.csv, the .png traces, and/or the .pdf summary) \u2014 one or many at once. It reads the concentration summary + traces where present, and stores everything in the experiment\u2019s <strong>data \u203a tapestation</strong> folder.</p>'
+      + '<p class="step-hint">Drag a TapeStation run <strong>.zip</strong>, or its <strong>loose files</strong> (sampleTable.csv, the .png traces, and/or the .pdf summary) \u2014 one or many at once. It reads the concentration summary + traces where present, and stores everything (plus a durable <strong>lane-tags sheet</strong>) in the experiment\u2019s <strong>data \u203a tapestation</strong> folder.</p>'
+      + '<div class="row-actions" style="margin:0 0 10px"><button class="btn ghost" id="tsReload">Reload tags from Drive</button><span id="tsReloadStatus" class="muted"></span></div>'
       + '<div id="tsDrop" class="cc-drop">Drop a .zip, or the run\u2019s .csv / .png / .pdf files here (multiple ok), or click to browse<input type="file" id="tsFile" accept=".zip,.csv,.png,.pdf,.xlsx" multiple hidden></div>'
       + editUI + '<div style="margin-top:20px"></div>' + runList;
 
@@ -416,9 +421,30 @@
     host.querySelectorAll('.ts-note').forEach((el) => el.addEventListener('input', () => { TS_PENDING.wells[+el.dataset.i].note = el.value; }));
     const cancel = $('#tsCancel'); if (cancel) cancel.addEventListener('click', () => { TS_PENDING = null; renderTapestation(); });
     const saveBtn = $('#tsSave'); if (saveBtn) saveBtn.addEventListener('click', () => saveTapestation(rec));
+    const reloadBtn = $('#tsReload'); if (reloadBtn) reloadBtn.addEventListener('click', () => reloadTapestationFromDrive(rec));
     host.querySelectorAll('button[data-ts-del]').forEach((b) => b.addEventListener('click', () => {
       const i = +b.dataset.tsDel; if (rec.tapestation && !isNaN(i)) { rec.tapestation.splice(i, 1); Store.saveExperiment(rec); renderTapestation(); }
     }));
+  }
+  // Rebuild rec.tapestation from the durable lane-tags sheets in Drive - so tags +
+  // notes survive any record reset / site update (Drive is the source of truth).
+  function reloadTapestationFromDrive(rec) {
+    const stEl = $('#tsReloadStatus'); if (stEl) stEl.textContent = ' Reading Drive\u2026';
+    const req = rec.driveFolderId
+      ? { action: 'getTapestation', parentId: rec.driveFolderId }
+      : { action: 'getTapestation', project: rec.project || CURRENT_PROJECT, experiment: rec.name || 'Experiment' };
+    driveApi(req)
+      .then((res) => {
+        if (!res || !res.ok) throw new Error('no response');
+        const runs = res.runs || [];
+        if (!runs.length) { if (stEl) stEl.textContent = ' No lane-tags sheets found in Drive for this experiment.'; return; }
+        rec.tapestation = runs.map((r) => ({ runName: r.runName, notes: r.notes || '', folder: r.folder,
+          wells: (r.wells || []).map((w) => ({ well: w.well, arm: w.arm || '', sampleType: w.sampleType || '', sampleNo: w.sampleNo || '', name: w.name || tsLaneName(w), description: w.description || '', conc: w.conc || '', dilution: w.dilution || '', note: w.note || '', peaks: w.peaks || [], imgKey: tsImgKey(rec.id, r.runName, w.well) })) }));
+        Store.saveExperiment(rec);
+        if (stEl) stEl.textContent = ' Loaded ' + runs.length + ' run(s) from Drive.';
+        renderTapestation();
+      })
+      .catch((e) => { if (stEl) stEl.textContent = ' Reload failed: ' + e; });
   }
   function saveTapestation(rec) {
     if (!TS_PENDING) return;
@@ -438,6 +464,14 @@
         let n = 0;
         for (const f of files) { n += 1; stEl.textContent = 'Uploading ' + n + '/' + files.length + '\u2026';
           await driveApi({ action: 'upload', name: f.name, folderId: path.subId, base64: f.base64, sourceMime: f.mime }); }
+        // Durable lane-tags Google Sheet (source of truth for tags + notes, survives any record reset)
+        stEl.textContent = 'Saving lane tags\u2026';
+        const tagRows = [['Well', 'Original name', 'Section', 'Type', 'Sample #', 'Full ID', 'Dilution', 'Conc [pg/µl]', 'Notes', 'Peaks (JSON)']];
+        TS_PENDING.wells.forEach((w) => tagRows.push([w.well, w.description || '', w.arm || '', w.sampleType || '', w.sampleNo || '', tsLaneName(w), w.dilution || '', w.conc || '', w.note || '', JSON.stringify(w.peaks || [])]));
+        const tagWb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(tagWb, XLSX.utils.aoa_to_sheet([['Run', TS_PENDING.runName], ['Run notes', TS_PENDING.notes || ''], ['Saved', new Date().toISOString().slice(0, 16).replace('T', ' ')]]), 'Run info');
+        XLSX.utils.book_append_sheet(tagWb, XLSX.utils.aoa_to_sheet(tagRows), 'Lane tags');
+        await driveApi({ action: 'upload', name: runFolder + ' - lane tags', folderId: path.subId, base64: XLSX.write(tagWb, { type: 'base64', bookType: 'xlsx' }), sourceMime: XLSX_MIME, targetMime: GSHEET_MIME });
       })
       .then(() => {
         rec.tapestation = rec.tapestation || [];

@@ -1218,6 +1218,37 @@ async function handleDrivePost(request, env) {
     const projectsParent = env.DRIVE_PROJECTS_FOLDER_ID || parent;   // project folders nest here
     const token = await driveToken(env);
 
+    if (body.action === 'getTapestation') {
+      let base = body.parentId;
+      if (!base) {
+        if (!body.project) return json({ error: 'missing_project' }, 400);
+        const projectId = await driveEnsureFolder(token, body.project, projectsParent);
+        base = body.experiment ? await driveEnsureFolder(token, body.experiment, projectId) : projectId;
+      }
+      const dataId = await driveEnsureFolder(token, 'data', base);
+      const tsId = await driveEnsureFolder(token, 'tapestation', dataId);
+      const runFolders = await driveFind(token, "mimeType='" + G_FOLDER + "' and '" + tsId + "' in parents and trashed=false");
+      const runs = [];
+      for (const rf of runFolders) {
+        const sheets = await driveFind(token, "mimeType='application/vnd.google-apps.spreadsheet' and name contains 'lane tags' and '" + rf.id + "' in parents and trashed=false");
+        if (!sheets.length) continue;
+        let vals; try { vals = await sheetsBatchGet(token, sheets[0].id, ['Run info', 'Lane tags']); } catch (e) { continue; }
+        const info = (vals[0] && vals[0].values) || []; const tags = (vals[1] && vals[1].values) || [];
+        let notes = '', runName = rf.name;
+        info.forEach((r) => { const k = String((r[0] || '')).toLowerCase(); if (k === 'run notes') notes = r[1] || ''; if (k === 'run') runName = r[1] || runName; });
+        const hdr = (tags[0] || []).map((h) => String(h).toLowerCase());
+        const col = (n) => hdr.findIndex((h) => h.indexOf(n) === 0);
+        const iWell = col('well'), iOrig = col('original'), iSec = col('section'), iType = col('type'), iNo = col('sample #'), iFull = col('full'), iDil = col('dilution'), iConc = col('conc'), iNote = col('notes'), iPk = col('peaks');
+        const wells = [];
+        for (let i = 1; i < tags.length; i++) { const r = tags[i]; if (!r || !r[iWell]) continue;
+          let peaks = []; try { peaks = JSON.parse(r[iPk] || '[]'); } catch (e) { /* leave empty */ }
+          wells.push({ well: r[iWell], description: r[iOrig] || '', arm: r[iSec] || '', sampleType: r[iType] || '', sampleNo: r[iNo] || '', name: r[iFull] || '', dilution: r[iDil] || '', conc: r[iConc] || '', note: r[iNote] || '', peaks: peaks });
+        }
+        runs.push({ runName: runName, notes: notes, folder: rf.name, wells: wells });
+      }
+      return json({ ok: true, runs: runs });
+    }
+
     if (body.action === 'ensurePath') {
       let projectId = null, experimentId = null, base;
       if (body.parentId) {
