@@ -598,6 +598,7 @@
     { name: 'ASAP pre-load', mode: 'tube', fixed: 'asap-sp' },
     { name: "5' unsort super-pooling", mode: 'tube', prefix: 'unsort' },
     { name: "5' unsort pre-load", mode: 'tube', fixed: 'unsort-sp' },
+    { name: 'Pre-sort', mode: 'tube', prefix: 'sort' },
     { name: 'Sort pre-load', mode: 'tube', fixed: 'sort-sp' }
   ];
   function ccPurposeCfg(name) { return CC_PURPOSES.filter((p) => p.name === name)[0] || { name: name, mode: 'tube' }; }
