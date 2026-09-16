@@ -58,8 +58,20 @@
   function _proj() { if (PROJ_CACHE === null) PROJ_CACHE = readArr(PROJ_KEY); return PROJ_CACHE; }
 
   var _driveQueue = Promise.resolve();
+  // The experiments Sheet stores each record as JSON in one cell (~50k char limit),
+  // so never sync oversized blobs (e.g. base64 images). Strip them from a COPY for
+  // the sync; the local record is left untouched.
+  function stripForSync(rec) {
+    var copy; try { copy = JSON.parse(JSON.stringify(rec)); } catch (e) { return rec; }
+    (function walk(o) {
+      if (Array.isArray(o)) { for (var i = 0; i < o.length; i++) walk(o[i]); }
+      else if (o && typeof o === 'object') { for (var k in o) { if (typeof o[k] === 'string' && o[k].length > 20000) { o[k] = ''; } else walk(o[k]); } }
+    })(copy);
+    return copy;
+  }
   function drivePost(payload) {
     if (!DRIVE_READY) return Promise.resolve(); // never push if we never connected
+    if (payload && payload.record) { payload = { action: payload.action, record: stripForSync(payload.record) }; }
     // Chain writes so rapid saves for the same id can't race (each read-before-
     // write completes before the next begins).
     _driveQueue = _driveQueue.then(function () {

@@ -184,6 +184,27 @@
     'Other': { prefix: '', types: ['GEX', 'ATAC', 'HTO', 'ADT', 'V(D)J', 'cDNA'] }
   };
   const TS_ARM_NAMES = Object.keys(TS_ARMS);
+  // Trace images are large (a single PNG can be ~100k base64 chars). They must NOT
+  // live on the experiment record (which syncs to a Sheet cell, ~50k limit), so we
+  // keep them in a device-local store keyed by experiment/run/well.
+  function tsImgKey(expId, run, well) { return (expId || '') + '|' + (run || '') + '|' + (well || ''); }
+  function tsImgStoreGet() { try { return JSON.parse(localStorage.getItem('sc_ts_images') || '{}'); } catch (e) { return {}; } }
+  function tsImgStoreSet(m) { try { localStorage.setItem('sc_ts_images', JSON.stringify(m)); return true; } catch (e) { return false; } }
+  function tsSetImg(key, b64) { if (!key || !b64) return; const m = tsImgStoreGet(); m[key] = b64; tsImgStoreSet(m); }
+  function tsGetImg(w) { if (w && w.imgKey) { const v = tsImgStoreGet()[w.imgKey]; if (v) return v; } return (w && w.img) || null; }
+  // One-time migration: move any base64 images off existing records into the local
+  // store, so the (now small) records sync cleanly again.
+  function healExperimentBlobs() {
+    try {
+      (Store.allExperiments() || []).forEach((rec) => {
+        let changed = false;
+        (rec.tapestation || []).forEach((run) => (run.wells || []).forEach((w) => {
+          if (w.img && w.img.length > 200) { const key = tsImgKey(rec.id, run.runName, w.well); tsSetImg(key, w.img); w.imgKey = key; delete w.img; changed = true; }
+        }));
+        if (changed) Store.saveExperiment(rec);   // re-sync the now-small record
+      });
+    } catch (e) { /* best-effort */ }
+  }
   // Guess { arm, type, no } from a TapeStation sample description, e.g. "BCP-1 ASAP ATAC A9 1:5".
   function tsGuessTags(desc) {
     const d = (desc || '').toUpperCase();
@@ -421,7 +442,8 @@
       .then(() => {
         rec.tapestation = rec.tapestation || [];
         rec.tapestation.push({ runName: TS_PENDING.runName, notes: TS_PENDING.notes || '', folder: runFolder, fileCount: files.length, savedAt: new Date().toISOString().slice(0, 10),
-          wells: TS_PENDING.wells.map((w) => ({ well: w.well, arm: w.arm || '', sampleType: w.sampleType || '', sampleNo: w.sampleNo || '', name: tsLaneName(w), description: w.description, conc: w.conc, dilution: w.dilution, note: w.note, img: w.img, peaks: w.peaks || [] })) });
+          wells: TS_PENDING.wells.map((w) => { let imgKey = ''; if (w.img) { imgKey = tsImgKey(rec.id, TS_PENDING.runName, w.well); tsSetImg(imgKey, w.img); }
+            return { well: w.well, arm: w.arm || '', sampleType: w.sampleType || '', sampleNo: w.sampleNo || '', name: tsLaneName(w), description: w.description, conc: w.conc, dilution: w.dilution, note: w.note, imgKey: imgKey, peaks: w.peaks || [] }; }) });
         Store.saveExperiment(rec);
         TS_PENDING = null; renderTapestation();
       })
@@ -793,7 +815,7 @@
       }).join('');
       body = regionUI + '<table class="cost-table"><thead><tr><th>Full ID</th><th>Section</th><th>Type</th><th class="num">Well</th><th class="num">Trace conc [pg/\u00b5l]</th><th>Dilution</th><th class="num">Region conc [pg/\u00b5l]</th><th class="num">Avg bp</th><th class="num">Total library [ng/\u00b5l]</th><th>Run / notes</th></tr></thead><tbody>' + rows + '</tbody></table>';
     } else {
-      body = '<div class="ts-traces">' + shown.map((w) => w.img ? '<figure class="ts-trace"><img src="data:image/png;base64,' + w.img + '" class="ts-zoom" tabindex="0"><figcaption>' + esc(w.name || w.description || w.well) + (w.dilution ? ' \u00b7 ' + esc(w.dilution) : '') + '</figcaption></figure>' : '').join('') + '</div>';
+      body = '<div class="ts-traces">' + shown.map((w) => { const im = tsGetImg(w); return im ? '<figure class="ts-trace"><img src="data:image/png;base64,' + im + '" class="ts-zoom" tabindex="0"><figcaption>' + esc(w.name || w.description || w.well) + (w.dilution ? ' \u00b7 ' + esc(w.dilution) : '') + '</figcaption></figure>' : ''; }).join('') + '</div>';
     }
     host.innerHTML = '<h2>Data \u2014 TapeStation traces <span class="who">' + esc(rec.name || '') + '</span></h2>'
       + '<div class="row-actions" style="margin:4px 0 6px">' + armBtns + '</div>'
@@ -5226,6 +5248,7 @@
 
     // experiments / projects — hydrate from the shared Drive store first, then render
     Store.hydrateFromDrive().then((res) => {
+      healExperimentBlobs();   // migrate any base64 images off records so they sync cleanly
       renderManage();
       updatePlanExpBar();
       if (typeof refreshProjectDatalist === 'function') refreshProjectDatalist();
