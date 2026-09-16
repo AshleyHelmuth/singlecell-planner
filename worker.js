@@ -1218,6 +1218,53 @@ async function handleDrivePost(request, env) {
     const projectsParent = env.DRIVE_PROJECTS_FOLDER_ID || parent;   // project folders nest here
     const token = await driveToken(env);
 
+    if (body.action === 'getCellaca' || body.action === 'getSort') {
+      const isSort = body.action === 'getSort';
+      let base = body.parentId;
+      if (!base) {
+        if (!body.project) return json({ error: 'missing_project' }, 400);
+        const projectId = await driveEnsureFolder(token, body.project, projectsParent);
+        base = body.experiment ? await driveEnsureFolder(token, body.experiment, projectId) : projectId;
+      }
+      const dataId = await driveEnsureFolder(token, 'data', base);
+      const subId = await driveEnsureFolder(token, isSort ? 'sort' : 'cellaca counts', dataId);
+      const nameHint = isSort ? 'sort summary' : 'cellaca counts';
+      const sheets = await driveFind(token, "mimeType='application/vnd.google-apps.spreadsheet' and name contains '" + nameHint + "' and '" + subId + "' in parents and trashed=false");
+      // PDFs (sort only) for open-links
+      let pdfs = {};
+      if (isSort) { const fs = await driveFind(token, "mimeType='application/pdf' and '" + subId + "' in parents and trashed=false"); fs.forEach((f) => { pdfs[f.name] = f.id; }); }
+      if (!sheets.length) return json({ ok: true, list: [], reports: [], pdfs: pdfs });
+      const titlesUrl = 'https://sheets.googleapis.com/v4/spreadsheets/' + sheets[0].id + '?fields=sheets.properties.title';
+      const tr = await fetch(titlesUrl, { headers: { Authorization: 'Bearer ' + token } });
+      const td = await tr.json(); const titles = (td.sheets || []).map((s) => s.properties.title);
+      const vals = await sheetsBatchGet(token, sheets[0].id, titles);
+      const numOrNull = (x) => { const n = parseFloat(String(x).replace(/,/g, '')); return isNaN(n) ? null : n; };
+      if (isSort) {
+        const reports = {};
+        titles.forEach((title, ti) => {
+          const rows = (vals[ti] && vals[ti].values) || []; const hdr = (rows[0] || []).map((h) => String(h).toLowerCase());
+          const col = (n) => hdr.findIndex((h) => h.indexOf(n) === 0);
+          const iTube = col('tube'), iNote = col('note'), iPdf = col('pdf'), iColl = col('collection'), iGate = col('sort gate') >= 0 ? col('sort gate') : col('gate'), iTot = col('total event'), iCnt = col('sorted count');
+          for (let i = 1; i < rows.length; i++) { const r = rows[i]; if (!r || !r[iGate]) continue;
+            const tube = String(r[iTube] || ''); const key = tube + '|' + (r[iPdf] || '');
+            if (!reports[key]) reports[key] = { tube: tube, note: r[iNote] || '', fileName: r[iPdf] || '', rows: [] };
+            reports[key].rows.push({ collection: r[iColl] || '', gate: r[iGate] || '', totalEvent: numOrNull(r[iTot]) || 0, sortedCount: numOrNull(r[iCnt]) || 0 });
+          }
+        });
+        return json({ ok: true, reports: Object.keys(reports).map((k) => reports[k]), pdfs: pdfs });
+      }
+      const list = [];
+      titles.forEach((title, ti) => {
+        const rows = (vals[ti] && vals[ti].values) || []; const hdr = (rows[0] || []).map((h) => String(h).toLowerCase());
+        const col = (n) => hdr.findIndex((h) => h.indexOf(n) === 0);
+        const iNo = col('sample #'), iId = col('sample id'), iWell = col('well'), iThaw = col('thawer'), iLive = col('live'), iVia = col('viability'), iTot = col('total'), iUp = col('uploaded');
+        for (let i = 1; i < rows.length; i++) { const r = rows[i]; if (!r || (!r[iId] && !r[iNo])) continue;
+          list.push({ sampleNo: r[iNo] || '', sampleId: r[iId] || '', well: r[iWell] || '', thawer: r[iThaw] || '', purpose: title, live: numOrNull(r[iLive]), viability: numOrNull(r[iVia]), total: numOrNull(r[iTot]), uploadedAt: r[iUp] || '' });
+        }
+      });
+      return json({ ok: true, list: list });
+    }
+
     if (body.action === 'getTapestation') {
       let base = body.parentId;
       if (!base) {

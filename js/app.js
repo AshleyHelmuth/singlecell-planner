@@ -560,9 +560,9 @@
         + '<div id="ccStatus" class="muted" style="margin-top:8px"></div>';
     }
 
-    const topActions = list.length
-      ? '<div class="row-actions" style="margin:4px 0 14px"><button class="btn" id="ccSaveAll">Re-save counts spreadsheet to Drive</button><span id="ccAllStatus" class="muted"></span></div>'
-      : '';
+    const topActions = '<div class="row-actions" style="margin:4px 0 14px">'
+      + (list.length ? '<button class="btn" id="ccSaveAll">Re-save counts spreadsheet to Drive</button>' : '')
+      + '<button class="btn ghost" id="ccReload">Reload counts from Drive</button><span id="ccAllStatus" class="muted"></span></div>';
 
     host.innerHTML = '<h2>Cellaca counts <span class="who">' + esc(rec.name || '') + '</span></h2>'
       + '<p class="step-hint">Drag a Cellaca <strong>WellLevel .xlsx</strong> here (one plate at a time). Each file is renamed and saved to the experiment\u2019s <strong>data \u203a cellaca counts</strong> folder with thawer + count-purpose metadata, and the per-sample counts are stored on the experiment.</p>'
@@ -621,6 +621,7 @@
     const purposeOther = $('#ccPurposeOther'); if (purposeOther) purposeOther.addEventListener('input', () => { CELLACA_PENDING.purposeOther = purposeOther.value; });
     const plateInp = $('#ccPlate'); if (plateInp) plateInp.addEventListener('input', () => { CELLACA_PENDING.plate = plateInp.value; });
     const saveAll = $('#ccSaveAll'); if (saveAll) saveAll.addEventListener('click', () => saveAllCounts(rec));
+    const ccReload = $('#ccReload'); if (ccReload) ccReload.addEventListener('click', () => reloadCellacaFromDrive(rec));
     const cancel = $('#ccCancel'); if (cancel) cancel.addEventListener('click', () => { CELLACA_PENDING = null; renderCellaca(); });
     const save = $('#ccSave'); if (save) save.addEventListener('click', () => saveCellaca(rec));
     host.querySelectorAll('button[data-cc-del]').forEach((b) => b.addEventListener('click', () => {
@@ -696,6 +697,19 @@
   }
 
   // Re-generate the consolidated counts spreadsheet from the stored list.
+  function reloadCellacaFromDrive(rec) {
+    const stEl = $('#ccAllStatus'); if (stEl) stEl.textContent = ' Reading Drive\u2026';
+    const req = rec.driveFolderId ? { action: 'getCellaca', parentId: rec.driveFolderId } : { action: 'getCellaca', project: rec.project || CURRENT_PROJECT, experiment: rec.name || 'Experiment' };
+    driveApi(req).then((res) => {
+      if (!res || !res.ok) throw new Error('no response');
+      const list = res.list || [];
+      if (!list.length) { if (stEl) stEl.textContent = ' No counts spreadsheet found in Drive for this experiment.'; return; }
+      rec.cellacaCountsList = list.map((c) => ({ sampleNo: c.sampleNo, sampleId: c.sampleId, well: c.well, thawer: c.thawer, purpose: c.purpose, live: c.live, viability: c.viability, total: c.total, uploadedAt: c.uploadedAt }));
+      Store.saveExperiment(rec);
+      if (stEl) stEl.textContent = ' Loaded ' + list.length + ' counts from Drive.';
+      renderCellaca();
+    }).catch((e) => { if (stEl) stEl.textContent = ' Reload failed: ' + e; });
+  }
   function saveAllCounts(rec) {
     const stEl = $('#ccAllStatus');
     if (!(rec.cellacaCountsList || []).length) { if (stEl) stEl.textContent = 'No counts to save yet.'; return; }
@@ -895,8 +909,8 @@
     if (!rec) { host.innerHTML = '<h2>Sort summary</h2><p class="empty">Select a project and experiment in the sidebar first.</p>'; return; }
     const saved = rec.sortReports || [];
     const savedList = saved.length
-      ? '<h3>Saved sorts (' + saved.length + ')</h3><table class="cost-table"><thead><tr><th>Tube #</th><th>File</th><th class="num">Populations</th><th>Note</th><th></th></tr></thead><tbody>'
-        + saved.map((r, i) => '<tr><td class="num">' + esc(r.tube || '') + '</td><td class="who">' + esc(r.fileName || '') + '</td><td class="num">' + (r.rows || []).length + '</td><td class="who">' + esc(r.note || '') + '</td><td><button class="btn tiny" data-sort-del="' + i + '">\u2715</button></td></tr>').join('')
+      ? '<h3>Saved sorts (' + saved.length + ')</h3><table class="cost-table"><thead><tr><th>Tube #</th><th>File</th><th class="num">Populations</th><th>Note</th><th>PDF</th><th></th></tr></thead><tbody>'
+        + saved.map((r, i) => '<tr><td class="num">' + esc(r.tube || '') + '</td><td class="who">' + esc(r.fileName || '') + '</td><td class="num">' + (r.rows || []).length + '</td><td class="who">' + esc(r.note || '') + '</td><td>' + (r.pdfId ? '<a href="https://drive.google.com/file/d/' + escAttr(r.pdfId) + '/view" target="_blank" rel="noopener">Open</a>' : '\u2014') + '</td><td><button class="btn tiny" data-sort-del="' + i + '">\u2715</button></td></tr>').join('')
         + '</tbody></table>'
       : '<p class="muted">No sort reports saved yet.</p>';
     let editUI = '';
@@ -915,6 +929,7 @@
     }
     host.innerHTML = '<h2>Sort summary <span class="who">' + esc(rec.name || '') + '</span></h2>'
       + '<p class="step-hint">Drag a sorter report <strong>.pdf</strong> (one per sample tube) here. It parses the Sorting Result table for the sorted populations and counts, and stores the PDF in the experiment\u2019s <strong>data \u203a sort</strong> folder.</p>'
+      + '<div class="row-actions" style="margin:0 0 10px"><button class="btn ghost" id="sortReload">Reload from Drive</button><span id="sortReloadStatus" class="muted"></span></div>'
       + '<div id="sortDrop" class="cc-drop">Drop a sort report .pdf here, or click to browse<input type="file" id="sortFile" accept=".pdf" hidden></div>'
       + editUI + '<div style="margin-top:20px"></div>' + savedList;
 
@@ -940,9 +955,24 @@
     host.querySelectorAll('.sort-cnt').forEach((el) => el.addEventListener('input', () => { SORT_PENDING.rows[+el.dataset.i].sortedCount = el.value; }));
     const cancel = $('#sortCancel'); if (cancel) cancel.addEventListener('click', () => { SORT_PENDING = null; renderSortRecord(); });
     const save = $('#sortSave'); if (save) save.addEventListener('click', () => saveSortReport(rec));
+    const sortReload = $('#sortReload'); if (sortReload) sortReload.addEventListener('click', () => reloadSortFromDrive(rec));
     host.querySelectorAll('button[data-sort-del]').forEach((b) => b.addEventListener('click', () => {
       const i = +b.dataset.sortDel; if (rec.sortReports && !isNaN(i)) { rec.sortReports.splice(i, 1); Store.saveExperiment(rec); renderSortRecord(); }
     }));
+  }
+  function reloadSortFromDrive(rec) {
+    const stEl = $('#sortReloadStatus'); if (stEl) stEl.textContent = ' Reading Drive\u2026';
+    const req = rec.driveFolderId ? { action: 'getSort', parentId: rec.driveFolderId } : { action: 'getSort', project: rec.project || CURRENT_PROJECT, experiment: rec.name || 'Experiment' };
+    driveApi(req).then((res) => {
+      if (!res || !res.ok) throw new Error('no response');
+      const reports = res.reports || []; const pdfs = res.pdfs || {};
+      if (!reports.length) { if (stEl) stEl.textContent = ' No sort summary found in Drive for this experiment.'; return; }
+      rec.sortReports = reports.map((rep) => ({ tube: rep.tube || '', note: rep.note || '', fileName: rep.fileName || '', pdfId: pdfs[rep.fileName] || '',
+        rows: (rep.rows || []).map((r) => ({ collection: r.collection || '', gate: r.gate || '', totalEvent: Number(r.totalEvent) || 0, sortedCount: Number(r.sortedCount) || 0 })) }));
+      Store.saveExperiment(rec);
+      if (stEl) stEl.textContent = ' Loaded ' + rec.sortReports.length + ' report(s) from Drive.';
+      renderSortRecord();
+    }).catch((e) => { if (stEl) stEl.textContent = ' Reload failed: ' + e; });
   }
   function saveSortReport(rec) {
     if (!SORT_PENDING) return;
@@ -959,15 +989,23 @@
       .then((path) => {
         if (path && path.experimentId && rec.driveFolderId !== path.experimentId) { rec.driveFolderId = path.experimentId; }
         if (!path || !path.subId) throw new Error('could not reach the experiment\u2019s data/sort folder');
+        SORT_PENDING._folderId = path.subId;
         return driveApi({ action: 'upload', name: fileName, folderId: path.subId, base64: SORT_PENDING.base64, sourceMime: 'application/pdf' });
       })
-      .then(() => {
+      .then((up) => {
         rec.sortReports = rec.sortReports || [];
-        rec.sortReports.push({ tube: tube, note: SORT_PENDING.note || '', fileName: fileName, savedAt: new Date().toISOString().slice(0, 10),
+        rec.sortReports.push({ tube: tube, note: SORT_PENDING.note || '', fileName: fileName, pdfId: (up && up.id) || '', savedAt: new Date().toISOString().slice(0, 10),
           rows: SORT_PENDING.rows.map((r) => ({ collection: r.collection, gate: r.gate, totalEvent: Number(r.totalEvent) || 0, sortedCount: Number(r.sortedCount) || 0 })) });
         Store.saveExperiment(rec);
-        SORT_PENDING = null; renderSortRecord();
+        // durable sort-summary Google Sheet (all tubes) \u2014 source of truth + read-back
+        stEl.textContent = 'Saving sort summary\u2026';
+        const rows = [['Tube #', 'Note', 'PDF', 'Collection tube', 'Sort gate', 'Total event', 'Sorted count']];
+        rec.sortReports.forEach((rep) => (rep.rows || []).forEach((r) => rows.push([rep.tube || '', rep.note || '', rep.fileName || '', r.collection || '', r.gate || '', r.totalEvent || 0, r.sortedCount || 0])));
+        const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(rows), 'Sort summary');
+        const expId2 = rec.experimentId || projectLabel(rec.name || 'experiment');
+        return driveApi({ action: 'upload', name: sanitizeName(expId2 + ' sort summary'), folderId: SORT_PENDING._folderId, base64: XLSX.write(wb, { type: 'base64', bookType: 'xlsx' }), sourceMime: XLSX_MIME, targetMime: GSHEET_MIME });
       })
+      .then(() => { SORT_PENDING = null; renderSortRecord(); })
       .catch((e) => { stEl.textContent = 'Save failed: ' + e; });
   }
   // ---- Review -> Sort: per-tube counts + combined by population + percentages ----
