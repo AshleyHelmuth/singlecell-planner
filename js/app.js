@@ -883,7 +883,7 @@
   let SORT_PENDING = null;   // { fileName, base64, tube, note, rows:[{tube(collection),gate,totalEvent,sortedCount}] }
   async function parseSortPdf(arrayBuffer) {
     if (!window.pdfjsLib) throw new Error('PDF reader not loaded \u2014 reload the page.');
-    const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+    const pdf = await pdfjsLib.getDocument({ data: arrayBuffer.slice(0) }).promise;   // copy: getDocument detaches its buffer
     const out = []; const seen = {};
     for (let p = 1; p <= pdf.numPages; p++) {
       const page = await pdf.getPage(p);
