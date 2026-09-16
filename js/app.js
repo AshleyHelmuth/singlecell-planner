@@ -53,7 +53,7 @@
     review: { sidebar: true, panels: [
       { id: 'rev-design', label: 'Experimental design' }, { id: 'rev-seq', label: 'Sequencing' },
       { id: 'rev-sort', label: 'Sort' },
-      { id: 'rev-kits', label: 'Kit and supply usage' }, { id: 'rev-data', label: 'Data' } ] }
+      { id: 'rev-kits', label: 'Kit and supply usage' }, { id: 'rev-worksheets', label: 'Worksheets' }, { id: 'rev-data', label: 'Data' } ] }
   };
   let CUR_TOP = 'projects';
 
@@ -171,7 +171,90 @@
     if (id === 'rec-cellaca') { renderCellaca(); return; }
     if (id === 'rec-tapestation') { renderTapestation(); return; }
     if (id === 'rec-sort') { renderSortRecord(); return; }
+    if (id === 'rec-batchday') { renderWorksheet('batchday'); return; }
+    if (id === 'rec-library') { renderWorksheet('library'); return; }
     const s = REC_STUBS[id]; if (s) stubPage(s[0], s[1], s[2]);
+  }
+
+  // ===== Worksheet recorder: capture the fill-in tables from the batch-day (ASAP)
+  // and library (5') worksheets \u2014 kit lots + rxns used, cell counts, key metrics,
+  // and notes. Stored on the record + a durable Drive companion sheet. =====
+  const WORKSHEET_CFG = {
+    batchday: { title: 'Batch Day Worksheet', host: 'recBatchdayContent',
+      kits: [['Chromium Next GEM Single Cell ATAC Library Kit v2', ''], ['Chromium Next GEM Single Cell ATAC Gel Bead Kit v2', ''], ['Chromium Next GEM Chip H Single Cell Kit', ''], ['Single Index Kit N Set A, 96 rxns', 'PN-1000212']],
+      countCols: ['Tube / population', 'Total vol (µL)', 'Count', 'Total cell # (count×vol)', 'Dilution', 'Final conc (nuclei/µL)'] },
+    library: { title: 'Library Worksheets', host: 'recLibraryContent',
+      kits: [["Single Cell 5' GEM Kit v3", ''], ['Library Construction Kit C', ''], ["Single Cell 5' Gel Bead Kit v3", ''], ["GEM-X 5' Feature Barcode Kit v3, 16 rxns", 'PN-1000703'], ["GEM-X 5' Chip Kit v3, 4 chips", 'PN-1000698'], ['Dual Index Kit TT Set A, 96 rxns', 'PN-1000215'], ['Dual Index Kit TN Set A, 96 rxns', 'PN-1000250'], ['Single Cell Human TCR Amplification, 16 rxns', 'PN-1000252'], ['Single Cell Human BCR Amplification, 16 rxns', 'PN-1000253']],
+      countCols: ['Population', 'Tube label', 'Total vol (µL)', 'Total count', 'Viability', 'Live count', 'Total live cell #', 'Dilution', 'Final conc (cells/µL)'] }
+  };
+  function getWorksheet(rec, type) {
+    rec.worksheets = rec.worksheets || {};
+    if (!rec.worksheets[type]) {
+      const cfg = WORKSHEET_CFG[type];
+      rec.worksheets[type] = { expId: rec.experimentId || '', operator: '', date: '', notes: '',
+        kits: cfg.kits.map((k) => ({ kit: k[0], pn: k[1], lot: '', rxns: '', notes: '' })),
+        counts: [cfg.countCols.map(() => '')] };
+    }
+    return rec.worksheets[type];
+  }
+  function renderWorksheet(type) {
+    const cfg = WORKSHEET_CFG[type]; const host = $('#' + cfg.host); if (!host) return;
+    const rec = CURRENT_EXP_ID ? Store.getExperiment(CURRENT_EXP_ID) : null;
+    if (!rec) { host.innerHTML = '<h2>' + esc(cfg.title) + '</h2><p class="empty">Select a project and experiment in the sidebar first.</p>'; return; }
+    const w = getWorksheet(rec, type);
+    const kitRows = w.kits.map((k, i) => '<tr><td>' + esc(k.kit) + '</td><td class="who">' + esc(k.pn || '') + '</td>'
+      + '<td><input class="ws-lot" data-i="' + i + '" value="' + escAttr(k.lot || '') + '" style="width:120px"></td>'
+      + '<td><input class="ws-rxns" data-i="' + i + '" value="' + escAttr(k.rxns || '') + '" style="width:70px"></td>'
+      + '<td><input class="ws-knote" data-i="' + i + '" value="' + escAttr(k.notes || '') + '" style="width:150px"></td></tr>').join('');
+    const cHead = cfg.countCols.map((c) => '<th>' + esc(c) + '</th>').join('');
+    const cRows = w.counts.map((row, ri) => '<tr>' + cfg.countCols.map((c, ci) => '<td><input class="ws-cnt" data-r="' + ri + '" data-c="' + ci + '" value="' + escAttr(row[ci] || '') + '" style="width:90px"></td>').join('') + '<td><button class="btn tiny" data-ws-delrow="' + ri + '">\u2715</button></td></tr>').join('');
+    host.innerHTML = '<h2>' + esc(cfg.title) + ' <span class="who">' + esc(rec.name || '') + '</span></h2>'
+      + '<div class="row-actions" style="margin:0 0 10px"><button class="btn ghost" id="wsReload">Reload from Drive</button><span id="wsReloadStatus" class="muted"></span></div>'
+      + '<p class="step-hint">Enter the values written on the paper worksheet. Saved to the experiment and to a durable <strong>data \u203a worksheets</strong> sheet in Drive, and surfaced in Review.</p>'
+      + '<div class="row-actions" style="margin:6px 0"><label>Experiment ID <input id="wsExpId" style="width:120px" value="' + escAttr(w.expId || '') + '"></label> <label>Operator <input id="wsOperator" style="width:140px" value="' + escAttr(w.operator || '') + '"></label> <label>Date <input id="wsDate" style="width:120px" value="' + escAttr(w.date || '') + '"></label></div>'
+      + '<h3>10X kit lots &amp; rxns used</h3><table class="cost-table"><thead><tr><th>10X kit</th><th>PN</th><th>Lot #</th><th>Rxns used</th><th>Notes</th></tr></thead><tbody>' + kitRows + '</tbody></table>'
+      + '<h3 style="margin-top:18px">Cell counts &amp; dilution</h3><div style="overflow:auto"><table class="cost-table"><thead><tr>' + cHead + '<th></th></tr></thead><tbody>' + cRows + '</tbody></table></div>'
+      + '<div class="row-actions" style="margin:6px 0"><button class="btn ghost" id="wsAddRow">+ Add count row</button></div>'
+      + '<h3 style="margin-top:18px">Notes</h3><textarea id="wsNotes" style="width:100%;min-height:80px">' + esc(w.notes || '') + '</textarea>'
+      + '<div class="row-actions" style="margin-top:12px"><button class="btn primary" id="wsSave">Save worksheet</button><span id="wsStatus" class="muted"></span></div>';
+    // wiring
+    const bind = (id, key) => { const el = $('#' + id); if (el) el.addEventListener('input', () => { w[key] = el.value; }); };
+    bind('wsExpId', 'expId'); bind('wsOperator', 'operator'); bind('wsDate', 'date'); bind('wsNotes', 'notes');
+    host.querySelectorAll('.ws-lot').forEach((el) => el.addEventListener('input', () => { w.kits[+el.dataset.i].lot = el.value; }));
+    host.querySelectorAll('.ws-rxns').forEach((el) => el.addEventListener('input', () => { w.kits[+el.dataset.i].rxns = el.value; }));
+    host.querySelectorAll('.ws-knote').forEach((el) => el.addEventListener('input', () => { w.kits[+el.dataset.i].notes = el.value; }));
+    host.querySelectorAll('.ws-cnt').forEach((el) => el.addEventListener('input', () => { w.counts[+el.dataset.r][+el.dataset.c] = el.value; }));
+    const addRow = $('#wsAddRow'); if (addRow) addRow.addEventListener('click', () => { w.counts.push(cfg.countCols.map(() => '')); renderWorksheet(type); });
+    host.querySelectorAll('button[data-ws-delrow]').forEach((b) => b.addEventListener('click', () => { w.counts.splice(+b.dataset.wsDelrow, 1); if (!w.counts.length) w.counts.push(cfg.countCols.map(() => '')); renderWorksheet(type); }));
+    const save = $('#wsSave'); if (save) save.addEventListener('click', () => saveWorksheet(rec, type));
+    const reload = $('#wsReload'); if (reload) reload.addEventListener('click', () => reloadWorksheetFromDrive(rec, type));
+  }
+  function saveWorksheet(rec, type) {
+    const cfg = WORKSHEET_CFG[type]; const w = getWorksheet(rec, type);
+    const stEl = $('#wsStatus'); if (stEl) stEl.textContent = ' Saving\u2026';
+    Store.saveExperiment(rec);   // record-stored (small text, syncs safely)
+    // durable Drive companion sheet
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([['Experiment ID', w.expId || ''], ['Operator', w.operator || ''], ['Date', w.date || ''], ['Notes', w.notes || '']]), 'Info');
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([['10X kit', 'PN', 'Lot #', 'Rxns used', 'Notes']].concat(w.kits.map((k) => [k.kit, k.pn, k.lot, k.rxns, k.notes]))), 'Kit lots');
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([cfg.countCols].concat(w.counts)), 'Cell counts');
+    const b64 = XLSX.write(wb, { type: 'base64', bookType: 'xlsx' });
+    const expId2 = rec.experimentId || projectLabel(rec.name || 'experiment');
+    const req = rec.driveFolderId ? { action: 'ensurePath', parentId: rec.driveFolderId, subPath: ['data', 'worksheets'] } : { action: 'ensurePath', project: rec.project || CURRENT_PROJECT, experiment: rec.name || 'Experiment', subPath: ['data', 'worksheets'] };
+    driveApi(req)
+      .then((path) => { if (path && path.experimentId && rec.driveFolderId !== path.experimentId) { rec.driveFolderId = path.experimentId; }
+        if (!path || !path.subId) throw new Error('could not reach data/worksheets'); return driveApi({ action: 'upload', name: sanitizeName(expId2 + ' ' + type + ' worksheet'), folderId: path.subId, base64: b64, sourceMime: XLSX_MIME, targetMime: GSHEET_MIME }); })
+      .then(() => { if (stEl) stEl.textContent = ' Saved to the experiment and Drive.'; })
+      .catch((e) => { if (stEl) stEl.textContent = ' Saved to the experiment. Drive save failed: ' + e; });
+  }
+  function reloadWorksheetFromDrive(rec, type) {
+    const stEl = $('#wsReloadStatus'); if (stEl) stEl.textContent = ' Reading Drive\u2026';
+    const req = rec.driveFolderId ? { action: 'getWorksheet', parentId: rec.driveFolderId, type: type } : { action: 'getWorksheet', project: rec.project || CURRENT_PROJECT, experiment: rec.name || 'Experiment', type: type };
+    driveApi(req).then((res) => {
+      if (!res || !res.ok || !res.worksheet) { if (stEl) stEl.textContent = ' No worksheet found in Drive.'; return; }
+      rec.worksheets = rec.worksheets || {}; rec.worksheets[type] = res.worksheet; Store.saveExperiment(rec);
+      if (stEl) stEl.textContent = ' Loaded from Drive.'; renderWorksheet(type);
+    }).catch((e) => { if (stEl) stEl.textContent = ' Reload failed: ' + e; });
   }
 
   // ===== TapeStation: drag-drop a run .zip, tag it with the experiment part,
@@ -816,7 +899,41 @@
   function renderReview(id) {
     if (id === 'rev-data') { renderReviewData(); return; }
     if (id === 'rev-sort') { renderReviewSort(); return; }
+    if (id === 'rev-kits') { renderReviewKits(); return; }
+    if (id === 'rev-worksheets') { renderReviewWorksheets(); return; }
     const s = REV_STUBS[id]; if (s) stubPage(s[0], s[1], s[2]);
+  }
+  function renderReviewKits() {
+    const host = $('#revKitsContent'); if (!host) return;
+    const rec = CURRENT_EXP_ID ? Store.getExperiment(CURRENT_EXP_ID) : null;
+    if (!rec) { host.innerHTML = '<h2>Kit and supply usage</h2><p class="empty">Select a project and experiment in the sidebar first.</p>'; return; }
+    const ws = rec.worksheets || {};
+    let kitRows = '';
+    ['batchday', 'library'].forEach((type) => { const w = ws[type]; if (!w) return;
+      (w.kits || []).forEach((k) => { if (k.lot || k.rxns || k.notes) kitRows += '<tr><td>' + esc(WORKSHEET_CFG[type].title) + '</td><td>' + esc(k.kit) + '</td><td class="who">' + esc(k.pn || '') + '</td><td>' + esc(k.lot || '') + '</td><td class="num">' + esc(k.rxns || '') + '</td><td class="who">' + esc(k.notes || '') + '</td></tr>'; });
+    });
+    host.innerHTML = '<h2>Kit and supply usage <span class="who">' + esc(rec.name || '') + '</span></h2>'
+      + '<h3>Recorded 10X kit lots &amp; rxns used</h3>'
+      + (kitRows ? '<table class="cost-table"><thead><tr><th>Worksheet</th><th>10X kit</th><th>PN</th><th>Lot #</th><th class="num">Rxns used</th><th>Notes</th></tr></thead><tbody>' + kitRows + '</tbody></table>' : '<p class="empty">No kit lots recorded yet. Enter them on Record \u2192 Batch Day / Library Worksheets.</p>')
+      + '<p class="who" style="margin-top:10px">Planned reagent quantities &amp; cost are on Plan \u2192 Reagents &amp; cost.</p>';
+  }
+  function renderReviewWorksheets() {
+    const host = $('#revWorksheetsContent'); if (!host) return;
+    const rec = CURRENT_EXP_ID ? Store.getExperiment(CURRENT_EXP_ID) : null;
+    if (!rec) { host.innerHTML = '<h2>Worksheets</h2><p class="empty">Select a project and experiment in the sidebar first.</p>'; return; }
+    const ws = rec.worksheets || {};
+    let body = '';
+    ['batchday', 'library'].forEach((type) => { const w = ws[type]; const cfg = WORKSHEET_CFG[type]; if (!w) return;
+      body += '<h3>' + esc(cfg.title) + '</h3>';
+      body += '<p class="who">Experiment ID: ' + esc(w.expId || '\u2014') + ' \u00b7 Operator: ' + esc(w.operator || '\u2014') + ' \u00b7 Date: ' + esc(w.date || '\u2014') + '</p>';
+      const kr = (w.kits || []).filter((k) => k.lot || k.rxns).map((k) => '<tr><td>' + esc(k.kit) + '</td><td class="who">' + esc(k.pn || '') + '</td><td>' + esc(k.lot || '') + '</td><td class="num">' + esc(k.rxns || '') + '</td></tr>').join('');
+      if (kr) body += '<h4>Kit lots</h4><table class="cost-table"><thead><tr><th>Kit</th><th>PN</th><th>Lot #</th><th class="num">Rxns</th></tr></thead><tbody>' + kr + '</tbody></table>';
+      const rows = (w.counts || []).filter((r) => r.some((c) => c !== ''));
+      if (rows.length) body += '<h4>Cell counts</h4><div style="overflow:auto"><table class="cost-table"><thead><tr>' + cfg.countCols.map((c) => '<th>' + esc(c) + '</th>').join('') + '</tr></thead><tbody>' + rows.map((r) => '<tr>' + cfg.countCols.map((c, ci) => '<td>' + esc(r[ci] || '') + '</td>').join('') + '</tr>').join('') + '</tbody></table></div>';
+      if (w.notes) body += '<h4>Notes</h4><p class="who" style="white-space:pre-wrap">' + esc(w.notes) + '</p>';
+      body += '<div style="margin-bottom:18px"></div>';
+    });
+    host.innerHTML = '<h2>Worksheets <span class="who">' + esc(rec.name || '') + '</span></h2>' + (body || '<p class="empty">Nothing recorded yet. Enter worksheet values on Record \u2192 Batch Day / Library Worksheets.</p>');
   }
   function renderReviewData() {
     const host = $('#revDataContent'); if (!host) return;

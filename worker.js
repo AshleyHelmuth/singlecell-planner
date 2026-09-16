@@ -1218,6 +1218,22 @@ async function handleDrivePost(request, env) {
     const projectsParent = env.DRIVE_PROJECTS_FOLDER_ID || parent;   // project folders nest here
     const token = await driveToken(env);
 
+    if (body.action === 'getWorksheet') {
+      let base = body.parentId;
+      if (!base) { if (!body.project) return json({ error: 'missing_project' }, 400);
+        const projectId = await driveEnsureFolder(token, body.project, projectsParent); base = body.experiment ? await driveEnsureFolder(token, body.experiment, projectId) : projectId; }
+      const dataId = await driveEnsureFolder(token, 'data', base);
+      const wsId = await driveEnsureFolder(token, 'worksheets', dataId);
+      const sheets = await driveFind(token, "mimeType='application/vnd.google-apps.spreadsheet' and name contains '" + (body.type || '') + " worksheet' and '" + wsId + "' in parents and trashed=false");
+      if (!sheets.length) return json({ ok: true, worksheet: null });
+      let vals; try { vals = await sheetsBatchGet(token, sheets[0].id, ['Info', 'Kit lots', 'Cell counts']); } catch (e) { return json({ ok: true, worksheet: null }); }
+      const info = (vals[0] && vals[0].values) || []; const kitv = (vals[1] && vals[1].values) || []; const cntv = (vals[2] && vals[2].values) || [];
+      const iget = (k) => { const r = info.find((x) => String((x[0] || '')).toLowerCase() === k); return r ? (r[1] || '') : ''; };
+      const kits = []; for (let i = 1; i < kitv.length; i++) { const r = kitv[i]; if (!r || !r[0]) continue; kits.push({ kit: r[0], pn: r[1] || '', lot: r[2] || '', rxns: r[3] || '', notes: r[4] || '' }); }
+      const counts = []; for (let i = 1; i < cntv.length; i++) { if (cntv[i] && cntv[i].some((c) => c !== '')) counts.push(cntv[i]); }
+      return json({ ok: true, worksheet: { expId: iget('experiment id'), operator: iget('operator'), date: iget('date'), notes: iget('notes'), kits: kits, counts: counts.length ? counts : [[]] } });
+    }
+
     if (body.action === 'getCellaca' || body.action === 'getSort') {
       const isSort = body.action === 'getSort';
       let base = body.parentId;
