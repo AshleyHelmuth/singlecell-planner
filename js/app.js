@@ -207,19 +207,52 @@
     return wells;
   }
   function bufToB64(buf) { let bin = ''; const u8 = new Uint8Array(buf); for (let k = 0; k < u8.length; k++) bin += String.fromCharCode(u8[k]); return btoa(bin); }
+  // Per-peak table: each peak's Calibrated Conc is its region-weighted concentration,
+  // so summing peaks in a bp range gives the concentration over that range.
+  function tsParsePeaks(csvText) {
+    const rows = parseCsvText(csvText); if (!rows.length) return {};
+    const hdr = rows[0].map((h) => h.toLowerCase());
+    const iWell = hdr.findIndex((h) => h === 'well');
+    const iSize = hdr.findIndex((h) => h.indexOf('size') === 0);
+    const iConc = hdr.findIndex((h) => h.indexOf('calibrated conc') === 0);
+    const iObs = hdr.findIndex((h) => h.indexOf('observation') >= 0);
+    const byWell = {};
+    rows.slice(1).forEach((r) => {
+      const well = (r[iWell] || '').trim(); if (!well) return;
+      const size = parseFloat(r[iSize]); const conc = parseFloat(r[iConc]);
+      const marker = /marker/i.test(iObs >= 0 ? (r[iObs] || '') : '');
+      if (isNaN(size)) return;
+      (byWell[well] = byWell[well] || []).push({ size: size, conc: isNaN(conc) ? 0 : conc, marker: marker });
+    });
+    return byWell;
+  }
+  function tsDilFactor(dil) {
+    const s = String(dil || '').trim();
+    const m = s.match(/1\s*[:/]\s*([\d.]+)/); if (m) return parseFloat(m[1]) || 1;
+    const n = parseFloat(s); return (!isNaN(n) && n > 0) ? n : 1;
+  }
+  // Region concentration (sum of non-marker peaks in [min,max]) + conc-weighted avg bp.
+  function tsRegion(peaks, minBp, maxBp) {
+    const inR = (peaks || []).filter((p) => !p.marker && (minBp == null || p.size >= minBp) && (maxBp == null || p.size <= maxBp));
+    const conc = inR.reduce((s, p) => s + p.conc, 0);
+    const wsize = inR.reduce((s, p) => s + p.size * p.conc, 0);
+    return { conc: conc, avgBp: conc > 0 ? Math.round(wsize / conc) : null, n: inR.length };
+  }
 
   async function handleTsZip(file) {
     if (!window.JSZip) { alert('Zip reader not loaded \u2014 reload the page and try again.'); return; }
     const buf = await file.arrayBuffer();
     const zip = await JSZip.loadAsync(buf);
-    let sampleCsv = null; const imgs = {};
+    let sampleCsv = null, peakCsv = null; const imgs = {};
     const names = Object.keys(zip.files);
     for (const n of names) { const base = n.split('/').pop();
       if (/sampletable\.csv$/i.test(base)) sampleCsv = await zip.files[n].async('string');
+      else if (/compactpeaktable\.csv$/i.test(base)) peakCsv = await zip.files[n].async('string');
       else if (/\.png$/i.test(base)) { const m = base.match(/_([A-H]\d{1,2})_/); if (m) imgs[m[1]] = await zip.files[n].async('base64'); }
     }
     const wells = sampleCsv ? tsParseSampleTable(sampleCsv) : [];
-    wells.forEach((w) => { w.img = imgs[w.well] || null; });
+    const peaks = peakCsv ? tsParsePeaks(peakCsv) : {};
+    wells.forEach((w) => { w.img = imgs[w.well] || null; w.peaks = peaks[w.well] || []; });
     const runName = file.name.replace(/\.zip$/i, '');
     // the whole zip is stored/uploaded as one file
     TS_PENDING = { fileName: file.name, files: [{ name: file.name, base64: bufToB64(buf), mime: 'application/zip' }], runName: runName, part: TS_PARTS[0], notes: '', wells: wells };
@@ -233,16 +266,18 @@
     const files = Array.prototype.slice.call(fileList || []);
     if (!files.length) return;
     if (files.length === 1 && /\.zip$/i.test(files[0].name)) return handleTsZip(files[0]);
-    let sampleCsv = null; const imgs = {}; const stored = []; let runName = '';
+    let sampleCsv = null, peakCsv = null; const imgs = {}; const stored = []; let runName = '';
     for (const f of files) {
       const buf = await f.arrayBuffer(); const u8 = new Uint8Array(buf); const b64 = bufToB64(buf);
       stored.push({ name: f.name, base64: b64, mime: f.type || tsGuessMime(f.name) });
       if (/sampletable\.csv$/i.test(f.name)) sampleCsv = new TextDecoder('latin1').decode(u8);
+      else if (/compactpeaktable\.csv$/i.test(f.name)) peakCsv = new TextDecoder('latin1').decode(u8);
       else if (/\.png$/i.test(f.name)) { const m = f.name.match(/_([A-H]\d{1,2})_/); if (m) imgs[m[1]] = b64; }
       if (!runName) runName = f.name.replace(/\.(csv|png|pdf|xlsx?|zip)$/i, '').replace(/[ _]*(sampleTable|compactPeakTable|Electropherogram|[A-H]\d.*)$/i, '').trim();
     }
     const wells = sampleCsv ? tsParseSampleTable(sampleCsv) : [];
-    wells.forEach((w) => { w.img = imgs[w.well] || null; });
+    const peaks = peakCsv ? tsParsePeaks(peakCsv) : {};
+    wells.forEach((w) => { w.img = imgs[w.well] || null; w.peaks = peaks[w.well] || []; });
     TS_PENDING = { fileName: files.length === 1 ? files[0].name : (files.length + ' files'), files: stored, runName: runName || 'TapeStation run', part: TS_PARTS[0], notes: '', wells: wells };
     if (!wells.length) alert('Files added' + (Object.keys(imgs).length ? '' : ' \u2014 no sampleTable.csv found, so there\u2019s no per-lane summary') + '. You can still tag the part/notes and save (e.g. to archive a PDF).');
     renderTapestation();
@@ -327,7 +362,7 @@
       .then(() => {
         rec.tapestation = rec.tapestation || [];
         rec.tapestation.push({ runName: TS_PENDING.runName, part: part, notes: TS_PENDING.notes || '', folder: runFolder, fileCount: files.length, savedAt: new Date().toISOString().slice(0, 10),
-          wells: TS_PENDING.wells.map((w) => ({ well: w.well, name: w.name, description: w.description, conc: w.conc, dilution: w.dilution, note: w.note, img: w.img })) });
+          wells: TS_PENDING.wells.map((w) => ({ well: w.well, name: w.name, description: w.description, conc: w.conc, dilution: w.dilution, note: w.note, img: w.img, peaks: w.peaks || [] })) });
         Store.saveExperiment(rec);
         TS_PENDING = null; renderTapestation();
       })
@@ -648,7 +683,7 @@
     });
     const kitBtn = $('#suKits'); if (kitBtn) kitBtn.addEventListener('click', () => recordUsageUI(rec.id));
   }
-  let REV_TS_PART = null, REV_TS_VIEW = 'summary';
+  let REV_TS_PART = null, REV_TS_VIEW = 'summary', REV_TS_MIN = '', REV_TS_MAX = '';
   function renderReview(id) {
     if (id === 'rev-data') { renderReviewData(); return; }
     const s = REV_STUBS[id]; if (s) stubPage(s[0], s[1], s[2]);
@@ -663,14 +698,34 @@
     if (!REV_TS_PART || parts.indexOf(REV_TS_PART) < 0) REV_TS_PART = parts[0];
     const partRuns = runs.filter((r) => r.part === REV_TS_PART);
     const partBtns = parts.map((p) => '<button class="btn ' + (p === REV_TS_PART ? 'primary' : 'ghost') + '" data-rev-part="' + escAttr(p) + '">' + esc(p) + '</button>').join(' ');
+    const minBp = REV_TS_MIN === '' ? null : Number(REV_TS_MIN);
+    const maxBp = REV_TS_MAX === '' ? null : Number(REV_TS_MAX);
+    const hasPeaks = partRuns.some((r) => (r.wells || []).some((w) => (w.peaks || []).length));
     let body = '';
     if (REV_TS_VIEW === 'summary') {
+      const regionUI = hasPeaks
+        ? '<div class="callout info" style="margin-bottom:10px"><strong>Library region:</strong> restrict the concentration to a bp range and multiply by dilution to get total library concentration. '
+          + 'From <input id="tsMin" type="number" placeholder="min bp" value="' + escAttr(REV_TS_MIN) + '" style="width:80px"> to <input id="tsMax" type="number" placeholder="max bp" value="' + escAttr(REV_TS_MAX) + '" style="width:80px"> bp '
+          + '<button class="btn ghost tiny" id="tsRegionApply">Apply</button> <button class="btn ghost tiny" id="tsRegionClear">Whole trace</button>'
+          + '<div class="who" style="margin-top:4px">Region conc = sum of peaks in range \u00b7 Total library conc = region conc \u00d7 dilution factor</div></div>'
+        : '<p class="who">Upload the run\u2019s compactPeakTable.csv (or the full zip) to enable bp-range region concentrations.</p>';
       const rows = [];
-      partRuns.forEach((r) => (r.wells || []).forEach((w) => rows.push('<tr><td>' + esc(w.name || w.description || '') + '</td><td class="num">' + esc(w.well) + '</td><td class="num">' + esc(w.conc) + '</td><td>' + esc(w.dilution || '') + '</td><td class="who">' + esc(r.runName || '') + '</td><td class="who">' + esc(w.note || '') + '</td></tr>')));
-      body = '<table class="cost-table"><thead><tr><th>Sample / lane</th><th class="num">Well</th><th class="num">Conc [pg/\u00b5l]</th><th>Dilution</th><th>Run</th><th>Notes</th></tr></thead><tbody>' + rows.join('') + '</tbody></table>';
+      partRuns.forEach((r) => (r.wells || []).forEach((w) => {
+        const dil = tsDilFactor(w.dilution); const reg = tsRegion(w.peaks, minBp, maxBp);
+        const hasReg = (w.peaks || []).length > 0;
+        const regConc = hasReg ? reg.conc : null;
+        const totalLib = regConc != null ? regConc * dil : null;
+        rows.push('<tr><td>' + esc(w.name || w.description || '') + '</td><td class="num">' + esc(w.well) + '</td>'
+          + '<td class="num">' + esc(w.conc) + '</td><td>' + esc(w.dilution || '') + '</td>'
+          + '<td class="num">' + (regConc != null ? Math.round(regConc * 10) / 10 : '\u2014') + '</td>'
+          + '<td class="num">' + (reg.avgBp != null ? reg.avgBp : '\u2014') + '</td>'
+          + '<td class="num"><strong>' + (totalLib != null ? Math.round(totalLib * 10) / 10 : '\u2014') + '</strong></td>'
+          + '<td class="who">' + esc(r.runName || '') + (w.note ? ' \u00b7 ' + esc(w.note) : '') + '</td></tr>');
+      }));
+      body = regionUI + '<table class="cost-table"><thead><tr><th>Sample / lane</th><th class="num">Well</th><th class="num">Trace conc [pg/\u00b5l]</th><th>Dilution</th><th class="num">Region conc [pg/\u00b5l]</th><th class="num">Avg bp</th><th class="num">Total library [pg/\u00b5l]</th><th>Run / notes</th></tr></thead><tbody>' + rows.join('') + '</tbody></table>';
     } else {
       body = partRuns.map((r) => '<div style="margin-bottom:14px">' + (r.notes ? '<p class="who">' + esc(r.runName) + ' \u2014 ' + esc(r.notes) + '</p>' : '') + '<div class="ts-traces">'
-        + (r.wells || []).map((w) => w.img ? '<figure class="ts-trace"><img src="data:image/png;base64,' + w.img + '"><figcaption>' + esc(w.name || w.description || w.well) + (w.dilution ? ' \u00b7 ' + esc(w.dilution) : '') + '</figcaption></figure>' : '').join('')
+        + (r.wells || []).map((w) => w.img ? '<figure class="ts-trace"><img src="data:image/png;base64,' + w.img + '" class="ts-zoom" tabindex="0"><figcaption>' + esc(w.name || w.description || w.well) + (w.dilution ? ' \u00b7 ' + esc(w.dilution) : '') + '</figcaption></figure>' : '').join('')
         + '</div></div>').join('');
     }
     host.innerHTML = '<h2>Data \u2014 TapeStation traces <span class="who">' + esc(rec.name || '') + '</span></h2>'
@@ -679,6 +734,14 @@
       + body;
     host.querySelectorAll('button[data-rev-part]').forEach((b) => b.addEventListener('click', () => { REV_TS_PART = b.dataset.revPart; renderReviewData(); }));
     host.querySelectorAll('button[data-rev-view]').forEach((b) => b.addEventListener('click', () => { REV_TS_VIEW = b.dataset.revView; renderReviewData(); }));
+    const apply = $('#tsRegionApply'); if (apply) apply.addEventListener('click', () => { REV_TS_MIN = ($('#tsMin').value || '').trim(); REV_TS_MAX = ($('#tsMax').value || '').trim(); renderReviewData(); });
+    const clr = $('#tsRegionClear'); if (clr) clr.addEventListener('click', () => { REV_TS_MIN = ''; REV_TS_MAX = ''; renderReviewData(); });
+    host.querySelectorAll('.ts-zoom').forEach((img) => img.addEventListener('click', () => openImageLightbox(img.src)));
+  }
+  function openImageLightbox(src) {
+    let ov = document.getElementById('imgLightbox');
+    if (!ov) { ov = document.createElement('div'); ov.id = 'imgLightbox'; ov.className = 'img-lightbox'; ov.innerHTML = '<img>'; document.body.appendChild(ov); ov.addEventListener('click', () => { ov.style.display = 'none'; }); }
+    ov.querySelector('img').src = src; ov.style.display = 'flex';
   }
 
   // ---- Calendar page (all scheduled experiments + month grid + equipment week)
