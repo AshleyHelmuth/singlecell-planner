@@ -47,10 +47,12 @@
     record: { sidebar: true, panels: [
       { id: 'rec-freezer', label: 'Freezer Record' },
       { id: 'rec-cellaca', label: 'Cellaca counts' }, { id: 'rec-batchday', label: 'Batch Day Worksheet' },
+      { id: 'rec-sort', label: 'Sort summary' },
       { id: 'rec-library', label: 'Library Worksheets' }, { id: 'rec-tapestation', label: 'Tapestation Output' },
       { id: 'rec-supply', label: 'Supply Usage' }, { id: 'rec-seqdata', label: 'Sequencing data' } ] },
     review: { sidebar: true, panels: [
       { id: 'rev-design', label: 'Experimental design' }, { id: 'rev-seq', label: 'Sequencing' },
+      { id: 'rev-sort', label: 'Sort' },
       { id: 'rev-kits', label: 'Kit and supply usage' }, { id: 'rev-data', label: 'Data' } ] }
   };
   let CUR_TOP = 'projects';
@@ -168,6 +170,7 @@
     if (id === 'rec-supply') { renderSupplyUsage(); return; }
     if (id === 'rec-cellaca') { renderCellaca(); return; }
     if (id === 'rec-tapestation') { renderTapestation(); return; }
+    if (id === 'rec-sort') { renderSortRecord(); return; }
     const s = REC_STUBS[id]; if (s) stubPage(s[0], s[1], s[2]);
   }
 
@@ -742,6 +745,7 @@
   let REV_TS_ARM = 'all', REV_TS_TYPE = 'all', REV_TS_VIEW = 'summary', REV_TS_MIN = '', REV_TS_MAX = '';
   function renderReview(id) {
     if (id === 'rev-data') { renderReviewData(); return; }
+    if (id === 'rev-sort') { renderReviewSort(); return; }
     const s = REV_STUBS[id]; if (s) stubPage(s[0], s[1], s[2]);
   }
   function renderReviewData() {
@@ -803,6 +807,146 @@
     const clr = $('#tsRegionClear'); if (clr) clr.addEventListener('click', () => { REV_TS_MIN = ''; REV_TS_MAX = ''; renderReviewData(); });
     host.querySelectorAll('.ts-zoom').forEach((img) => img.addEventListener('click', () => openImageLightbox(img.src)));
   }
+  // ===== Sort summary: drag-drop Sony sort report PDFs, parse the Sorting Result
+  // table (Sort Gate = population, Total Event = cells sorted, Sorted Count), tag
+  // each with a tube # + note, store to Drive + on the record. =====
+  let SORT_PENDING = null;   // { fileName, base64, tube, note, rows:[{tube(collection),gate,totalEvent,sortedCount}] }
+  async function parseSortPdf(arrayBuffer) {
+    if (!window.pdfjsLib) throw new Error('PDF reader not loaded \u2014 reload the page.');
+    const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+    const out = []; const seen = {};
+    for (let p = 1; p <= pdf.numPages; p++) {
+      const page = await pdf.getPage(p);
+      const tc = await page.getTextContent();
+      const items = tc.items.map((it) => ({ str: it.str, x: it.transform[4], y: Math.round(it.transform[5]) }));
+      const byY = {}; items.forEach((it) => { (byY[it.y] = byY[it.y] || []).push(it); });
+      Object.keys(byY).map(Number).sort((a, b) => b - a).forEach((y) => {
+        const cells = byY[y].sort((a, b) => a.x - b.x).map((it) => it.str.trim()).filter((s) => s !== '');
+        const text = cells.join(' ');
+        // Collection tube | Sort Gate | Sort Mode | Elapsed | Total Event | Target Ratio | Sorted Count | ...
+        const m = text.match(/^(Far Left|Far Right|Left|Right)\s+(\S+)\s+\S+\s+[\d:]+\s+([\d,]+)\s+[\d.]+%\s+([\d,]+)/);
+        if (m) {
+          const key = m[1] + '|' + m[2] + '|' + m[4];
+          if (!seen[key]) { seen[key] = 1; out.push({ collection: m[1], gate: m[2], totalEvent: m[3].replace(/,/g, ''), sortedCount: m[4].replace(/,/g, '') }); }
+        }
+      });
+    }
+    return out;
+  }
+  function renderSortRecord() {
+    const host = $('#recSortContent'); if (!host) return;
+    const rec = CURRENT_EXP_ID ? Store.getExperiment(CURRENT_EXP_ID) : null;
+    if (!rec) { host.innerHTML = '<h2>Sort summary</h2><p class="empty">Select a project and experiment in the sidebar first.</p>'; return; }
+    const saved = rec.sortReports || [];
+    const savedList = saved.length
+      ? '<h3>Saved sorts (' + saved.length + ')</h3><table class="cost-table"><thead><tr><th>Tube #</th><th>File</th><th class="num">Populations</th><th>Note</th><th></th></tr></thead><tbody>'
+        + saved.map((r, i) => '<tr><td class="num">' + esc(r.tube || '') + '</td><td class="who">' + esc(r.fileName || '') + '</td><td class="num">' + (r.rows || []).length + '</td><td class="who">' + esc(r.note || '') + '</td><td><button class="btn tiny" data-sort-del="' + i + '">\u2715</button></td></tr>').join('')
+        + '</tbody></table>'
+      : '<p class="muted">No sort reports saved yet.</p>';
+    let editUI = '';
+    if (SORT_PENDING) {
+      const rows = SORT_PENDING.rows.map((r, i) => '<tr><td>' + esc(r.collection) + '</td>'
+        + '<td><input class="sort-gate" data-i="' + i + '" value="' + escAttr(r.gate) + '" style="width:120px"></td>'
+        + '<td class="num"><input class="sort-tot" data-i="' + i + '" value="' + escAttr(r.totalEvent) + '" style="width:120px"></td>'
+        + '<td class="num"><input class="sort-cnt" data-i="' + i + '" value="' + escAttr(r.sortedCount) + '" style="width:110px"></td>'
+        + '<td class="num">' + (Number(r.totalEvent) > 0 ? (Math.round(Number(r.sortedCount) / Number(r.totalEvent) * 1e6) / 1e4) + '%' : '\u2014') + '</td></tr>').join('');
+      editUI = '<h3>This sort <span class="who">' + esc(SORT_PENDING.fileName) + '</span></h3>'
+        + '<div class="row-actions" style="margin:6px 0"><label>Sample tube # <input id="sortTube" style="width:80px" value="' + escAttr(SORT_PENDING.tube || '') + '"></label> <label>Note <input id="sortNote" style="width:280px" value="' + escAttr(SORT_PENDING.note || '') + '"></label></div>'
+        + '<p class="step-hint">Auto-parsed from the Sorting Result table \u2014 verify/edit. <strong>Sort gate</strong> = sorted population, <strong>Total event</strong> = cells processed from this sample, <strong>Sorted count</strong> = cells of that population collected.</p>'
+        + (rows ? '<table class="cost-table"><thead><tr><th>Collection tube</th><th>Sort gate (population)</th><th class="num">Total event</th><th class="num">Sorted count</th><th class="num">% of total</th></tr></thead><tbody>' + rows + '</tbody></table>' : '<p class="empty">No Sorting Result table found in that PDF \u2014 you can still save it, but no counts were extracted.</p>')
+        + '<div class="row-actions" style="margin-top:12px"><button class="btn primary" id="sortSave">Save sort + upload PDF</button> <button class="btn ghost" id="sortCancel">Cancel</button></div>'
+        + '<div id="sortStatus" class="muted" style="margin-top:8px"></div>';
+    }
+    host.innerHTML = '<h2>Sort summary <span class="who">' + esc(rec.name || '') + '</span></h2>'
+      + '<p class="step-hint">Drag a sorter report <strong>.pdf</strong> (one per sample tube) here. It parses the Sorting Result table for the sorted populations and counts, and stores the PDF in the experiment\u2019s <strong>data \u203a sort</strong> folder.</p>'
+      + '<div id="sortDrop" class="cc-drop">Drop a sort report .pdf here, or click to browse<input type="file" id="sortFile" accept=".pdf" hidden></div>'
+      + editUI + '<div style="margin-top:20px"></div>' + savedList;
+
+    const drop = $('#sortDrop'), fileInput = $('#sortFile');
+    const onFile = (f) => { if (!f) return;
+      f.arrayBuffer().then((buf) => parseSortPdf(buf).then((rows) => {
+        SORT_PENDING = { fileName: f.name, base64: bufToB64(buf), tube: '', note: '', rows: rows };
+        if (!rows.length) alert('No Sorting Result table was found in that PDF \u2014 you can still archive it, but nothing was extracted.');
+        renderSortRecord();
+      })).catch((e) => alert('Could not read that PDF: ' + e));
+    };
+    if (drop) {
+      drop.addEventListener('click', () => fileInput && fileInput.click());
+      drop.addEventListener('dragover', (e) => { e.preventDefault(); drop.classList.add('drag'); });
+      drop.addEventListener('dragleave', () => drop.classList.remove('drag'));
+      drop.addEventListener('drop', (e) => { e.preventDefault(); drop.classList.remove('drag'); onFile(e.dataTransfer.files[0]); });
+    }
+    if (fileInput) fileInput.addEventListener('change', () => onFile(fileInput.files[0]));
+    const tubeInp = $('#sortTube'); if (tubeInp) tubeInp.addEventListener('input', () => { SORT_PENDING.tube = tubeInp.value; });
+    const noteInp = $('#sortNote'); if (noteInp) noteInp.addEventListener('input', () => { SORT_PENDING.note = noteInp.value; });
+    host.querySelectorAll('.sort-gate').forEach((el) => el.addEventListener('input', () => { SORT_PENDING.rows[+el.dataset.i].gate = el.value; }));
+    host.querySelectorAll('.sort-tot').forEach((el) => el.addEventListener('input', () => { SORT_PENDING.rows[+el.dataset.i].totalEvent = el.value; }));
+    host.querySelectorAll('.sort-cnt').forEach((el) => el.addEventListener('input', () => { SORT_PENDING.rows[+el.dataset.i].sortedCount = el.value; }));
+    const cancel = $('#sortCancel'); if (cancel) cancel.addEventListener('click', () => { SORT_PENDING = null; renderSortRecord(); });
+    const save = $('#sortSave'); if (save) save.addEventListener('click', () => saveSortReport(rec));
+    host.querySelectorAll('button[data-sort-del]').forEach((b) => b.addEventListener('click', () => {
+      const i = +b.dataset.sortDel; if (rec.sortReports && !isNaN(i)) { rec.sortReports.splice(i, 1); Store.saveExperiment(rec); renderSortRecord(); }
+    }));
+  }
+  function saveSortReport(rec) {
+    if (!SORT_PENDING) return;
+    const stEl = $('#sortStatus');
+    const tube = (SORT_PENDING.tube || '').trim();
+    const expId = rec.experimentId || projectLabel(rec.name || 'experiment');
+    const fileName = sanitizeName(expId + ' sort' + (tube ? ' tube ' + tube : '') + ' - ' + SORT_PENDING.fileName.replace(/\.pdf$/i, '')) + '.pdf';
+    if (!confirm('Save this sort report to the experiment\u2019s data/sort folder as \u201c' + fileName + '\u201d (overwrites a same-named file)?')) return;
+    stEl.textContent = 'Uploading to Drive\u2026';
+    const req = rec.driveFolderId
+      ? { action: 'ensurePath', parentId: rec.driveFolderId, subPath: ['data', 'sort'] }
+      : { action: 'ensurePath', project: rec.project || CURRENT_PROJECT, experiment: rec.name || 'Experiment', subPath: ['data', 'sort'] };
+    driveApi(req)
+      .then((path) => {
+        if (path && path.experimentId && rec.driveFolderId !== path.experimentId) { rec.driveFolderId = path.experimentId; }
+        if (!path || !path.subId) throw new Error('could not reach the experiment\u2019s data/sort folder');
+        return driveApi({ action: 'upload', name: fileName, folderId: path.subId, base64: SORT_PENDING.base64, sourceMime: 'application/pdf' });
+      })
+      .then(() => {
+        rec.sortReports = rec.sortReports || [];
+        rec.sortReports.push({ tube: tube, note: SORT_PENDING.note || '', fileName: fileName, savedAt: new Date().toISOString().slice(0, 10),
+          rows: SORT_PENDING.rows.map((r) => ({ collection: r.collection, gate: r.gate, totalEvent: Number(r.totalEvent) || 0, sortedCount: Number(r.sortedCount) || 0 })) });
+        Store.saveExperiment(rec);
+        SORT_PENDING = null; renderSortRecord();
+      })
+      .catch((e) => { stEl.textContent = 'Save failed: ' + e; });
+  }
+  // ---- Review -> Sort: per-tube counts + combined by population + percentages ----
+  function renderReviewSort() {
+    const host = $('#revSortContent'); if (!host) return;
+    const rec = CURRENT_EXP_ID ? Store.getExperiment(CURRENT_EXP_ID) : null;
+    if (!rec) { host.innerHTML = '<h2>Sort</h2><p class="empty">Select a project and experiment in the sidebar first.</p>'; return; }
+    const reports = rec.sortReports || [];
+    if (!reports.length) { host.innerHTML = '<h2>Sort</h2><p class="empty">No sort reports yet. Upload them on Record \u2192 Sort summary.</p>'; return; }
+    // per-tube rows + combine by gate
+    const perTube = []; const byGate = {}; let grandTotalEvents = 0; const tubeTotals = {};
+    reports.forEach((r) => {
+      (r.rows || []).forEach((row) => {
+        perTube.push({ tube: r.tube, collection: row.collection, gate: row.gate, totalEvent: row.totalEvent, sortedCount: row.sortedCount });
+        if (!byGate[row.gate]) byGate[row.gate] = { sorted: 0, totalEvent: 0 };
+        byGate[row.gate].sorted += row.sortedCount || 0;
+        // total event is the same across a tube's rows; count it once per tube
+        if (tubeTotals[r.tube || r.fileName] == null) { tubeTotals[r.tube || r.fileName] = row.totalEvent || 0; }
+      });
+    });
+    Object.keys(tubeTotals).forEach((t) => { grandTotalEvents += tubeTotals[t] || 0; });
+    Object.keys(byGate).forEach((g) => { byGate[g].totalEvent = grandTotalEvents; });
+
+    const pct = (n, d) => d > 0 ? (Math.round(n / d * 1e6) / 1e4) + '%' : '\u2014';
+    const perRows = perTube.map((x) => '<tr><td class="num">' + esc(x.tube || '') + '</td><td>' + esc(x.collection || '') + '</td><td>' + esc(x.gate || '') + '</td><td class="num">' + (x.totalEvent || 0).toLocaleString() + '</td><td class="num">' + (x.sortedCount || 0).toLocaleString() + '</td><td class="num">' + pct(x.sortedCount, x.totalEvent) + '</td></tr>').join('');
+    const gateRows = Object.keys(byGate).sort().map((g) => '<tr><td>' + esc(g) + '</td><td class="num"><strong>' + byGate[g].sorted.toLocaleString() + '</strong></td><td class="num">' + pct(byGate[g].sorted, grandTotalEvents) + '</td></tr>').join('');
+
+    host.innerHTML = '<h2>Sort <span class="who">' + esc(rec.name || '') + '</span></h2>'
+      + '<h3>Combined across all tubes, by population</h3>'
+      + '<p class="who">% of total = sorted count \u00f7 total cells processed across all tubes (' + grandTotalEvents.toLocaleString() + ').</p>'
+      + '<table class="cost-table"><thead><tr><th>Population (sort gate)</th><th class="num">Total sorted</th><th class="num">% of total</th></tr></thead><tbody>' + gateRows + '</tbody></table>'
+      + '<h3 style="margin-top:22px">Per tube</h3>'
+      + '<table class="cost-table"><thead><tr><th class="num">Tube #</th><th>Collection tube</th><th>Population</th><th class="num">Total event</th><th class="num">Sorted count</th><th class="num">% of total</th></tr></thead><tbody>' + perRows + '</tbody></table>';
+  }
+
   function openImageLightbox(src) {
     let ov = document.getElementById('imgLightbox');
     if (!ov) { ov = document.createElement('div'); ov.id = 'imgLightbox'; ov.className = 'img-lightbox'; ov.innerHTML = '<img>'; document.body.appendChild(ov); ov.addEventListener('click', () => { ov.style.display = 'none'; }); }
