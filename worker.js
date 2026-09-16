@@ -1273,9 +1273,9 @@ async function handleDrivePost(request, env) {
       titles.forEach((title, ti) => {
         const rows = (vals[ti] && vals[ti].values) || []; const hdr = (rows[0] || []).map((h) => String(h).toLowerCase());
         const col = (n) => hdr.findIndex((h) => h.indexOf(n) === 0);
-        const iNo = col('sample #'), iId = col('sample id'), iWell = col('well'), iThaw = col('thawer'), iLive = col('live'), iVia = col('viability'), iTot = col('total'), iUp = col('uploaded');
-        for (let i = 1; i < rows.length; i++) { const r = rows[i]; if (!r || (!r[iId] && !r[iNo])) continue;
-          list.push({ sampleNo: r[iNo] || '', sampleId: r[iId] || '', well: r[iWell] || '', thawer: r[iThaw] || '', purpose: title, live: numOrNull(r[iLive]), viability: numOrNull(r[iVia]), total: numOrNull(r[iTot]), uploadedAt: r[iUp] || '' });
+        const iNo = col('sample #'), iId = col('sample id'), iTube = col('tube label'), iWell = col('well'), iThaw = col('thawer'), iLive = col('live'), iVia = col('viability'), iTot = col('total'), iNote = col('notes'), iUp = col('uploaded');
+        for (let i = 1; i < rows.length; i++) { const r = rows[i]; if (!r || (!r[iId] && !r[iNo] && !(iTube >= 0 && r[iTube]))) continue;
+          list.push({ sampleNo: r[iNo] || '', sampleId: r[iId] || '', tubeLabel: iTube >= 0 ? (r[iTube] || '') : '', well: r[iWell] || '', thawer: r[iThaw] || '', purpose: title, live: numOrNull(r[iLive]), viability: numOrNull(r[iVia]), total: numOrNull(r[iTot]), notes: iNote >= 0 ? (r[iNote] || '') : '', uploadedAt: r[iUp] || '' });
         }
       });
       return json({ ok: true, list: list });
