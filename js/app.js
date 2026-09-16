@@ -353,6 +353,7 @@
       const typeOptions = (arm, sel) => { const t = (TS_ARMS[arm] && TS_ARMS[arm].types) || []; return '<option value="">\u2014</option>' + t.map((x) => '<option' + (sel === x ? ' selected' : '') + '>' + esc(x) + '</option>').join(''); };
       const noOptions = (sel) => { let o = '<option value="">\u2014</option>'; for (let k = 1; k <= 24; k++) o += '<option' + (String(sel) === String(k) ? ' selected' : '') + '>' + k + '</option>'; return o; };
       const rows = TS_PENDING.wells.map((w, i) => '<tr><td class="num">' + esc(w.well) + '</td>'
+        + '<td class="who">' + esc(w.description || '') + '</td>'
         + '<td><select class="ts-arm" data-i="' + i + '">' + armOptions(w.arm) + '</select></td>'
         + '<td><select class="ts-type" data-i="' + i + '">' + typeOptions(w.arm, w.sampleType) + '</select></td>'
         + '<td><select class="ts-no" data-i="' + i + '">' + noOptions(w.sampleNo) + '</select></td>'
@@ -364,7 +365,7 @@
       editUI = '<h3>This run <span class="who">' + esc(TS_PENDING.fileName) + '</span></h3>'
         + '<div class="row-actions" style="margin:6px 0"><label>Run notes <input id="tsNotes" style="width:300px" value="' + escAttr(TS_PENDING.notes) + '"></label></div>'
         + '<p class="step-hint">Tag each lane: <strong>experimental section</strong> \u2192 <strong>sample type</strong> \u2192 <strong>sample #</strong> (auto-filled from the descriptions where possible). The full ID (e.g. \u201cASAP A9-ATAC\u201d) is built from those. Enter the dilution used and any notes.</p>'
-        + '<div style="overflow:auto"><table class="cost-table"><thead><tr><th>Well</th><th>Section</th><th>Type</th><th>Sample #</th><th>Full ID</th><th class="num">Conc [pg/\u00b5l]</th><th>Dilution</th><th>Notes</th><th>Trace</th></tr></thead><tbody>' + rows + '</tbody></table></div>'
+        + '<div style="overflow:auto"><table class="cost-table"><thead><tr><th>Well</th><th>Original name (from file)</th><th>Section</th><th>Type</th><th>Sample #</th><th>Full ID</th><th class="num">Conc [pg/\u00b5l]</th><th>Dilution</th><th>Notes</th><th>Trace</th></tr></thead><tbody>' + rows + '</tbody></table></div>'
         + '<div class="row-actions" style="margin-top:12px"><button class="btn primary" id="tsSave">Save run + upload to Drive</button> <button class="btn ghost" id="tsCancel">Cancel</button></div>'
         + '<div id="tsStatus" class="muted" style="margin-top:8px"></div>';
     }
@@ -756,7 +757,11 @@
     if (REV_TS_ARM !== 'all' && arms.indexOf(REV_TS_ARM) < 0) REV_TS_ARM = 'all';
     if (REV_TS_TYPE !== 'all' && types.indexOf(REV_TS_TYPE) < 0) REV_TS_TYPE = 'all';
     const shown = lanes.filter((w) => (REV_TS_ARM === 'all' || w.arm === REV_TS_ARM) && (REV_TS_TYPE === 'all' || w.sampleType === REV_TS_TYPE));
-    shown.sort((a, b) => String(a.arm).localeCompare(String(b.arm)) || String(a.sampleType).localeCompare(String(b.sampleType)) || (Number(a.sampleNo) || 0) - (Number(b.sampleNo) || 0));
+    // Only reorder when the user has actively filtered; otherwise keep the original
+    // upload / chip-lane order (which is how the run was loaded).
+    if (REV_TS_ARM !== 'all' || REV_TS_TYPE !== 'all') {
+      shown.sort((a, b) => String(a.arm).localeCompare(String(b.arm)) || String(a.sampleType).localeCompare(String(b.sampleType)) || (Number(a.sampleNo) || 0) - (Number(b.sampleNo) || 0));
+    }
 
     const armBtns = '<button class="btn ' + (REV_TS_ARM === 'all' ? 'primary' : 'ghost') + '" data-rev-arm="all">All sections</button> ' + arms.map((a) => '<button class="btn ' + (REV_TS_ARM === a ? 'primary' : 'ghost') + '" data-rev-arm="' + escAttr(a) + '">' + esc(a) + '</button>').join(' ');
     const typeBtns = '<button class="btn ' + (REV_TS_TYPE === 'all' ? 'primary' : 'ghost') + '" data-rev-type="all">All types</button> ' + types.map((t) => '<button class="btn ' + (REV_TS_TYPE === t ? 'primary' : 'ghost') + '" data-rev-type="' + escAttr(t) + '">' + esc(t) + '</button>').join(' ');
