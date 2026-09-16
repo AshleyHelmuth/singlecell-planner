@@ -308,7 +308,7 @@
     wells.forEach((w) => { w.img = imgs[w.well] || null; w.peaks = peaks[w.well] || []; const g = tsGuessTags(w.description); w.arm = g.arm; w.sampleType = g.type; w.sampleNo = g.no; w.name = tsLaneName(w); });
     const runName = file.name.replace(/\.zip$/i, '');
     // the whole zip is stored/uploaded as one file
-    TS_PENDING = { fileName: file.name, files: [{ name: file.name, base64: bufToB64(buf), mime: 'application/zip' }], runName: runName, part: TS_PARTS[0], notes: '', wells: wells };
+    TS_PENDING = { fileName: file.name, files: [{ name: file.name, base64: bufToB64(buf), mime: 'application/zip' }], runName: runName, notes: '', wells: wells };
     if (!wells.length) alert('Zip uploaded, but no sampleTable.csv was found \u2014 you can still save it (no per-lane summary).');
     renderTapestation();
   }
@@ -331,7 +331,7 @@
     const wells = sampleCsv ? tsParseSampleTable(sampleCsv) : [];
     const peaks = peakCsv ? tsParsePeaks(peakCsv) : {};
     wells.forEach((w) => { w.img = imgs[w.well] || null; w.peaks = peaks[w.well] || []; const g = tsGuessTags(w.description); w.arm = g.arm; w.sampleType = g.type; w.sampleNo = g.no; w.name = tsLaneName(w); });
-    TS_PENDING = { fileName: files.length === 1 ? files[0].name : (files.length + ' files'), files: stored, runName: runName || 'TapeStation run', part: TS_PARTS[0], notes: '', wells: wells };
+    TS_PENDING = { fileName: files.length === 1 ? files[0].name : (files.length + ' files'), files: stored, runName: runName || 'TapeStation run', notes: '', wells: wells };
     if (!wells.length) alert('Files added' + (Object.keys(imgs).length ? '' : ' \u2014 no sampleTable.csv found, so there\u2019s no per-lane summary') + '. You can still tag the part/notes and save (e.g. to archive a PDF).');
     renderTapestation();
   }
