@@ -52,7 +52,7 @@
       { id: 'rec-supply', label: 'Supply Usage' }, { id: 'rec-seqdata', label: 'Sequencing data' } ] },
     review: { sidebar: true, panels: [
       { id: 'rev-design', label: 'Experimental design' }, { id: 'rev-seq', label: 'Sequencing' },
-      { id: 'rev-sort', label: 'Sort' },
+      { id: 'rev-sort', label: 'Sort' }, { id: 'rev-counts', label: 'Counts' },
       { id: 'rev-kits', label: 'Kit and supply usage' }, { id: 'rev-worksheets', label: 'Worksheets' }, { id: 'rev-data', label: 'Data' } ] }
   };
   let CUR_TOP = 'projects';
@@ -899,9 +899,54 @@
   function renderReview(id) {
     if (id === 'rev-data') { renderReviewData(); return; }
     if (id === 'rev-sort') { renderReviewSort(); return; }
+    if (id === 'rev-counts') { renderReviewCounts(); return; }
     if (id === 'rev-kits') { renderReviewKits(); return; }
     if (id === 'rev-worksheets') { renderReviewWorksheets(); return; }
     const s = REV_STUBS[id]; if (s) stubPage(s[0], s[1], s[2]);
+  }
+  // Counts summary: cells per sample at each stage (Cellaca counts by purpose),
+  // the worksheet loading counts, and how the pools ended up.
+  function renderReviewCounts() {
+    const host = $('#revCountsContent'); if (!host) return;
+    const rec = CURRENT_EXP_ID ? Store.getExperiment(CURRENT_EXP_ID) : null;
+    if (!rec) { host.innerHTML = '<h2>Counts</h2><p class="empty">Select a project and experiment in the sidebar first.</p>'; return; }
+    const fmtN = (n) => (n == null || n === '') ? '\u2014' : Number(n).toLocaleString();
+    let body = '';
+
+    // 1) Cells at each stage \u2014 pivot the Cellaca counts (live cells/mL) by sample x purpose
+    const list = rec.cellacaCountsList || [];
+    if (list.length) {
+      const purposes = []; const bySample = {};
+      list.forEach((c) => { if (purposes.indexOf(c.purpose) < 0) purposes.push(c.purpose);
+        const key = (c.sampleNo != null && c.sampleNo !== '') ? String(c.sampleNo) : c.sampleId;
+        if (!bySample[key]) bySample[key] = { sampleNo: c.sampleNo, sampleId: c.sampleId, byP: {} };
+        bySample[key].byP[c.purpose] = c; });
+      const samples = Object.keys(bySample).map((k) => bySample[k]).sort((a, b) => (Number(a.sampleNo) || 0) - (Number(b.sampleNo) || 0));
+      const rows = samples.map((s) => '<tr><td class="num">' + esc(s.sampleNo != null ? s.sampleNo : '') + '</td><td>' + esc(s.sampleId || '') + '</td>'
+        + purposes.map((p) => { const c = s.byP[p]; return '<td class="num">' + (c && c.live != null ? fmtN(c.live) + (c.viability != null ? ' <span class="who">(' + c.viability + '%)</span>' : '') : '\u2014') + '</td>'; }).join('') + '</tr>').join('');
+      body += '<h3>Cells at each stage <span class="who">(Cellaca live cells/mL, viability)</span></h3>'
+        + '<table class="cost-table"><thead><tr><th class="num">Sample #</th><th>Sample ID</th>' + purposes.map((p) => '<th class="num">' + esc(p) + '</th>').join('') + '</tr></thead><tbody>' + rows + '</tbody></table>';
+    }
+
+    // 2) Worksheet loading counts (the counting-calculation tables)
+    const ws = rec.worksheets || {};
+    ['batchday', 'library'].forEach((type) => { const w = ws[type]; if (!w) return; const cfg = WORKSHEET_CFG[type];
+      const rws = (w.counts || []).filter((r) => r.some((c) => c !== ''));
+      if (rws.length) body += '<h3 style="margin-top:20px">' + esc(cfg.title) + ' \u2014 counting calculations</h3><div style="overflow:auto"><table class="cost-table"><thead><tr>' + cfg.countCols.map((c) => '<th>' + esc(c) + '</th>').join('') + '</tr></thead><tbody>' + rws.map((r) => '<tr>' + cfg.countCols.map((c, ci) => '<td>' + esc(r[ci] || '') + '</td>').join('') + '</tr>').join('') + '</tbody></table></div>';
+    });
+
+    // 3) How the pools ended up (from the saved pooling snapshot)
+    const snap = rec.snapshot;
+    if (snap && snap.batches && snap.batches.length) {
+      const cps = snap.poolContributionPerSample != null ? snap.poolContributionPerSample : snap.cellsPerSample;
+      let pr = ''; snap.batches.forEach((b) => { const n = (b.samples || []).length;
+        pr += '<tr><td>Pool ' + esc(b.pool) + '</td><td class="num">' + n + '</td><td class="num">' + (cps ? fmtN(n * cps) : '\u2014') + '</td><td class="who">' + (b.samples || []).map((s) => esc(s.sampleId)).join(', ') + '</td></tr>'; });
+      body += '<h3 style="margin-top:20px">Per pool <span class="who">(from the pooling plan)</span></h3>'
+        + '<p class="who">Target cells / pool = samples \u00d7 cells pooled per sample' + (cps ? ' (' + fmtN(cps) + ')' : '') + '.</p>'
+        + '<table class="cost-table"><thead><tr><th>Pool</th><th class="num"># samples</th><th class="num">Target cells pooled</th><th>Samples</th></tr></thead><tbody>' + pr + '</tbody></table>';
+    }
+
+    host.innerHTML = '<h2>Counts <span class="who">' + esc(rec.name || '') + '</span></h2>' + (body || '<p class="empty">No counts yet. Upload Cellaca counts (Record \u2192 Cellaca counts) and enter worksheet counts (Record \u2192 Batch Day / Library Worksheets).</p>');
   }
   function renderReviewKits() {
     const host = $('#revKitsContent'); if (!host) return;
