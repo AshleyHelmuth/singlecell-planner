@@ -880,6 +880,8 @@
   // ===== Sort summary: drag-drop Sony sort report PDFs, parse the Sorting Result
   // table (Sort Gate = population, Total Event = cells sorted, Sorted Count), tag
   // each with a tube # + note, store to Drive + on the record. =====
+  const SORT_GATES = ['HSPCs', 'Tregs', 'cDCs', 'pDCs'];
+  function sortNum(x) { const n = Number(String(x == null ? '' : x).replace(/,/g, '').trim()); return isNaN(n) ? 0 : n; }
   let SORT_PENDING = null;   // { fileName, base64, tube, note, rows:[{tube(collection),gate,totalEvent,sortedCount}] }
   async function parseSortPdf(arrayBuffer) {
     if (!window.pdfjsLib) throw new Error('PDF reader not loaded \u2014 reload the page.');
@@ -926,11 +928,15 @@
       : '<p class="muted">No sort reports saved yet.</p>';
     let editUI = '';
     if (SORT_PENDING) {
-      const rows = SORT_PENDING.rows.map((r, i) => '<tr><td>' + esc(r.collection) + '</td>'
-        + '<td><input class="sort-gate" data-i="' + i + '" value="' + escAttr(r.gate) + '" style="width:120px"></td>'
+      const rows = SORT_PENDING.rows.map((r, i) => { const isOther = r.gate && SORT_GATES.indexOf(r.gate) < 0;
+        const gateOpts = '<option value="">\u2014</option>' + SORT_GATES.map((g) => '<option' + (r.gate === g ? ' selected' : '') + '>' + esc(g) + '</option>').join('') + '<option value="__other__"' + (isOther ? ' selected' : '') + '>Other\u2026</option>';
+        const tot = sortNum(r.totalEvent), cnt = sortNum(r.sortedCount);
+        return '<tr><td>' + esc(r.collection) + '</td>'
+        + '<td><select class="sort-gate" data-i="' + i + '">' + gateOpts + '</select>'
+        + '<input class="sort-gate-other" data-i="' + i + '" value="' + escAttr(isOther ? r.gate : '') + '" placeholder="name" style="width:90px;margin-left:4px;' + (isOther ? '' : 'display:none') + '"></td>'
         + '<td class="num"><input class="sort-tot" data-i="' + i + '" value="' + escAttr(r.totalEvent) + '" style="width:120px"></td>'
         + '<td class="num"><input class="sort-cnt" data-i="' + i + '" value="' + escAttr(r.sortedCount) + '" style="width:110px"></td>'
-        + '<td class="num">' + (Number(r.totalEvent) > 0 ? (Math.round(Number(r.sortedCount) / Number(r.totalEvent) * 1e6) / 1e4) + '%' : '\u2014') + '</td></tr>').join('');
+        + '<td class="num">' + (tot > 0 ? (Math.round(cnt / tot * 1e6) / 1e4) + '%' : '\u2014') + '</td></tr>'; }).join('');
       editUI = '<h3>This sort <span class="who">' + esc(SORT_PENDING.fileName) + '</span></h3>'
         + '<div class="row-actions" style="margin:6px 0"><label>Sample tube # <input id="sortTube" style="width:80px" value="' + escAttr(SORT_PENDING.tube || '') + '"></label> <label>Note <input id="sortNote" style="width:280px" value="' + escAttr(SORT_PENDING.note || '') + '"></label></div>'
         + (SORT_PENDING.autoParsed
@@ -966,7 +972,12 @@
     if (fileInput) fileInput.addEventListener('change', () => onFile(fileInput.files[0]));
     const tubeInp = $('#sortTube'); if (tubeInp) tubeInp.addEventListener('input', () => { SORT_PENDING.tube = tubeInp.value; });
     const noteInp = $('#sortNote'); if (noteInp) noteInp.addEventListener('input', () => { SORT_PENDING.note = noteInp.value; });
-    host.querySelectorAll('.sort-gate').forEach((el) => el.addEventListener('input', () => { SORT_PENDING.rows[+el.dataset.i].gate = el.value; }));
+    host.querySelectorAll('.sort-gate').forEach((el) => el.addEventListener('change', () => {
+      const i = +el.dataset.i; const other = host.querySelector('.sort-gate-other[data-i="' + i + '"]');
+      if (el.value === '__other__') { if (other) { other.style.display = ''; other.focus(); } SORT_PENDING.rows[i].gate = (other && other.value) || ''; }
+      else { if (other) other.style.display = 'none'; SORT_PENDING.rows[i].gate = el.value; }
+    }));
+    host.querySelectorAll('.sort-gate-other').forEach((el) => el.addEventListener('input', () => { SORT_PENDING.rows[+el.dataset.i].gate = el.value; }));
     host.querySelectorAll('.sort-tot').forEach((el) => el.addEventListener('input', () => { SORT_PENDING.rows[+el.dataset.i].totalEvent = el.value; }));
     host.querySelectorAll('.sort-cnt').forEach((el) => el.addEventListener('input', () => { SORT_PENDING.rows[+el.dataset.i].sortedCount = el.value; }));
     const cancel = $('#sortCancel'); if (cancel) cancel.addEventListener('click', () => { SORT_PENDING = null; renderSortRecord(); });
@@ -1012,7 +1023,7 @@
       .then((up) => {
         rec.sortReports = rec.sortReports || [];
         rec.sortReports.push({ tube: tube, note: SORT_PENDING.note || '', fileName: fileName, pdfId: (up && up.id) || '', savedAt: new Date().toISOString().slice(0, 10),
-          rows: SORT_PENDING.rows.map((r) => ({ collection: r.collection, gate: r.gate, totalEvent: Number(r.totalEvent) || 0, sortedCount: Number(r.sortedCount) || 0 })) });
+          rows: SORT_PENDING.rows.map((r) => ({ collection: r.collection, gate: r.gate, totalEvent: sortNum(r.totalEvent), sortedCount: sortNum(r.sortedCount) })) });
         Store.saveExperiment(rec);
         // durable sort-summary Google Sheet (all tubes) \u2014 source of truth + read-back
         stEl.textContent = 'Saving sort summary\u2026';
