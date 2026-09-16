@@ -966,19 +966,17 @@
     const fmtN = (n) => (n == null || n === '') ? '\u2014' : Number(n).toLocaleString();
     let body = '';
 
-    // 1) Cells at each stage \u2014 pivot the Cellaca counts (live cells/mL) by sample x purpose
+    // 1) Cellaca counts \u2014 one row per count: identifier, count, viability, count type
     const list = rec.cellacaCountsList || [];
     if (list.length) {
-      const purposes = []; const bySample = {};
-      list.forEach((c) => { if (purposes.indexOf(c.purpose) < 0) purposes.push(c.purpose);
-        const key = c.tubeLabel ? ('T:' + c.tubeLabel) : ((c.sampleNo != null && c.sampleNo !== '') ? String(c.sampleNo) : c.sampleId);
-        if (!bySample[key]) bySample[key] = { sampleNo: c.sampleNo, sampleId: c.sampleId, tubeLabel: c.tubeLabel, byP: {} };
-        bySample[key].byP[c.purpose] = c; });
-      const samples = Object.keys(bySample).map((k) => bySample[k]).sort((a, b) => (Number(a.sampleNo) || 999) - (Number(b.sampleNo) || 999));
-      const rows = samples.map((s) => '<tr><td class="num">' + esc(s.sampleNo != null ? s.sampleNo : '') + '</td><td>' + esc(s.tubeLabel || s.sampleId || '') + '</td>'
-        + purposes.map((p) => { const c = s.byP[p]; return '<td class="num">' + (c && c.live != null ? fmtN(c.live) + (c.viability != null ? ' <span class="who">(' + c.viability + '%)</span>' : '') : '\u2014') + '</td>'; }).join('') + '</tr>').join('');
-      body += '<h3>Cells at each stage <span class="who">(Cellaca live cells/mL, viability)</span></h3>'
-        + '<table class="cost-table"><thead><tr><th class="num">Sample #</th><th>Sample / tube</th>' + purposes.map((p) => '<th class="num">' + esc(p) + '</th>').join('') + '</tr></thead><tbody>' + rows + '</tbody></table>';
+      const ordered = list.slice().sort((a, b) => (Number(a.sampleNo) || 999) - (Number(b.sampleNo) || 999)
+        || String(a.tubeLabel || '').localeCompare(String(b.tubeLabel || '')) || String(a.purpose || '').localeCompare(String(b.purpose || '')));
+      const rows = ordered.map((c) => '<tr><td>' + esc(c.tubeLabel || c.sampleId || '') + (c.sampleNo != null && c.sampleNo !== '' ? ' <span class="who">#' + esc(c.sampleNo) + '</span>' : '') + '</td>'
+        + '<td class="num">' + (c.live != null ? fmtN(c.live) : '\u2014') + '</td>'
+        + '<td class="num">' + (c.viability != null ? c.viability + '%' : '\u2014') + '</td>'
+        + '<td>' + esc(c.purpose || '') + '</td></tr>').join('');
+      body += '<h3>Cellaca counts <span class="who">(live cells/mL)</span></h3>'
+        + '<table class="cost-table"><thead><tr><th>Sample / tube</th><th class="num">Count (cells/mL)</th><th class="num">Viability</th><th>Count type</th></tr></thead><tbody>' + rows + '</tbody></table>';
     }
 
     // 2) Worksheet loading counts (the counting-calculation tables)
