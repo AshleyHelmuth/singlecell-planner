@@ -53,7 +53,7 @@
     review: { sidebar: true, panels: [
       { id: 'rev-design', label: 'Experimental design' }, { id: 'rev-seq', label: 'Sequencing' },
       { id: 'rev-sort', label: 'Sort' }, { id: 'rev-counts', label: 'Counts' },
-      { id: 'rev-kits', label: 'Kit and supply usage' }, { id: 'rev-worksheets', label: 'Worksheets' }, { id: 'rev-data', label: 'Data' } ] }
+      { id: 'rev-kits', label: 'Kit and supply usage' }, { id: 'rev-worksheets', label: 'Worksheets' }, { id: 'rev-data', label: 'Tapestation' } ] }
   };
   let CUR_TOP = 'projects';
 
@@ -1089,9 +1089,19 @@
       }).join('');
       body = regionUI + '<table class="cost-table"><thead><tr><th>Full ID</th><th>Section</th><th>Type</th><th class="num">Well</th><th class="num">Trace conc [pg/\u00b5l]</th><th>Dilution</th><th class="num">Region conc [pg/\u00b5l]</th><th class="num">Avg bp</th><th class="num">Total library [ng/\u00b5l]</th><th>Run / notes</th></tr></thead><tbody>' + rows + '</tbody></table>';
     } else {
-      body = '<div class="ts-traces">' + shown.map((w) => { const src = tsGetImgSrc(w); return src ? '<figure class="ts-trace"><img src="' + src + '" class="ts-zoom" tabindex="0" loading="lazy"><figcaption>' + esc(w.name || w.description || w.well) + (w.dilution ? ' \u00b7 ' + esc(w.dilution) : '') + '</figcaption></figure>' : ''; }).join('') + '</div>';
+      // Trace images grouped by section, sorted by well within each section.
+      const bySec = {}; const secOrder = [];
+      shown.forEach((w) => { const s = w.arm || 'Unassigned'; if (!bySec[s]) { bySec[s] = []; secOrder.push(s); } bySec[s].push(w); });
+      const wellKey = (w) => { const m = String(w.well || '').match(/^([A-Za-z]+)(\d+)$/); return m ? [m[1], parseInt(m[2], 10)] : [String(w.well || ''), 0]; };
+      secOrder.forEach((s) => bySec[s].sort((a, b) => { const ka = wellKey(a), kb = wellKey(b); return ka[0] < kb[0] ? -1 : (ka[0] > kb[0] ? 1 : ka[1] - kb[1]); }));
+      body = secOrder.map((s) => '<h3 style="margin:14px 0 6px">' + esc(s) + '</h3><div class="ts-traces">'
+        + bySec[s].map((w) => { const src = tsGetImgSrc(w); if (!src) return '';
+            const fullId = w.name || w.description || w.well;
+            const cap = fullId + (w.note ? ' \u2014 ' + w.note : '') + (w.dilution ? ' \u00b7 dil ' + w.dilution : '');
+            return '<figure class="ts-trace"><img src="' + src + '" class="ts-zoom" tabindex="0" loading="lazy" data-caption="' + escAttr(cap) + '"><figcaption>' + esc(fullId) + (w.dilution ? ' \u00b7 ' + esc(w.dilution) : '') + '</figcaption></figure>'; }).join('')
+        + '</div>').join('');
     }
-    host.innerHTML = '<h2>Data \u2014 TapeStation traces <span class="who">' + esc(rec.name || '') + '</span></h2>'
+    host.innerHTML = '<h2>Tapestation traces <span class="who">' + esc(rec.name || '') + '</span></h2>'
       + '<div class="row-actions" style="margin:4px 0 6px">' + armBtns + '</div>'
       + '<div class="row-actions" style="margin:0 0 10px">' + typeBtns + '</div>'
       + '<div class="row-actions" style="margin:0 0 12px"><button class="btn ' + (REV_TS_VIEW === 'summary' ? 'primary' : 'ghost') + '" data-rev-view="summary">Concentration summary</button> <button class="btn ' + (REV_TS_VIEW === 'traces' ? 'primary' : 'ghost') + '" data-rev-view="traces">Trace images</button></div>'
@@ -1101,7 +1111,7 @@
     host.querySelectorAll('button[data-rev-view]').forEach((b) => b.addEventListener('click', () => { REV_TS_VIEW = b.dataset.revView; renderReviewData(); }));
     const apply = $('#tsRegionApply'); if (apply) apply.addEventListener('click', () => { REV_TS_MIN = ($('#tsMin').value || '').trim(); REV_TS_MAX = ($('#tsMax').value || '').trim(); renderReviewData(); });
     const clr = $('#tsRegionClear'); if (clr) clr.addEventListener('click', () => { REV_TS_MIN = ''; REV_TS_MAX = ''; renderReviewData(); });
-    host.querySelectorAll('.ts-zoom').forEach((img) => img.addEventListener('click', () => openImageLightbox(img.src)));
+    host.querySelectorAll('.ts-zoom').forEach((img) => img.addEventListener('click', () => openImageLightbox(img.src, img.getAttribute('data-caption') || '')));
   }
   // ===== Sort summary: drag-drop Sony sort report PDFs, parse the Sorting Result
   // table (Sort Gate = population, Total Event = cells sorted, Sorted Count), tag
@@ -1295,10 +1305,12 @@
       + '<table class="cost-table"><thead><tr><th class="num">Tube #</th><th>Collection tube</th><th>Population</th><th class="num">Total event</th><th class="num">Sorted count</th><th class="num">% of total</th></tr></thead><tbody>' + perRows + '</tbody></table>';
   }
 
-  function openImageLightbox(src) {
+  function openImageLightbox(src, caption) {
     let ov = document.getElementById('imgLightbox');
-    if (!ov) { ov = document.createElement('div'); ov.id = 'imgLightbox'; ov.className = 'img-lightbox'; ov.innerHTML = '<img>'; document.body.appendChild(ov); ov.addEventListener('click', () => { ov.style.display = 'none'; }); }
-    ov.querySelector('img').src = src; ov.style.display = 'flex';
+    if (!ov) { ov = document.createElement('div'); ov.id = 'imgLightbox'; ov.className = 'img-lightbox'; ov.innerHTML = '<div class="lb-inner"><img><div class="lb-cap"></div></div>'; document.body.appendChild(ov); ov.addEventListener('click', () => { ov.style.display = 'none'; }); }
+    ov.querySelector('img').src = src;
+    const cap = ov.querySelector('.lb-cap'); if (cap) cap.textContent = caption || '';
+    ov.style.display = 'flex';
   }
 
   // ---- Calendar page (all scheduled experiments + month grid + equipment week)
