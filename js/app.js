@@ -1173,7 +1173,7 @@
         + '<td class="num"><input class="sort-tot" data-i="' + i + '" value="' + escAttr(r.totalEvent) + '" style="width:120px"></td>'
         + '<td class="num"><input class="sort-cnt" data-i="' + i + '" value="' + escAttr(r.sortedCount) + '" style="width:110px"></td>'
         + '<td class="num">' + (tot > 0 ? (Math.round(cnt / tot * 1e6) / 1e4) + '%' : '\u2014') + '</td></tr>'; }).join('');
-      editUI = '<h3>This sort <span class="who">' + esc(SORT_PENDING.fileName) + '</span></h3>'
+      editUI = '<h3>This sort <span class="who">' + esc(SORT_PENDING.manual ? 'manual entry (no file)' : SORT_PENDING.fileName) + '</span></h3>'
         + '<div class="row-actions" style="margin:6px 0"><label>Sample tube # <input id="sortTube" style="width:80px" value="' + escAttr(SORT_PENDING.tube || '') + '"></label> <label>Note <input id="sortNote" style="width:280px" value="' + escAttr(SORT_PENDING.note || '') + '"></label></div>'
         + (SORT_PENDING.autoParsed
             ? '<p class="step-hint">Auto-parsed from the Sorting Result table \u2014 verify/edit.</p>'
@@ -1181,12 +1181,12 @@
         + '<table class="cost-table"><thead><tr><th>Collection tube</th><th>Sort gate (population)</th><th class="num">Total event</th><th class="num">Sorted count</th><th class="num">% of total</th></tr></thead><tbody>' + rows + '</tbody></table>'
         + (SORT_PENDING.pageImg ? '<h4 style="margin:14px 0 4px">Report preview \u2014 read the Sorting Result table</h4>'
             + '<img src="' + SORT_PENDING.pageImg + '" class="ts-zoom" style="max-width:100%;border:1px solid #e4e9ef;border-radius:6px;cursor:zoom-in">' : '')
-        + '<div class="row-actions" style="margin-top:12px"><button class="btn primary" id="sortSave">Save sort + upload PDF</button> <button class="btn ghost" id="sortCancel">Cancel</button></div>'
+        + '<div class="row-actions" style="margin-top:12px"><button class="btn primary" id="sortSave">' + (SORT_PENDING.manual ? 'Save sort' : 'Save sort + upload PDF') + '</button> <button class="btn ghost" id="sortCancel">Cancel</button></div>'
         + '<div id="sortStatus" class="muted" style="margin-top:8px"></div>';
     }
     host.innerHTML = '<h2>Sort summary <span class="who">' + esc(rec.name || '') + '</span></h2>'
-      + '<p class="step-hint">Drag a sorter report <strong>.pdf</strong> (one per sample tube) here. It parses the Sorting Result table for the sorted populations and counts, and stores the PDF in the experiment\u2019s <strong>data \u203a sort</strong> folder.</p>'
-      + '<div class="row-actions" style="margin:0 0 10px"><button class="btn ghost" id="sortReload">Reload from Drive</button><span id="sortReloadStatus" class="muted"></span></div>'
+      + '<p class="step-hint">Drag a sorter report <strong>.pdf</strong> (one per sample tube) here \u2014 or enter the numbers by hand if you don\u2019t have the file.</p>'
+      + '<div class="row-actions" style="margin:0 0 10px"><button class="btn ghost" id="sortReload">Reload from Drive</button><button class="btn" id="sortManual">Enter manually (no file)</button><span id="sortReloadStatus" class="muted"></span></div>'
       + '<div id="sortDrop" class="cc-drop">Drop a sort report .pdf here, or click to browse<input type="file" id="sortFile" accept=".pdf" hidden></div>'
       + editUI + '<div style="margin-top:20px"></div>' + savedList;
 
@@ -1206,6 +1206,11 @@
       drop.addEventListener('drop', (e) => { e.preventDefault(); drop.classList.remove('drag'); onFile(e.dataTransfer.files[0]); });
     }
     if (fileInput) fileInput.addEventListener('change', () => onFile(fileInput.files[0]));
+    const manualBtn = $('#sortManual'); if (manualBtn) manualBtn.addEventListener('click', () => {
+      SORT_PENDING = { fileName: '', base64: '', tube: '', note: '', pageImg: '', autoParsed: false, manual: true,
+        rows: ['Far Left', 'Left', 'Right', 'Far Right'].map((c) => ({ collection: c, gate: '', totalEvent: '', sortedCount: '' })) };
+      renderSortRecord();
+    });
     const tubeInp = $('#sortTube'); if (tubeInp) tubeInp.addEventListener('input', () => { SORT_PENDING.tube = tubeInp.value; });
     const noteInp = $('#sortNote'); if (noteInp) noteInp.addEventListener('input', () => { SORT_PENDING.note = noteInp.value; });
     host.querySelectorAll('.sort-gate').forEach((el) => el.addEventListener('change', () => {
@@ -1243,9 +1248,12 @@
     const stEl = $('#sortStatus');
     const tube = (SORT_PENDING.tube || '').trim();
     const expId = rec.experimentId || projectLabel(rec.name || 'experiment');
-    const fileName = sanitizeName(expId + ' sort' + (tube ? ' tube ' + tube : '') + ' - ' + SORT_PENDING.fileName.replace(/\.pdf$/i, '')) + '.pdf';
-    if (!confirm('Save this sort report to the experiment\u2019s data/sort folder as \u201c' + fileName + '\u201d (overwrites a same-named file)?')) return;
-    stEl.textContent = 'Uploading to Drive\u2026';
+    const manual = !!SORT_PENDING.manual || !SORT_PENDING.base64;
+    const fileName = manual ? '' : sanitizeName(expId + ' sort' + (tube ? ' tube ' + tube : '') + ' - ' + SORT_PENDING.fileName.replace(/\.pdf$/i, '')) + '.pdf';
+    const hasRows = SORT_PENDING.rows.some((r) => r.gate || r.totalEvent || r.sortedCount);
+    if (!hasRows) { stEl.textContent = 'Enter at least one population + count first.'; return; }
+    if (!confirm(manual ? 'Save these sort numbers to the experiment?' : ('Save this sort report to the experiment\u2019s data/sort folder as \u201c' + fileName + '\u201d (overwrites a same-named file)?'))) return;
+    stEl.textContent = 'Saving\u2026';
     const req = rec.driveFolderId
       ? { action: 'ensurePath', parentId: rec.driveFolderId, subPath: ['data', 'sort'] }
       : { action: 'ensurePath', project: rec.project || CURRENT_PROJECT, experiment: rec.name || 'Experiment', subPath: ['data', 'sort'] };
@@ -1254,11 +1262,12 @@
         if (path && path.experimentId && rec.driveFolderId !== path.experimentId) { rec.driveFolderId = path.experimentId; }
         if (!path || !path.subId) throw new Error('could not reach the experiment\u2019s data/sort folder');
         SORT_PENDING._folderId = path.subId;
+        if (manual) return Promise.resolve(null);   // no PDF to upload
         return driveApi({ action: 'upload', name: fileName, folderId: path.subId, base64: SORT_PENDING.base64, sourceMime: 'application/pdf' });
       })
       .then((up) => {
         rec.sortReports = rec.sortReports || [];
-        rec.sortReports.push({ tube: tube, note: SORT_PENDING.note || '', fileName: fileName, pdfId: (up && up.id) || '', savedAt: new Date().toISOString().slice(0, 10),
+        rec.sortReports.push({ tube: tube, note: SORT_PENDING.note || '', fileName: fileName, pdfId: (up && up.id) || '', manual: manual, savedAt: new Date().toISOString().slice(0, 10),
           rows: SORT_PENDING.rows.map((r) => ({ collection: r.collection, gate: r.gate, totalEvent: sortNum(r.totalEvent), sortedCount: sortNum(r.sortedCount) })) });
         Store.saveExperiment(rec);
         // durable sort-summary Google Sheet (all tubes) \u2014 source of truth + read-back
