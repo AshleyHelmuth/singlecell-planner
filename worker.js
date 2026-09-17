@@ -1207,6 +1207,19 @@ function handleDriveGet(env) {
     parentSet: !!env.DRIVE_PARENT_FOLDER_ID
   });
 }
+async function handleTsImage(url, env) {
+  const fileId = url.searchParams.get('fileId');
+  if (!fileId) return json({ error: 'missing_fileId' }, 400);
+  if (!(env.GOOGLE_OAUTH_CLIENT_ID && env.GOOGLE_OAUTH_CLIENT_SECRET && env.GOOGLE_OAUTH_REFRESH_TOKEN)) return json({ error: 'not_configured' }, 503);
+  try {
+    const token = await driveToken(env);
+    const r = await fetch('https://www.googleapis.com/drive/v3/files/' + encodeURIComponent(fileId) + '?alt=media&supportsAllDrives=true', { headers: { Authorization: 'Bearer ' + token } });
+    if (!r.ok) return json({ error: 'fetch_failed', status: r.status }, 404);
+    const buf = await r.arrayBuffer();
+    return new Response(buf, { headers: { 'Content-Type': 'image/png', 'Cache-Control': 'private, max-age=604800', 'Access-Control-Allow-Origin': '*' } });
+  } catch (e) { return json({ error: 'exception', message: (e && e.message) || String(e) }, 500); }
+}
+
 async function handleDrivePost(request, env) {
   try {
     if (!(env.GOOGLE_OAUTH_CLIENT_ID && env.GOOGLE_OAUTH_CLIENT_SECRET && env.GOOGLE_OAUTH_REFRESH_TOKEN)) {
@@ -1295,6 +1308,9 @@ async function handleDrivePost(request, env) {
       for (const rf of runFolders) {
         const sheets = await driveFind(token, "mimeType='application/vnd.google-apps.spreadsheet' and name contains 'lane tags' and '" + rf.id + "' in parents and trashed=false");
         if (!sheets.length) continue;
+        // map well -> PNG file id (for Drive-served trace images, shared across devices)
+        const pngs = await driveFind(token, "mimeType='image/png' and '" + rf.id + "' in parents and trashed=false");
+        const imgByWell = {}; pngs.forEach((f) => { const m = f.name.match(/(?:trace_|_)([A-H]\d{1,2})(?:_|\.)/); if (m && !imgByWell[m[1]]) imgByWell[m[1]] = f.id; });
         let vals; try { vals = await sheetsBatchGet(token, sheets[0].id, ['Run info', 'Lane tags']); } catch (e) { continue; }
         const info = (vals[0] && vals[0].values) || []; const tags = (vals[1] && vals[1].values) || [];
         let notes = '', runName = rf.name;
@@ -1305,7 +1321,7 @@ async function handleDrivePost(request, env) {
         const wells = [];
         for (let i = 1; i < tags.length; i++) { const r = tags[i]; if (!r || !r[iWell]) continue;
           let peaks = []; try { peaks = JSON.parse(r[iPk] || '[]'); } catch (e) { /* leave empty */ }
-          wells.push({ well: r[iWell], description: r[iOrig] || '', arm: r[iSec] || '', sampleType: r[iType] || '', sampleNo: r[iNo] || '', name: r[iFull] || '', dilution: r[iDil] || '', conc: r[iConc] || '', note: r[iNote] || '', peaks: peaks });
+          wells.push({ well: r[iWell], description: r[iOrig] || '', arm: r[iSec] || '', sampleType: r[iType] || '', sampleNo: r[iNo] || '', name: r[iFull] || '', dilution: r[iDil] || '', conc: r[iConc] || '', note: r[iNote] || '', peaks: peaks, imgFileId: imgByWell[r[iWell]] || '' });
         }
         runs.push({ runName: runName, notes: notes, folder: rf.name, wells: wells });
       }
@@ -1371,6 +1387,10 @@ export default {
     }
     if (url.pathname === '/api/library') {
       if (request.method === 'POST') return handleLibraryPost(request, env);
+      return json({ error: 'method_not_allowed' }, 405);
+    }
+    if (url.pathname === '/api/tsimage') {
+      if (request.method === 'GET') return handleTsImage(url, env);
       return json({ error: 'method_not_allowed' }, 405);
     }
     if (url.pathname === '/api/drive') {

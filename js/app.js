@@ -275,6 +275,12 @@
   function tsImgStoreSet(m) { try { localStorage.setItem('sc_ts_images', JSON.stringify(m)); return true; } catch (e) { return false; } }
   function tsSetImg(key, b64) { if (!key || !b64) return; const m = tsImgStoreGet(); m[key] = b64; tsImgStoreSet(m); }
   function tsGetImg(w) { if (w && w.imgKey) { const v = tsImgStoreGet()[w.imgKey]; if (v) return v; } return (w && w.img) || null; }
+  // Prefer the Drive-served image (shared across devices); fall back to any local cache.
+  function tsGetImgSrc(w) {
+    if (w && w.imgFileId) return '/api/tsimage?fileId=' + encodeURIComponent(w.imgFileId);
+    const im = tsGetImg(w);
+    return im ? ('data:image/png;base64,' + im) : '';
+  }
   // One-time migration: move any base64 images off existing records into the local
   // store, so the (now small) records sync cleanly again.
   function healExperimentBlobs() {
@@ -522,7 +528,7 @@
         const runs = res.runs || [];
         if (!runs.length) { if (stEl) stEl.textContent = ' No lane-tags sheets found in Drive for this experiment.'; return; }
         rec.tapestation = runs.map((r) => ({ runName: r.runName, notes: r.notes || '', folder: r.folder,
-          wells: (r.wells || []).map((w) => ({ well: w.well, arm: w.arm || '', sampleType: w.sampleType || '', sampleNo: w.sampleNo || '', name: w.name || tsLaneName(w), description: w.description || '', conc: w.conc || '', dilution: w.dilution || '', note: w.note || '', peaks: w.peaks || [], imgKey: tsImgKey(rec.id, r.runName, w.well) })) }));
+          wells: (r.wells || []).map((w) => ({ well: w.well, arm: w.arm || '', sampleType: w.sampleType || '', sampleNo: w.sampleNo || '', name: w.name || tsLaneName(w), description: w.description || '', conc: w.conc || '', dilution: w.dilution || '', note: w.note || '', peaks: w.peaks || [], imgFileId: w.imgFileId || '', imgKey: tsImgKey(rec.id, r.runName, w.well) })) }));
         Store.saveExperiment(rec);
         if (stEl) stEl.textContent = ' Loaded ' + runs.length + ' run(s) from Drive.';
         renderTapestation();
@@ -547,6 +553,13 @@
         let n = 0;
         for (const f of files) { n += 1; stEl.textContent = 'Uploading ' + n + '/' + files.length + '\u2026';
           await driveApi({ action: 'upload', name: f.name, folderId: path.subId, base64: f.base64, sourceMime: f.mime }); }
+        // Upload each trace PNG individually so it's Drive-served (visible on every device),
+        // and capture its file id per well.
+        const imgFileByWell = {};
+        for (const w of TS_PENDING.wells) { if (w.img) { stEl.textContent = 'Saving trace ' + w.well + '\u2026';
+          const up = await driveApi({ action: 'upload', name: 'trace_' + w.well + '.png', folderId: path.subId, base64: w.img, sourceMime: 'image/png' });
+          if (up && up.id) imgFileByWell[w.well] = up.id; } }
+        TS_PENDING._imgFileByWell = imgFileByWell;
         // Durable lane-tags Google Sheet (source of truth for tags + notes, survives any record reset)
         stEl.textContent = 'Saving lane tags\u2026';
         const tagRows = [['Well', 'Original name', 'Section', 'Type', 'Sample #', 'Full ID', 'Dilution', 'Conc [pg/µl]', 'Notes', 'Peaks (JSON)']];
@@ -560,7 +573,7 @@
         rec.tapestation = rec.tapestation || [];
         rec.tapestation.push({ runName: TS_PENDING.runName, notes: TS_PENDING.notes || '', folder: runFolder, fileCount: files.length, savedAt: new Date().toISOString().slice(0, 10),
           wells: TS_PENDING.wells.map((w) => { let imgKey = ''; if (w.img) { imgKey = tsImgKey(rec.id, TS_PENDING.runName, w.well); tsSetImg(imgKey, w.img); }
-            return { well: w.well, arm: w.arm || '', sampleType: w.sampleType || '', sampleNo: w.sampleNo || '', name: tsLaneName(w), description: w.description, conc: w.conc, dilution: w.dilution, note: w.note, imgKey: imgKey, peaks: w.peaks || [] }; }) });
+            return { well: w.well, arm: w.arm || '', sampleType: w.sampleType || '', sampleNo: w.sampleNo || '', name: tsLaneName(w), description: w.description, conc: w.conc, dilution: w.dilution, note: w.note, imgKey: imgKey, imgFileId: (TS_PENDING._imgFileByWell && TS_PENDING._imgFileByWell[w.well]) || '', peaks: w.peaks || [] }; }) });
         Store.saveExperiment(rec);
         TS_PENDING = null; renderTapestation();
       })
@@ -1076,7 +1089,7 @@
       }).join('');
       body = regionUI + '<table class="cost-table"><thead><tr><th>Full ID</th><th>Section</th><th>Type</th><th class="num">Well</th><th class="num">Trace conc [pg/\u00b5l]</th><th>Dilution</th><th class="num">Region conc [pg/\u00b5l]</th><th class="num">Avg bp</th><th class="num">Total library [ng/\u00b5l]</th><th>Run / notes</th></tr></thead><tbody>' + rows + '</tbody></table>';
     } else {
-      body = '<div class="ts-traces">' + shown.map((w) => { const im = tsGetImg(w); return im ? '<figure class="ts-trace"><img src="data:image/png;base64,' + im + '" class="ts-zoom" tabindex="0"><figcaption>' + esc(w.name || w.description || w.well) + (w.dilution ? ' \u00b7 ' + esc(w.dilution) : '') + '</figcaption></figure>' : ''; }).join('') + '</div>';
+      body = '<div class="ts-traces">' + shown.map((w) => { const src = tsGetImgSrc(w); return src ? '<figure class="ts-trace"><img src="' + src + '" class="ts-zoom" tabindex="0" loading="lazy"><figcaption>' + esc(w.name || w.description || w.well) + (w.dilution ? ' \u00b7 ' + esc(w.dilution) : '') + '</figcaption></figure>' : ''; }).join('') + '</div>';
     }
     host.innerHTML = '<h2>Data \u2014 TapeStation traces <span class="who">' + esc(rec.name || '') + '</span></h2>'
       + '<div class="row-actions" style="margin:4px 0 6px">' + armBtns + '</div>'
