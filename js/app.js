@@ -30,6 +30,8 @@
   let POOL_OVERRIDE = null; // { bySampleId: Map(sampleId -> {pool:0-based, hto, superPool:0-based|null}), hasFullHTO }
   let PLAN_INPUT = 'grid'; // 'grid' (real samples) | 'counts' (planning: synthesize from counts)
   let SORT_SEL = new Set((window.Pooling && Pooling.SORT_MODEL) ? Pooling.SORT_MODEL.DEFAULT_ON : ['HSC', 'pDC', 'cDC', 'Treg']);
+  let CUSTOM_SORT_POPS = [];   // user-added sort populations
+  let SORT_PANEL = [];         // [{channel, marker, ul}] pasted sort antibody panel
 
   // ---- Two-tier navigation --------------------------------------------------
   // Top tabs are all-project-level. Plan / Record / Review show a left sidebar
@@ -1664,10 +1666,13 @@
     const host = $('#sortToggles');
     if (!host || !window.Pooling) return;
     const M = Pooling.SORT_MODEL;
-    host.innerHTML = M.POPULATIONS.map((p) =>
-      '<button type="button" class="pop-btn' + (SORT_SEL.has(p) ? ' active' : '') + '" data-sortpop="' + p + '">' +
-      esc(M.DISPLAY[p] || p) + '</button>').join('');
+    const pops = M.POPULATIONS.concat(CUSTOM_SORT_POPS.filter((p) => M.POPULATIONS.indexOf(p) < 0));
+    host.innerHTML = pops.map((p) =>
+      '<button type="button" class="pop-btn' + (SORT_SEL.has(p) ? ' active' : '') + '" data-sortpop="' + escAttr(p) + '">' +
+      esc((M.DISPLAY && M.DISPLAY[p]) || p) + '</button>').join('')
+      + '<button type="button" class="pop-btn" id="sortPopAdd" style="border-style:dashed">+ custom</button>';
     host.onclick = (e) => {
+      if (e.target.id === 'sortPopAdd') { const name = (prompt('Custom sort population name:') || '').trim(); if (!name) return; if (CUSTOM_SORT_POPS.indexOf(name) < 0) CUSTOM_SORT_POPS.push(name); SORT_SEL.add(name); renderSortToggles(); onSelectionChange(); if (poolingReady()) runComputePooling(false); return; }
       const b = e.target.closest('[data-sortpop]'); if (!b) return;
       const p = b.dataset.sortpop;
       if (SORT_SEL.has(p)) SORT_SEL.delete(p); else SORT_SEL.add(p);
@@ -1675,6 +1680,35 @@
       onSelectionChange();
       if (poolingReady()) runComputePooling(false);
     };
+    // sort panel paste + preview
+    const ta = $('#sortPanelText');
+    if (ta) {
+      if (ta.value === '' && SORT_PANEL.length) ta.value = SORT_PANEL.map((r) => [r.channel, r.marker, r.ul].join('\t')).join('\n');
+      ta.oninput = () => { SORT_PANEL = parseSortPanel(ta.value); renderSortPanelPreview(); onSelectionChange(); };
+      renderSortPanelPreview();
+    }
+  }
+  function parseSortPanel(text) {
+    const out = [];
+    (text || '').split(/\r?\n/).forEach((ln) => {
+      const t = ln.trim(); if (!t) return;
+      const cells = ln.split(/\t|\s{2,}|,(?=\s*\S)/).map((c) => c.trim()).filter((c, i, a) => c !== '' || i < a.length);
+      const parts = ln.split(/\t/).length > 1 ? ln.split(/\t/) : ln.split(/\s{2,}/);
+      const p = parts.map((c) => c.trim());
+      if (p.length < 2) return;
+      if (/^channel$/i.test(p[0]) || /marker/i.test(p[1] || '')) return;   // header row
+      const ul = parseFloat((p[2] || '').replace(/[^0-9.]/g, ''));
+      out.push({ channel: p[0], marker: p[1] || '', ul: isNaN(ul) ? '' : ul });
+    });
+    return out;
+  }
+  function renderSortPanelPreview() {
+    const host = $('#sortPanelPreview'); if (!host) return;
+    if (!SORT_PANEL.length) { host.textContent = ''; return; }
+    const nPools = (function () { try { const c = computePooling(); return (c && c.poolRes && c.poolRes.nPools) || 8; } catch (e) { return 8; } })();
+    const over = nPools + 1;
+    let tot = 0; const rows = SORT_PANEL.map((r) => { const t = (Number(r.ul) || 0) * over; if (r.ul !== '') tot += Number(r.ul) || 0; return '<tr><td>' + esc(r.channel) + '</td><td>' + esc(r.marker) + '</td><td class="num">' + (r.ul === '' ? '\u2014' : r.ul) + '</td><td class="num">' + (r.ul === '' ? '\u2014' : Math.round(t * 100) / 100) + '</td></tr>'; }).join('');
+    host.innerHTML = '<table class="cost-table" style="margin-top:4px"><thead><tr><th>Channel</th><th>Marker</th><th class="num">µL/pool</th><th class="num">Total for ' + nPools + ' pools (+1 overage)</th></tr></thead><tbody>' + rows + '<tr><td colspan="2"><strong>Total Ab / pool</strong></td><td class="num"><strong>' + (Math.round(tot * 100) / 100) + '</strong></td><td class="num"><strong>' + (Math.round(tot * over * 100) / 100) + '</strong></td></tr></tbody></table>';
   }
   function sortSelList() {
     return (window.Pooling ? Pooling.SORT_MODEL.POPULATIONS : []).filter((p) => SORT_SEL.has(p));
@@ -3717,16 +3751,23 @@
         <li><strong>Post-sort:</strong> spin (save supernatant), resuspend; combine pDC+HSC into one lane; Treg and cDC can take their own lanes. Concentrate to ~77.4&nbsp;µL/lane and proceed to loading.</li>
       </ol>
       <div class="recipe-box"><h5>5&prime; sort antibody panel (per pool; &times;${plan.nPools} + controls)</h5>
-        <table><tr><th>Channel</th><th>Marker</th><th>µL / pool</th></tr>
-        <tr><td>staining buffer</td><td>&mdash;</td><td class="num">10</td></tr>
-        <tr><td>BV785</td><td>CD19</td><td class="num">5</td></tr><tr><td>BV711</td><td>CD56</td><td class="num">5</td></tr>
-        <tr><td>BV650</td><td>CD127</td><td class="num">5</td></tr><tr><td>BV605</td><td>CD4</td><td class="num">4</td></tr>
-        <tr><td>BV510</td><td>CD123</td><td class="num">5</td></tr><tr><td>AF488</td><td>CD3</td><td class="num">4</td></tr>
-        <tr><td>PE-Cy5</td><td>CD25</td><td class="num">5</td></tr><tr><td>PE</td><td>CD11c</td><td class="num">3.5</td></tr>
-        <tr><td>APC-Cy7</td><td>CD14</td><td class="num">5</td></tr><tr><td>AF700</td><td>CD45</td><td class="num">5</td></tr>
-        <tr><td>AF647</td><td>CD34</td><td class="num">5</td></tr>
-        <tr><td>PE-TexasRed</td><td>L/D (Zombie Red, 1:1000)</td><td class="num">&mdash;</td></tr>
-        <tr><td colspan="2"><strong>Total antibody / pool</strong></td><td class="num"><strong>61.5</strong></td></tr></table></div>
+        ${(SORT_PANEL && SORT_PANEL.length) ? (function () {
+          const over = plan.nPools + 1; let tot = 0;
+          const body = SORT_PANEL.map((r) => { const per = (r.ul === '' ? null : Number(r.ul) || 0); if (per != null) tot += per; return '<tr><td>' + esc(r.channel) + '</td><td>' + esc(r.marker) + '</td><td class="num">' + (per == null ? '&mdash;' : per) + '</td><td class="num">' + (per == null ? '&mdash;' : Math.round(per * over * 100) / 100) + '</td></tr>'; }).join('');
+          return '<table><tr><th>Channel</th><th>Marker</th><th>µL / pool</th><th>Total for ' + plan.nPools + ' pools (+1 overage)</th></tr>' + body
+            + '<tr><td colspan="2"><strong>Total antibody / pool</strong></td><td class="num"><strong>' + (Math.round(tot * 100) / 100) + '</strong></td><td class="num"><strong>' + (Math.round(tot * over * 100) / 100) + '</strong></td></tr></table>';
+        })() : (
+        '<table><tr><th>Channel</th><th>Marker</th><th>µL / pool</th></tr>'
+        + '<tr><td>staining buffer</td><td>&mdash;</td><td class="num">10</td></tr>'
+        + '<tr><td>BV785</td><td>CD19</td><td class="num">5</td></tr><tr><td>BV711</td><td>CD56</td><td class="num">5</td></tr>'
+        + '<tr><td>BV650</td><td>CD127</td><td class="num">5</td></tr><tr><td>BV605</td><td>CD4</td><td class="num">4</td></tr>'
+        + '<tr><td>BV510</td><td>CD123</td><td class="num">5</td></tr><tr><td>AF488</td><td>CD3</td><td class="num">4</td></tr>'
+        + '<tr><td>PE-Cy5</td><td>CD25</td><td class="num">5</td></tr><tr><td>PE</td><td>CD11c</td><td class="num">3.5</td></tr>'
+        + '<tr><td>APC-Cy7</td><td>CD14</td><td class="num">5</td></tr><tr><td>AF700</td><td>CD45</td><td class="num">5</td></tr>'
+        + '<tr><td>AF647</td><td>CD34</td><td class="num">5</td></tr>'
+        + '<tr><td>PE-TexasRed</td><td>L/D (Zombie Red, 1:1000)</td><td class="num">&mdash;</td></tr>'
+        + '<tr><td colspan="2"><strong>Total antibody / pool</strong></td><td class="num"><strong>61.5</strong></td></tr></table>'
+        + '<p class="pp-source" style="margin-top:4px">Tip: paste your actual panel on Plan &rarr; Sort populations to auto-fill this table with a total-for-pools column.</p>')}</div>
       ${recordCounts('sort pool cell counts', 'Sort', plan.nPools)}
       ${recordSortYield()}
       <p class="pp-source">Source: MADI02 batch1 &amp; CITE-seq batch2 sort panels.</p>`;
@@ -3814,7 +3855,7 @@
       customCols: CUSTOM_COLS.slice(),
       confounderIdx: Array.from(CONFOUNDER_CHECKED_IDX),
       poolOverride, optValues,
-      sortSel: sortSelList(),
+      sortSel: sortSelList(), customSortPops: CUSTOM_SORT_POPS.slice(), sortPanel: SORT_PANEL.slice(),
       inputMode: PLAN_INPUT,
       planningCounts: (function () { const v = {}; document.querySelectorAll('#planningCounts input').forEach((el) => { v[el.id] = el.value; }); return v; })()
     };
@@ -3830,6 +3871,8 @@
       ? { hasFullHTO: state.poolOverride.hasFullHTO, bySampleId: new Map(state.poolOverride.bySampleId) } : null;
     if (state.optValues) Object.keys(state.optValues).forEach((id) => { const el = document.getElementById(id); if (el) el.value = state.optValues[id]; });
     if (state.planningCounts) Object.keys(state.planningCounts).forEach((id) => { const el = document.getElementById(id); if (el) el.value = state.planningCounts[id]; });
+    CUSTOM_SORT_POPS = (state.customSortPops || []).slice();
+    SORT_PANEL = (state.sortPanel || []).slice();
     if (state.sortSel && window.Pooling) { SORT_SEL = new Set(state.sortSel); renderSortToggles(); }
     const box = $('#useMadiDefault'); if (box) box.checked = false;
     renderPopulationBuilder();
