@@ -704,7 +704,7 @@
         + '<td class="num">' + (c.live != null ? Number(c.live).toLocaleString() : '\u2014') + '</td>'
         + '<td class="num">' + (c.viability != null ? c.viability + '%' : '\u2014') + '</td>'
         + '<td class="num">' + (c.total != null ? Number(c.total).toLocaleString() : '\u2014') + '</td>'
-        + '<td class="who">' + esc(c.notes || '') + '</td>'
+        + '<td><input class="cc-note" data-i="' + i + '" value="' + escAttr(c.notes || '') + '" placeholder="notes" style="width:170px"></td>'
         + '<td><button class="btn tiny" data-cc-del="' + i + '">\u2715</button></td></tr>'; }).join('');
     const storedTable = list.length
       ? '<h3>Stored counts (' + list.length + ' rows)</h3><p class="who small">Edit a Sample # to re-link a count to the current sample with that number (fixes counts left over from a removed/renamed sample). Orphaned rows are flagged.</p><table class="cost-table"><thead><tr><th>Sample / tube</th><th>Well</th><th>Count for</th><th>Thawer</th><th class="num">Live (cells/mL)</th><th class="num">Viability</th><th class="num">Total (cells/mL)</th><th>Notes</th><th></th></tr></thead><tbody>' + storedRows + '</tbody></table>'
@@ -827,6 +827,10 @@
     host.querySelectorAll('button[data-cc-del]').forEach((b) => b.addEventListener('click', () => {
       const i = parseInt(b.dataset.ccDel, 10);
       if (rec.cellacaCountsList && !isNaN(i)) { rec.cellacaCountsList.splice(i, 1); Store.saveExperiment(rec); renderCellaca(); }
+    }));
+    host.querySelectorAll('.cc-note').forEach((el) => el.addEventListener('change', () => {
+      const i = parseInt(el.dataset.i, 10);
+      if (rec.cellacaCountsList && rec.cellacaCountsList[i]) { rec.cellacaCountsList[i].notes = el.value; Store.saveExperiment(rec); }
     }));
     host.querySelectorAll('.cc-fix-no').forEach((el) => el.addEventListener('change', () => {
       const i = parseInt(el.dataset.i, 10); const v = parseInt(el.value, 10);
@@ -1061,9 +1065,10 @@
         return '<tr><td>' + esc(c.tubeLabel || c.sampleId || '') + (dn !== '' ? ' <span class="who">#' + esc(dn) + '</span>' : '') + '</td>'
         + '<td class="num">' + (c.live != null ? fmtN(c.live) : '\u2014') + '</td>'
         + '<td class="num">' + (c.viability != null ? c.viability + '%' : '\u2014') + '</td>'
-        + '<td>' + esc(c.purpose || '') + '</td></tr>'; }).join('');
+        + '<td>' + esc(c.purpose || '') + '</td>'
+        + '<td class="who">' + esc(c.notes || '') + '</td></tr>'; }).join('');
       body += '<h3>Cellaca counts <span class="who">(live cells/mL)</span></h3>'
-        + '<table class="cost-table"><thead><tr><th>Sample / tube</th><th class="num">Count (cells/mL)</th><th class="num">Viability</th><th>Count type</th></tr></thead><tbody>' + rows + '</tbody></table>';
+        + '<table class="cost-table"><thead><tr><th>Sample / tube</th><th class="num">Count (cells/mL)</th><th class="num">Viability</th><th>Count type</th><th>Notes</th></tr></thead><tbody>' + rows + '</tbody></table>';
     }
 
     // 2) Worksheet loading counts (the counting-calculation tables)
