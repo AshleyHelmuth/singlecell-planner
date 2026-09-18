@@ -4078,24 +4078,26 @@
     const sampleList = calc.samples.slice().sort((a, b) => (sampleNo[a.sampleId] || 0) - (sampleNo[b.sampleId] || 0));
 
     // ===== Sheet 1: sample prep + FACS + controls + sort output + bulk =====
-    const rows1 = [['Tube', 'Line 1', 'Line 2', 'Line 3']];
-    const a1 = (t, l1, l2, l3) => rows1.push([t, l1 == null ? '' : String(l1), l2 == null ? '' : String(l2), l3 == null ? '' : String(l3)]);
+    const rows1 = [['Tube', 'Line 1', 'Line 2', 'Line 3', 'Line 4']];
+    const dateStr = (curRec && curRec.date) ? curRec.date : '';
+    const a1 = (t, l1, l2, l3) => rows1.push([t, l1 == null ? '' : String(l1), l2 == null ? '' : String(l2), l3 == null ? '' : String(l3), dateStr]);
 
     sampleList.forEach((s) => {
       const no = sampleNo[s.sampleId] || '?';
       a1('Sample (15mL)', 'pool ' + (poolOf[s.sampleId] || '?'), no, no + ' / ' + s.sampleId);
     });
+    a1('Sample (15mL)', '', 'Ctrl', 'CSEI Leukopak Control');   // unstained leukopak control
     for (let i = 0; i < nPools; i++) {
       if (hasSort) a1('Pool (50 mL)', 'TotalSeq-C HTO ' + htoNum(i), 'sort' + (i + 1), 'remainder from pool ' + (i + 1));
       else a1('Pool (50 mL)', 'pool ' + (i + 1), '50 mL pool', exp);
     }
-    if (hasUnsort) for (let i = 0; i < nPools; i++) a1("5' unsort (FACS)", 'TotalSeq-C HTO ' + htoNum(i), 'unsort' + (i + 1), '1.2M from pool ' + (i + 1));
-    if (hasAsap) for (let i = 0; i < nPools; i++) a1('ASAP (FACS)', 'TotalSeq-A HTO ' + htoNum(i), 'asap' + (i + 1), '1.2M from pool ' + (i + 1));
-    if (hasUnsort) a1('Super-pool (FACS)', '', 'unsort super-pool', '');
-    if (hasAsap) a1('Super-pool (FACS)', '', 'asap super-pool', '');
-    if (hasSort) a1('Super-pool (FACS)', '', 'sort super-pool', '');
-    a1('Unstain control (FACS)', '', '', '');
-    a1('L/D control (FACS)', '', '', '');
+    if (hasUnsort) for (let i = 0; i < nPools; i++) a1("5' unsort (FACS)", 'TotalSeq-C HTO ' + htoNum(i), 'unsort' + (i + 1), '');
+    if (hasAsap) for (let i = 0; i < nPools; i++) a1('ASAP (FACS)', 'TotalSeq-A HTO ' + htoNum(i), 'asap' + (i + 1), '');
+    if (hasUnsort) a1('Super-pool (FACS)', '', 'unsort sp', 'unsort super-pool');
+    if (hasAsap) a1('Super-pool (FACS)', '', 'asap sp', 'asap super-pool');
+    if (hasSort) a1('Super-pool (FACS)', '', 'sort sp', 'sort super-pool');
+    a1('Unstain control (FACS)', '', 'Unstain', 'Unstain control');
+    a1('L/D control (FACS)', '', 'L/D', 'L/D control');
     if (hasSort) ['HSC', 'pDC', 'cDC', 'Treg'].forEach((p) => a1('Sort output (FACS)', '', p, ''));
     if (hasBulk) sampleList.forEach((s) => { const no = sampleNo[s.sampleId] || '?'; a1('BulkRNA (1.5mL tube)', 'Bulk RNA', no, no + ' / ' + s.sampleId); });
 
@@ -4103,7 +4105,6 @@
     // Base ID = {U/A/S}{lane-within-chip}; append -{chip} only when that modality
     // uses more than one chip. GEM-RT tubes get a -GEM suffix. Line 1 = experiment
     // ID, Line 2 = short tube name, Line 3 = batch date (YYMMDD).
-    const rows2 = [['Strip #', 'Tube', 'Modality', 'Type', 'Line 1 (Experiment ID)', 'Line 2', 'Line 3']];
     const dateYY = (function () { const d = (curRec && curRec.date) ? curRec.date : ''; const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(d); return m ? (m[1].slice(2) + m[2] + m[3]) : ''; })();
     const baseName = (letter, g) => letter + (g + 1);   // sequential across all chips (no -chip suffix)
     const rangeN = (n) => Array.from({ length: n }, (_, i) => i);
@@ -4131,24 +4132,36 @@
     grp('Library', "Sort 5'", 'CSP/ADT library', rangeN(lanes.sort).map((i) => baseName('S', i, 8, lanes.sort) + '-ADT'));
     if (vdjOn('sorted')) grp('Library', "Sort 5'", 'TCR library', rangeN(lanes.sort).map((i) => baseName('S', i, 8, lanes.sort) + '-TCR'));
     // Flatten into strips of 8, padding each group with "blank tube" spacers.
-    let stripNo = 0;
-    groups.forEach((gp) => {
-      const nStrips = Math.ceil(gp.names.length / 8);
-      for (let sIdx = 0; sIdx < nStrips; sIdx++) {
-        stripNo += 1;
-        for (let j = 0; j < 8; j++) {
-          const idx = sIdx * 8 + j;
-          if (idx < gp.names.length) rows2.push([stripNo, gp.tube, gp.modality, gp.type, expId || exp, gp.names[idx], dateYY]);
-          else rows2.push([stripNo, 'blank tube', '', '', '', '', '']);
+    // Split by tube type into separate tabs (printed on different-coloured paper):
+    // Intermediate (GEM-RT) · cDNA · Library.
+    function stripRows(groupList) {
+      const rows = [['Strip #', 'Tube', 'Modality', 'Type', 'Line 1 (Experiment ID)', 'Line 2', 'Line 3']];
+      let stripNo = 0;
+      groupList.forEach((gp) => {
+        const nStrips = Math.ceil(gp.names.length / 8);
+        for (let sIdx = 0; sIdx < nStrips; sIdx++) {
+          stripNo += 1;
+          for (let j = 0; j < 8; j++) {
+            const idx = sIdx * 8 + j;
+            if (idx < gp.names.length) rows.push([stripNo, gp.tube, gp.modality, gp.type, expId || exp, gp.names[idx], dateYY]);
+            else rows.push([stripNo, 'blank tube', '', '', '', '', '']);
+          }
         }
-      }
-    });
+      });
+      return rows;
+    }
+    const interGroups = groups.filter((g) => g.tube === 'GEM-RT strip');
+    const cdnaGroups = groups.filter((g) => g.tube === 'cDNA strip');
+    const libGroups = groups.filter((g) => g.tube === 'Library');
 
     const wb = XLSX.utils.book_new();
-    const ws1 = XLSX.utils.aoa_to_sheet(rows1); ws1['!cols'] = [{ wch: 20 }, { wch: 18 }, { wch: 18 }, { wch: 30 }];
+    const ws1 = XLSX.utils.aoa_to_sheet(rows1); ws1['!cols'] = [{ wch: 20 }, { wch: 18 }, { wch: 18 }, { wch: 30 }, { wch: 12 }];
     XLSX.utils.book_append_sheet(wb, ws1, 'Sample & FACS labels');
-    const ws2 = XLSX.utils.aoa_to_sheet(rows2); ws2['!cols'] = [{ wch: 7 }, { wch: 14 }, { wch: 12 }, { wch: 22 }, { wch: 18 }, { wch: 12 }, { wch: 10 }];
-    XLSX.utils.book_append_sheet(wb, ws2, 'cDNA & library labels');
+    const stripCols = [{ wch: 7 }, { wch: 14 }, { wch: 12 }, { wch: 22 }, { wch: 18 }, { wch: 12 }, { wch: 10 }];
+    [['Intermediate labels', interGroups], ['cDNA labels', cdnaGroups], ['Library labels', libGroups]].forEach((pair) => {
+      const ws = XLSX.utils.aoa_to_sheet(stripRows(pair[1])); ws['!cols'] = stripCols;
+      XLSX.utils.book_append_sheet(wb, ws, pair[0]);
+    });
     return { wb: wb, name: 'tube_labels_' + (expId || exp).replace(/[^A-Za-z0-9._-]+/g, '_') };
   }
   function generateTubeLabels() {
