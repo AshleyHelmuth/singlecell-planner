@@ -41,6 +41,7 @@
     inventory: { panels: [{ id: 'inventory', label: 'Inventory' }] },
     plan: { sidebar: true, panels: [
       { id: 'planproject', label: 'Create batch plan' }, { id: 'plan', label: 'Plan experiment' },
+      { id: 'modify', label: 'Modify experiment' },
       { id: 'workflow', label: 'Workflow' }, { id: 'protocols', label: 'Protocols' },
       { id: 'scheduling', label: 'Scheduling' },
       { id: 'reagents', label: 'Reagents & cost' } ] },
@@ -60,6 +61,7 @@
   function panelRenderHook(id) {
     if (id === 'scheduling' && window.Scheduling) Scheduling.render($('#schedulingContent'));
     else if (id === 'plan') refreshBatchLoadControl();
+    else if (id === 'modify') renderModify();
     else if (id === 'inventory') renderInventory();
     else if (id === 'projects') renderManage();
     else if (id === 'calendar') renderCalendar();
@@ -2940,6 +2942,78 @@
     return esc(li.quantity + ' ' + (li.quantityUnit || ''));
   }
 
+  // ===== Modify experiment: editable summary + pipeline cell-flow + regenerate =====
+  function renderModify() {
+    const host = $('#modifyContent'); if (!host) return;
+    const rec = CURRENT_EXP_ID ? Store.getExperiment(CURRENT_EXP_ID) : null;
+    let calc; try { calc = computePooling(); } catch (e) { calc = null; }
+    if (!calc || !calc.samples || !calc.samples.length) { host.innerHTML = '<h2>Modify experiment</h2><p class="empty">Build a plan on <strong>Plan experiment</strong> first, then adjust it here.</p>'; return; }
+    const nSamples = calc.samples.length;
+    const nPools = (calc.poolRes && calc.poolRes.nPools) || 0;
+    const lanes = laneOverridesFromCost(nSamples, nPools, calc.samples) || { unsort: 0, asap: 0, sort: 0 };
+    const arms = (function () { try { return buildArmInstances(SEL); } catch (e) { return []; } })();
+    const modList = []; arms.forEach((a) => { const lbl = a.label || a.key || a.chem; if (lbl && modList.indexOf(lbl) < 0) modList.push(lbl); });
+    const poolOf = {}; if (calc.poolRes && calc.poolRes.pools) calc.poolRes.pools.forEach((p, i) => p.forEach((s) => { poolOf[s.sampleId] = i + 1; }));
+    const sampleNo = {}; let n = 0; if (calc.poolRes && calc.poolRes.pools) calc.poolRes.pools.forEach((p) => p.forEach((s) => { sampleNo[s.sampleId] = ++n; }));
+
+    const laneRow = (key, label) => '<tr><td>' + esc(label) + '</td><td class="num"><input type="number" min="0" class="mod-lane" data-mod="' + key + '" value="' + (lanes[key] || 0) + '" style="width:80px"></td></tr>';
+    const sampleRows = calc.samples.slice().sort((a, b) => (sampleNo[a.sampleId] || 0) - (sampleNo[b.sampleId] || 0))
+      .map((s) => '<tr><td class="num">' + (sampleNo[s.sampleId] || '') + '</td><td>' + esc(s.sampleId) + '</td><td class="num">' + (poolOf[s.sampleId] || '') + '</td></tr>').join('');
+
+    host.innerHTML = '<h2>Modify experiment <span class="who">' + esc((rec && rec.name) || '') + '</span></h2>'
+      + '<p class="step-hint">Review the current plan and adjust the 10X lane counts per arm if needed. The cell-flow below updates live so you can sanity-check. When ready, <strong>Regenerate experiment materials</strong> builds a fresh, versioned set of protocols, tube labels and summary.</p>'
+      + '<div class="mod-grid" style="display:flex;flex-wrap:wrap;gap:24px;align-items:flex-start">'
+      + '<div><h3>Summary</h3><table class="cost-table"><tbody>'
+      + '<tr><td>Modalities / arms</td><td>' + esc(modList.join(', ') || '\u2014') + '</td></tr>'
+      + '<tr><td>Samples</td><td class="num">' + nSamples + '</td></tr>'
+      + '<tr><td>Genetic pools</td><td class="num">' + nPools + '</td></tr>'
+      + '</tbody></table>'
+      + '<h3 style="margin-top:16px">10X lanes per arm <span class="who">(editable)</span></h3>'
+      + '<table class="cost-table"><thead><tr><th>Arm</th><th class="num">Lanes</th></tr></thead><tbody>'
+      + laneRow('unsort', "5' unsort") + laneRow('asap', 'ASAP') + laneRow('sort', "5' sort")
+      + '</tbody></table>'
+      + '<div class="row-actions" style="margin-top:8px"><button class="btn ghost" id="modReset">Reset lanes to computed</button></div>'
+      + '</div>'
+      + '<div style="flex:1;min-width:280px"><h3>Samples &amp; pool assignments</h3><div style="max-height:360px;overflow:auto"><table class="cost-table"><thead><tr><th class="num">#</th><th>Sample ID</th><th class="num">Pool</th></tr></thead><tbody>' + sampleRows + '</tbody></table></div></div>'
+      + '</div>'
+      + '<h3 style="margin-top:22px">Pipeline cell-flow (this strategy)</h3><div id="modifyFlow"></div>'
+      + '<div class="row-actions" style="margin-top:16px"><button class="btn primary" id="modRegen">Regenerate experiment materials (new version)</button><span id="modRegenStatus" class="muted"></span></div>';
+
+    // render the cell-flow for the current (possibly overridden) lanes
+    try {
+      const flowHost = $('#modifyFlow');
+      if (flowHost && window.Workflow && window.Pooling) {
+        const a = readScenarioAssumptions();
+        const sc = Pooling.exploreScenario(Object.assign({}, a, {
+          nSamples: nSamples, nPools: nPools, samplesPerPool: nPools ? Math.round(nSamples / nPools) : nSamples,
+          sortPopulations: sortSelList(),
+          stainTargetUnsort: (LYO_SEL.cite5 && LYO_SEL.cite5.stainCells) || 1500000,
+          stainTargetAsap: (LYO_SEL.asap && LYO_SEL.asap.stainCells) || 1500000,
+          arms: { unsort: (lanes.unsort || 0) > 0, asap: (lanes.asap || 0) > 0, sort: (lanes.sort || 0) > 0 },
+          laneOverrides: lanes
+        }));
+        flowHost.innerHTML = Workflow.renderPipelineFlow(sc);
+      }
+    } catch (e) { $('#modifyFlow').innerHTML = '<p class="who">Cell-flow unavailable: ' + esc(String(e)) + '</p>'; }
+
+    host.querySelectorAll('.mod-lane').forEach((el) => el.addEventListener('change', () => {
+      const base = LANE_OVERRIDE || Object.assign({}, LANE_COMPUTED || lanes);
+      const v = parseInt(el.value, 10); base[el.dataset.mod] = isNaN(v) || v < 0 ? 0 : v;
+      LANE_OVERRIDE = base; renderModify();
+    }));
+    const reset = $('#modReset'); if (reset) reset.addEventListener('click', () => { LANE_OVERRIDE = null; renderModify(); });
+    const regen = $('#modRegen'); if (regen) regen.addEventListener('click', () => regenerateMaterials(rec));
+  }
+  function regenerateMaterials(rec) {
+    const stEl = $('#modRegenStatus');
+    if (!rec || !rec.snapshot) { if (stEl) stEl.textContent = ' Save the experiment on Plan experiment first (build the plan, then Save).'; return; }
+    if (!confirm('Regenerate all experiment materials (protocols, tube labels, summary) as a NEW version? The previous version is kept.')) return;
+    if (stEl) stEl.textContent = ' Building materials\u2026';
+    exportExperimentToDrive(rec, { newVersion: true })
+      .then(() => { if (stEl) stEl.textContent = ' Done \u2014 new version ' + ((rec.materialVersions && rec.materialVersions.length) || '') + ' created in Drive.'; renderModify(); })
+      .catch((e) => { if (stEl) stEl.textContent = ' Failed: ' + e; });
+  }
+
   function renderReagents(plan, cost) {
     LAST_COST = cost; LAST_PLAN = plan;
     const byCat = {};
@@ -4550,7 +4624,7 @@
 
   // Auto-export a built experiment's artifacts to its Drive folder as native
   // Google files. Fire-and-forget from the build; logs but never blocks the UI.
-  async function exportExperimentToDrive(rec) {
+  async function exportExperimentToDrive(rec, opts) {
     try {
       if (!rec || !rec.snapshot) return;
       const project = rec.project || 'Unfiled';
@@ -4559,9 +4633,19 @@
       if (rec.driveFolderId !== path.experimentId) {
         rec.driveFolderId = path.experimentId; rec.driveProjectId = path.projectId; Store.saveExperiment(rec);
       }
+      // Each export is a new, versioned set of materials under Exp_ID_v{N} (never overwrites).
+      const expId = (rec.experimentId || projectLabel(rec.name || 'experiment'));
+      rec.materialVersions = rec.materialVersions || [];
+      const version = rec.materialVersions.length + 1;
+      const folderName = sanitizeName(expId + '_v' + version);
+      const vpath = await driveApi({ action: 'ensurePath', parentId: path.experimentId, subPath: [folderName] });
+      const vFolderId = (vpath && vpath.subId) || path.experimentId;
+      const pfx = expId + '_v' + version + ' ';   // versioned file-name prefix
+      const files = {};
       // Experiment summary (Summary + Pooling + Reagents + Pricing) -> Google Sheet
-      const sumRes = await driveApi({ action: 'upload', name: 'Experiment summary', folderId: path.experimentId,
+      const sumRes = await driveApi({ action: 'upload', name: pfx + 'Experiment summary', folderId: vFolderId,
         base64: wbBase64(buildExperimentWb(rec)), sourceMime: XLSX_MIME, targetMime: GSHEET_MIME });
+      files.summary = (sumRes && sumRes.id) || null;
       // Protocol packet (rendered HTML) -> Google Doc
       let protoRes = null;
       const protoEl = document.getElementById('protocolsContent');
@@ -4571,29 +4655,30 @@
         const pageHtml = Array.from(protoEl.querySelectorAll('.protocol-page')).map((el) => el.outerHTML).join('');
         if (pageHtml.trim()) {
           const html = '<html><head><meta charset="utf-8"></head><body style="margin:0.55in 0.65in;font-family:Arial,Calibri,sans-serif;">' + inlineProtocolColors(pageHtml) + '</body></html>';
-          protoRes = await driveApi({ action: 'upload', name: 'Protocol', folderId: path.experimentId,
+          protoRes = await driveApi({ action: 'upload', name: pfx + 'Protocol', folderId: vFolderId,
             base64: htmlBase64(html), sourceMime: HTML_MIME, targetMime: GDOC_MIME });
         }
       }
-      rec.driveFiles = Object.assign({}, rec.driveFiles, {
-        summary: (sumRes && sumRes.id) || (rec.driveFiles && rec.driveFiles.summary) || null,
-        protocol: (protoRes && protoRes.id) || (rec.driveFiles && rec.driveFiles.protocol) || null
-      });
+      files.protocol = (protoRes && protoRes.id) || null;
       // Tube labels + Library record -> Google Sheets
       const labelsBuilt = buildTubeLabelsWb();
       if (labelsBuilt) {
-        const labRes = await driveApi({ action: 'upload', name: 'Tube labels', folderId: path.experimentId,
+        const labRes = await driveApi({ action: 'upload', name: pfx + 'Tube labels', folderId: vFolderId,
           base64: wbBase64(labelsBuilt.wb), sourceMime: XLSX_MIME, targetMime: GSHEET_MIME });
-        if (labRes && labRes.id) rec.driveFiles.labels = labRes.id;
+        if (labRes && labRes.id) files.labels = labRes.id;
       }
       const libBuilt = buildLibraryRecordWb();
       if (libBuilt) {
-        const libRes = await driveApi({ action: 'upload', name: 'Library record', folderId: path.experimentId,
+        const libRes = await driveApi({ action: 'upload', name: pfx + 'Library record', folderId: vFolderId,
           base64: wbBase64(libBuilt.wb), sourceMime: XLSX_MIME, targetMime: GSHEET_MIME });
-        if (libRes && libRes.id) rec.driveFiles.library = libRes.id;
+        if (libRes && libRes.id) files.library = libRes.id;
       }
+      // record the version; the most recent is the active one
+      rec.materialVersions.push({ version: version, folder: folderName, folderId: vFolderId, createdAt: new Date().toISOString().slice(0, 16).replace('T', ' '), files: files });
+      rec.currentVersion = version;
+      rec.driveFiles = Object.assign({}, files);
       Store.saveExperiment(rec);
-      console.log('[drive] exported', project + '/' + (rec.name || 'Experiment'));
+      console.log('[drive] exported v' + version, project + '/' + (rec.name || 'Experiment'));
     } catch (e) { console.warn('[drive] export error', e); }
   }
 
