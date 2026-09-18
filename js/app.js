@@ -4633,13 +4633,21 @@
       if (rec.driveFolderId !== path.experimentId) {
         rec.driveFolderId = path.experimentId; rec.driveProjectId = path.projectId; Store.saveExperiment(rec);
       }
-      // Each export is a new, versioned set of materials under Exp_ID_v{N} (never overwrites).
+      // Building updates the working version in place; an explicit regenerate/export
+      // (opts.newVersion) creates a new, preserved version. First-ever export = v1.
       const expId = (rec.experimentId || projectLabel(rec.name || 'experiment'));
       rec.materialVersions = rec.materialVersions || [];
-      const version = rec.materialVersions.length + 1;
-      const folderName = sanitizeName(expId + '_v' + version);
-      const vpath = await driveApi({ action: 'ensurePath', parentId: path.experimentId, subPath: [folderName] });
-      const vFolderId = (vpath && vpath.subId) || path.experimentId;
+      const makeNew = (opts && opts.newVersion) || !rec.materialVersions.length;
+      let version, vFolderId, folderName;
+      if (makeNew) {
+        version = rec.materialVersions.length + 1;
+        folderName = sanitizeName(expId + '_v' + version);
+        const vpath = await driveApi({ action: 'ensurePath', parentId: path.experimentId, subPath: [folderName] });
+        vFolderId = (vpath && vpath.subId) || path.experimentId;
+      } else {
+        const cur = rec.materialVersions[rec.materialVersions.length - 1];
+        version = cur.version; vFolderId = cur.folderId; folderName = cur.folder;
+      }
       const pfx = expId + '_v' + version + ' ';   // versioned file-name prefix
       const files = {};
       // Experiment summary (Summary + Pooling + Reagents + Pricing) -> Google Sheet
@@ -4673,8 +4681,9 @@
           base64: wbBase64(libBuilt.wb), sourceMime: XLSX_MIME, targetMime: GSHEET_MIME });
         if (libRes && libRes.id) files.library = libRes.id;
       }
-      // record the version; the most recent is the active one
-      rec.materialVersions.push({ version: version, folder: folderName, folderId: vFolderId, createdAt: new Date().toISOString().slice(0, 16).replace('T', ' '), files: files });
+      // record (or update) the version; the most recent is the active one
+      const entry = { version: version, folder: folderName, folderId: vFolderId, createdAt: new Date().toISOString().slice(0, 16).replace('T', ' '), files: files };
+      if (makeNew) rec.materialVersions.push(entry); else rec.materialVersions[rec.materialVersions.length - 1] = entry;
       rec.currentVersion = version;
       rec.driveFiles = Object.assign({}, files);
       Store.saveExperiment(rec);
@@ -5488,6 +5497,21 @@
                      + '</p><p class="muted small">Open the live Drive copies above, or generate a fresh download below.</p>')
                   : '<p class="muted small">Build the experiment to create live Google Drive copies (Sheet + Doc) here. Until then, generate downloads below.</p>')
               + '<div class="sec-actions">' + B('drive', 'Export / refresh Drive copies') + B('packet', 'Experiment summary (xlsx)') + B('protocols', 'Protocols') + B('labels', 'Tube labels') + B('libRecord', 'Library record (xlsx)') + B('reagents', 'Reagent checklist') + '</div></details>'
+              // 2b) Material versions
+              + ((e.materialVersions && e.materialVersions.length)
+                  ? ('<details class="exp-sec"><summary>Material versions (' + e.materialVersions.length + ')</summary>'
+                     + '<p class="muted small">Each regenerate/export creates a new version. The most recent is used by default; switch back or delete below.</p>'
+                     + '<table class="cost-table"><thead><tr><th>Version</th><th>Created</th><th>Files</th><th></th></tr></thead><tbody>'
+                     + e.materialVersions.slice().reverse().map((v) => { const cur = (e.currentVersion === v.version);
+                         const links = [];
+                         if (v.files && v.files.summary) links.push('<a href="https://docs.google.com/spreadsheets/d/' + escAttr(v.files.summary) + '/edit" target="_blank" rel="noopener">Summary</a>');
+                         if (v.files && v.files.protocol) links.push('<a href="https://docs.google.com/document/d/' + escAttr(v.files.protocol) + '/edit" target="_blank" rel="noopener">Protocol</a>');
+                         if (v.files && v.files.labels) links.push('<a href="https://docs.google.com/spreadsheets/d/' + escAttr(v.files.labels) + '/edit" target="_blank" rel="noopener">Labels</a>');
+                         if (v.files && v.files.library) links.push('<a href="https://docs.google.com/spreadsheets/d/' + escAttr(v.files.library) + '/edit" target="_blank" rel="noopener">Library</a>');
+                         return '<tr><td>v' + v.version + (cur ? ' <span class="exp-id">current</span>' : '') + '</td><td class="who">' + esc(v.createdAt || '') + '</td><td class="small">' + (links.join(' \u00b7 ') || '\u2014') + '</td>'
+                           + '<td>' + (cur ? '' : '<button class="btn tiny" data-exp-act="verUse" data-id="' + e.id + '" data-ver="' + v.version + '">Use</button> ') + '<button class="btn tiny" data-exp-act="verDel" data-id="' + e.id + '" data-ver="' + v.version + '">\u2715</button></td></tr>'; }).join('')
+                     + '</tbody></table></details>')
+                  : '')
               // 3) Scheduling
               + '<details class="exp-sec"><summary>Scheduling</summary>'
               + '<p class="small">' + schedSum + '</p>'
@@ -5582,10 +5606,25 @@
       else if (act === 'drive') {
         const r = Store.getExperiment(id);
         if (!r || !r.snapshot) { alert('Build the experiment first (Open in planner \u2192 build), then it can be exported to Drive.'); return; }
-        if (!confirm('This will save the Experiment summary, Protocol, labels and library sheets to Drive, OVERWRITING the current copies for this experiment. Continue?')) return;
+        if (!confirm('This will generate a NEW version of the experiment materials (summary, protocol, labels, library) in Drive. The previous version is kept. Continue?')) return;
         openExperiment(id);
         try { openExperimentProtocols(id); } catch (err) { /* protocol render optional */ }
-        exportExperimentToDrive(r).then(() => renderManage()).catch(() => renderManage());
+        exportExperimentToDrive(r, { newVersion: true }).then(() => renderManage()).catch(() => renderManage());
+      }
+      else if (act === 'verUse') {
+        const r = Store.getExperiment(id); const ver = parseInt(b.getAttribute('data-ver'), 10);
+        const v = (r.materialVersions || []).filter((x) => x.version === ver)[0];
+        if (v) { r.currentVersion = ver; r.driveFiles = Object.assign({}, v.files); Store.saveExperiment(r); renderManage(); }
+      }
+      else if (act === 'verDel') {
+        const r = Store.getExperiment(id); const ver = parseInt(b.getAttribute('data-ver'), 10);
+        const v = (r.materialVersions || []).filter((x) => x.version === ver)[0];
+        if (v && confirm('Delete materials version v' + ver + '? This trashes its Drive folder.')) {
+          r.materialVersions = (r.materialVersions || []).filter((x) => x.version !== ver);
+          if (v.folderId) driveApi({ action: 'trash', id: v.folderId }).catch(() => {});
+          if (r.currentVersion === ver) { const latest = r.materialVersions[r.materialVersions.length - 1]; r.currentVersion = latest ? latest.version : null; r.driveFiles = latest ? Object.assign({}, latest.files) : {}; }
+          Store.saveExperiment(r); renderManage();
+        }
       }
       else if (act === 'reschedule') { CURRENT_EXP_ID = id; updatePlanExpBar(); selectTop('plan', 'scheduling'); }
       else if (act === 'inv') recordInventoryUI(id);
