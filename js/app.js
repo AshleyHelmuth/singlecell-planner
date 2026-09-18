@@ -2957,8 +2957,12 @@
     const sampleNo = {}; let n = 0; if (calc.poolRes && calc.poolRes.pools) calc.poolRes.pools.forEach((p) => p.forEach((s) => { sampleNo[s.sampleId] = ++n; }));
 
     const laneRow = (key, label) => '<tr><td>' + esc(label) + '</td><td class="num"><input type="number" min="0" class="mod-lane" data-mod="' + key + '" value="' + (lanes[key] || 0) + '" style="width:80px"></td></tr>';
+    const poolOpts = (cur) => { let o = ''; for (let k = 1; k <= Math.max(nPools, 1); k++) o += '<option value="' + k + '"' + (cur === k ? ' selected' : '') + '>' + k + '</option>'; o += '<option value="' + (nPools + 1) + '"' + (cur === nPools + 1 ? ' selected' : '') + '>+ new pool ' + (nPools + 1) + '</option>'; return o; };
     const sampleRows = calc.samples.slice().sort((a, b) => (sampleNo[a.sampleId] || 0) - (sampleNo[b.sampleId] || 0))
-      .map((s) => '<tr><td class="num">' + (sampleNo[s.sampleId] || '') + '</td><td>' + esc(s.sampleId) + '</td><td class="num">' + (poolOf[s.sampleId] || '') + '</td></tr>').join('');
+      .map((s) => '<tr><td class="num">' + (sampleNo[s.sampleId] || '') + '</td>'
+        + '<td><input class="mod-sid" data-gid="' + s.id + '" data-sid="' + escAttr(s.sampleId) + '" value="' + escAttr(s.sampleId) + '" style="width:170px"></td>'
+        + '<td><select class="mod-pool" data-sid="' + escAttr(s.sampleId) + '">' + poolOpts(poolOf[s.sampleId] || 1) + '</select></td>'
+        + '<td><button class="btn tiny" data-mod-delsample="' + s.id + '">\u2715</button></td></tr>').join('');
 
     host.innerHTML = '<h2>Modify experiment <span class="who">' + esc((rec && rec.name) || '') + '</span></h2>'
       + '<p class="step-hint">Review the current plan and adjust the 10X lane counts per arm if needed. The cell-flow below updates live so you can sanity-check. When ready, <strong>Regenerate experiment materials</strong> builds a fresh, versioned set of protocols, tube labels and summary.</p>'
@@ -2974,7 +2978,8 @@
       + '</tbody></table>'
       + '<div class="row-actions" style="margin-top:8px"><button class="btn ghost" id="modReset">Reset lanes to computed</button></div>'
       + '</div>'
-      + '<div style="flex:1;min-width:280px"><h3>Samples &amp; pool assignments</h3><div style="max-height:360px;overflow:auto"><table class="cost-table"><thead><tr><th class="num">#</th><th>Sample ID</th><th class="num">Pool</th></tr></thead><tbody>' + sampleRows + '</tbody></table></div></div>'
+      + '<div style="flex:1;min-width:280px"><h3>Samples &amp; pool assignments <span class="who">(editable)</span></h3><div style="max-height:360px;overflow:auto"><table class="cost-table"><thead><tr><th class="num">#</th><th>Sample ID</th><th>Pool</th><th></th></tr></thead><tbody>' + sampleRows + '</tbody></table></div>'
+      + '<div class="row-actions" style="margin-top:6px"><button class="btn ghost" id="modAddSample">+ Add sample</button></div></div>'
       + '</div>'
       + '<h3 style="margin-top:22px">Pipeline cell-flow (this strategy)</h3><div id="modifyFlow"></div>'
       + '<div class="row-actions" style="margin-top:16px"><button class="btn primary" id="modRegen">Regenerate experiment materials (new version)</button><span id="modRegenStatus" class="muted"></span></div>';
@@ -3002,7 +3007,37 @@
       LANE_OVERRIDE = base; renderModify();
     }));
     const reset = $('#modReset'); if (reset) reset.addEventListener('click', () => { LANE_OVERRIDE = null; renderModify(); });
+    // pool assignment edits (via POOL_OVERRIDE)
+    host.querySelectorAll('.mod-pool').forEach((el) => el.addEventListener('change', () => { modSetPool(el.dataset.sid, parseInt(el.value, 10) - 1); }));
+    // sample id rename (edits the grid; repools fresh to avoid stale keys)
+    host.querySelectorAll('.mod-sid').forEach((el) => el.addEventListener('change', () => {
+      const gid = parseInt(el.dataset.gid, 10); const val = el.value.trim();
+      if (GRID_ROWS[gid] !== undefined) { GRID_ROWS[gid][0] = val; POOL_OVERRIDE = null; modPersist(); renderModify(); }
+    }));
+    host.querySelectorAll('button[data-mod-delsample]').forEach((b) => b.addEventListener('click', () => {
+      const gid = parseInt(b.dataset.modDelsample, 10);
+      if (GRID_ROWS[gid] !== undefined && confirm('Remove this sample from the experiment?')) { GRID_ROWS.splice(gid, 1); POOL_OVERRIDE = null; modPersist(); renderModify(); }
+    }));
+    const addSample = $('#modAddSample'); if (addSample) addSample.addEventListener('click', () => {
+      const name = (prompt('New sample ID:') || '').trim(); if (!name) return;
+      GRID_ROWS.push([name, '', '', ''].concat(CUSTOM_COLS.map(() => ''))); POOL_OVERRIDE = null; modPersist(); renderModify();
+    });
     const regen = $('#modRegen'); if (regen) regen.addEventListener('click', () => regenerateMaterials(rec));
+  }
+  function modPersist() {
+    if (!CURRENT_EXP_ID) return; const rec = Store.getExperiment(CURRENT_EXP_ID); if (!rec) return;
+    try { rec.state = serializeState(); } catch (e) { /* best-effort */ } Store.saveExperiment(rec);
+  }
+  function modSetPool(sampleId, pool0) {
+    let calc; try { calc = computePooling(); } catch (e) { return; }
+    if (!(POOL_OVERRIDE && overrideMatchesSamples(POOL_OVERRIDE, calc.samples))) {
+      const ov = { bySampleId: new Map(), hasFullHTO: false };
+      (calc.poolRes.pools || []).forEach((p, i) => p.forEach((s) => ov.bySampleId.set(s.sampleId, { pool: i, hto: null, superPool: null })));
+      POOL_OVERRIDE = ov;
+    }
+    const info = POOL_OVERRIDE.bySampleId.get(sampleId) || { pool: 0, hto: null, superPool: null };
+    info.pool = pool0 < 0 ? 0 : pool0; POOL_OVERRIDE.bySampleId.set(sampleId, info);
+    modPersist(); renderModify();
   }
   function regenerateMaterials(rec) {
     const stEl = $('#modRegenStatus');
