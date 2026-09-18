@@ -1290,21 +1290,22 @@
     if (!reports.length) { host.innerHTML = '<h2>Sort</h2><p class="empty">No sort reports yet. Upload them on Record \u2192 Sort summary.</p>'; return; }
     // per-tube rows + combine by gate
     const perTube = []; const byGate = {}; let grandTotalEvents = 0; const tubeTotals = {};
-    reports.forEach((r) => {
+    reports.forEach((r, ri) => {
+      const tubeKey = 'r' + ri;   // each report is its own tube (manual entries may share a blank tube #)
       (r.rows || []).forEach((row) => {
         perTube.push({ tube: r.tube, collection: row.collection, gate: row.gate, totalEvent: row.totalEvent, sortedCount: row.sortedCount });
-        if (!byGate[row.gate]) byGate[row.gate] = { sorted: 0, totalEvent: 0 };
+        if (!byGate[row.gate]) byGate[row.gate] = { sorted: 0, tubeTotals: {} };
         byGate[row.gate].sorted += row.sortedCount || 0;
-        // total event is the same across a tube's rows; count it once per tube
-        if (tubeTotals[r.tube || r.fileName] == null) { tubeTotals[r.tube || r.fileName] = row.totalEvent || 0; }
+        if (row.totalEvent > 0) byGate[row.gate].tubeTotals[tubeKey] = row.totalEvent;   // only tubes with an entered total
+        if (tubeTotals[tubeKey] == null && row.totalEvent > 0) tubeTotals[tubeKey] = row.totalEvent;
       });
     });
     Object.keys(tubeTotals).forEach((t) => { grandTotalEvents += tubeTotals[t] || 0; });
-    Object.keys(byGate).forEach((g) => { byGate[g].totalEvent = grandTotalEvents; });
 
     const pct = (n, d) => d > 0 ? (Math.round(n / d * 1e6) / 1e4) + '%' : '\u2014';
-    const perRows = perTube.map((x) => '<tr><td class="num">' + esc(x.tube || '') + '</td><td>' + esc(x.collection || '') + '</td><td>' + esc(x.gate || '') + '</td><td class="num">' + (x.totalEvent || 0).toLocaleString() + '</td><td class="num">' + (x.sortedCount || 0).toLocaleString() + '</td><td class="num">' + pct(x.sortedCount, x.totalEvent) + '</td></tr>').join('');
-    const gateRows = Object.keys(byGate).sort().map((g) => '<tr><td>' + esc(g) + '</td><td class="num"><strong>' + byGate[g].sorted.toLocaleString() + '</strong></td><td class="num">' + pct(byGate[g].sorted, grandTotalEvents) + '</td></tr>').join('');
+    const perRows = perTube.map((x) => '<tr><td class="num">' + esc(x.tube || '') + '</td><td>' + esc(x.collection || '') + '</td><td>' + esc(x.gate || '') + '</td><td class="num">' + (x.totalEvent > 0 ? Number(x.totalEvent).toLocaleString() : '\u2014') + '</td><td class="num">' + (x.sortedCount || 0).toLocaleString() + '</td><td class="num">' + pct(x.sortedCount, x.totalEvent) + '</td></tr>').join('');
+    const gateRows = Object.keys(byGate).sort().map((g) => { const gt = Object.keys(byGate[g].tubeTotals).reduce((s, k) => s + byGate[g].tubeTotals[k], 0);
+      return '<tr><td>' + esc(g) + '</td><td class="num"><strong>' + byGate[g].sorted.toLocaleString() + '</strong></td><td class="num">' + pct(byGate[g].sorted, gt) + '</td></tr>'; }).join('');
 
     host.innerHTML = '<h2>Sort <span class="who">' + esc(rec.name || '') + '</span></h2>'
       + '<h3>Combined across all tubes, by population</h3>'
