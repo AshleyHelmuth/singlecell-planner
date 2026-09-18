@@ -494,7 +494,7 @@
 
     host.innerHTML = '<h2>Tapestation Output <span class="who">' + esc(rec.name || '') + '</span></h2>'
       + '<p class="step-hint">Drag a TapeStation run <strong>.zip</strong>, or its <strong>loose files</strong> (sampleTable.csv, the .png traces, and/or the .pdf summary) \u2014 one or many at once. It reads the concentration summary + traces where present, and stores everything (plus a durable <strong>lane-tags sheet</strong>) in the experiment\u2019s <strong>data \u203a tapestation</strong> folder.</p>'
-      + '<div class="row-actions" style="margin:0 0 10px"><button class="btn ghost" id="tsReload">Reload tags from Drive</button><span id="tsReloadStatus" class="muted"></span></div>'
+      + '<div class="row-actions" style="margin:0 0 10px"><button class="btn ghost" id="tsReload">Reload tags from Drive</button><button class="btn ghost" id="tsBackfill">Backfill trace images to Drive</button><span id="tsReloadStatus" class="muted"></span></div>'
       + '<div id="tsDrop" class="cc-drop">Drop a .zip, or the run\u2019s .csv / .png / .pdf files here (multiple ok), or click to browse<input type="file" id="tsFile" accept=".zip,.csv,.png,.pdf,.xlsx" multiple hidden></div>'
       + editUI + '<div style="margin-top:20px"></div>' + runList;
 
@@ -516,12 +516,57 @@
     const cancel = $('#tsCancel'); if (cancel) cancel.addEventListener('click', () => { TS_PENDING = null; renderTapestation(); });
     const saveBtn = $('#tsSave'); if (saveBtn) saveBtn.addEventListener('click', () => saveTapestation(rec));
     const reloadBtn = $('#tsReload'); if (reloadBtn) reloadBtn.addEventListener('click', () => reloadTapestationFromDrive(rec));
+    const backfillBtn = $('#tsBackfill'); if (backfillBtn) backfillBtn.addEventListener('click', () => backfillTapestationImages(rec));
     host.querySelectorAll('button[data-ts-del]').forEach((b) => b.addEventListener('click', () => {
       const i = +b.dataset.tsDel; if (rec.tapestation && !isNaN(i)) { rec.tapestation.splice(i, 1); Store.saveExperiment(rec); renderTapestation(); }
     }));
   }
   // Rebuild rec.tapestation from the durable lane-tags sheets in Drive - so tags +
   // notes survive any record reset / site update (Drive is the source of truth).
+  // Backfill Drive-served trace images: for lanes missing an imgFileId, grab the id
+  // from a loose PNG already in Drive, or upload the locally-cached PNG. Run this on
+  // a device that can see the traces so they become visible everywhere.
+  function backfillTapestationImages(rec) {
+    const stEl = $('#tsReloadStatus'); if (stEl) stEl.textContent = ' Backfilling\u2026';
+    const runs = rec.tapestation || [];
+    if (!runs.length) { if (stEl) stEl.textContent = ' No TapeStation runs.'; return; }
+    const req = rec.driveFolderId
+      ? { action: 'getTapestation', parentId: rec.driveFolderId }
+      : { action: 'getTapestation', project: rec.project || CURRENT_PROJECT, experiment: rec.name || 'Experiment' };
+    driveApi(req).then(async (res) => {
+      const driveByRun = {};
+      ((res && res.runs) || []).forEach((r) => { const m = {}; (r.wells || []).forEach((w) => { if (w.imgFileId) m[w.well] = w.imgFileId; }); driveByRun[r.runName] = m; });
+      let fromDrive = 0, fromCache = 0, skipped = 0;
+      for (const run of runs) {
+        const dm = driveByRun[run.runName] || {};
+        const needUpload = [];
+        (run.wells || []).forEach((w) => {
+          if (w.imgFileId) return;
+          if (dm[w.well]) { w.imgFileId = dm[w.well]; fromDrive += 1; return; }
+          const cached = tsGetImg(w);
+          if (cached) needUpload.push({ w: w, b64: cached }); else skipped += 1;
+        });
+        if (needUpload.length) {
+          const folder = run.folder || sanitizeName(run.runName);
+          const preq = rec.driveFolderId
+            ? { action: 'ensurePath', parentId: rec.driveFolderId, subPath: ['data', 'tapestation', folder] }
+            : { action: 'ensurePath', project: rec.project || CURRENT_PROJECT, experiment: rec.name || 'Experiment', subPath: ['data', 'tapestation', folder] };
+          let path; try { path = await driveApi(preq); } catch (e) { path = null; }
+          if (path && path.subId) {
+            for (const item of needUpload) {
+              if (stEl) stEl.textContent = ' Uploading ' + run.runName + ' ' + item.w.well + '\u2026';
+              try { const up = await driveApi({ action: 'upload', name: 'trace_' + item.w.well + '.png', folderId: path.subId, base64: item.b64, sourceMime: 'image/png' }); if (up && up.id) { item.w.imgFileId = up.id; fromCache += 1; } else skipped += 1; }
+              catch (e) { skipped += 1; }
+            }
+          } else { skipped += needUpload.length; }
+        }
+      }
+      Store.saveExperiment(rec);
+      if (stEl) stEl.textContent = ' Backfilled: ' + fromDrive + ' from Drive, ' + fromCache + ' uploaded'
+        + (skipped ? ', ' + skipped + ' still missing (only inside a zip \u2014 re-save that run on the device that has it)' : '') + '.';
+      renderTapestation();
+    }).catch((e) => { if (stEl) stEl.textContent = ' Backfill failed: ' + e; });
+  }
   function reloadTapestationFromDrive(rec) {
     const stEl = $('#tsReloadStatus'); if (stEl) stEl.textContent = ' Reading Drive\u2026';
     const req = rec.driveFolderId
