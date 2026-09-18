@@ -1680,35 +1680,46 @@
       onSelectionChange();
       if (poolingReady()) runComputePooling(false);
     };
-    // sort panel paste + preview
-    const ta = $('#sortPanelText');
-    if (ta) {
-      if (ta.value === '' && SORT_PANEL.length) ta.value = SORT_PANEL.map((r) => [r.channel, r.marker, r.ul].join('\t')).join('\n');
-      ta.oninput = () => { SORT_PANEL = parseSortPanel(ta.value); renderSortPanelPreview(); onSelectionChange(); };
-      renderSortPanelPreview();
-    }
+    // sort panel: spreadsheet-style editable table (paste-to-grow + add rows)
+    renderSortPanelTable();
   }
-  function parseSortPanel(text) {
-    const out = [];
-    (text || '').split(/\r?\n/).forEach((ln) => {
-      const t = ln.trim(); if (!t) return;
-      const cells = ln.split(/\t|\s{2,}|,(?=\s*\S)/).map((c) => c.trim()).filter((c, i, a) => c !== '' || i < a.length);
-      const parts = ln.split(/\t/).length > 1 ? ln.split(/\t/) : ln.split(/\s{2,}/);
-      const p = parts.map((c) => c.trim());
-      if (p.length < 2) return;
-      if (/^channel$/i.test(p[0]) || /marker/i.test(p[1] || '')) return;   // header row
-      const ul = parseFloat((p[2] || '').replace(/[^0-9.]/g, ''));
-      out.push({ channel: p[0], marker: p[1] || '', ul: isNaN(ul) ? '' : ul });
-    });
-    return out;
-  }
-  function renderSortPanelPreview() {
-    const host = $('#sortPanelPreview'); if (!host) return;
-    if (!SORT_PANEL.length) { host.textContent = ''; return; }
+  function renderSortPanelTable() {
+    const host = $('#sortPanelTable'); if (!host) return;
+    const MINROWS = 4;
+    while (SORT_PANEL.length < MINROWS) SORT_PANEL.push({ channel: '', marker: '', ul: '' });
     const nPools = (function () { try { const c = computePooling(); return (c && c.poolRes && c.poolRes.nPools) || 8; } catch (e) { return 8; } })();
     const over = nPools + 1;
-    let tot = 0; const rows = SORT_PANEL.map((r) => { const t = (Number(r.ul) || 0) * over; if (r.ul !== '') tot += Number(r.ul) || 0; return '<tr><td>' + esc(r.channel) + '</td><td>' + esc(r.marker) + '</td><td class="num">' + (r.ul === '' ? '\u2014' : r.ul) + '</td><td class="num">' + (r.ul === '' ? '\u2014' : Math.round(t * 100) / 100) + '</td></tr>'; }).join('');
-    host.innerHTML = '<table class="cost-table" style="margin-top:4px"><thead><tr><th>Channel</th><th>Marker</th><th class="num">µL/pool</th><th class="num">Total for ' + nPools + ' pools (+1 overage)</th></tr></thead><tbody>' + rows + '<tr><td colspan="2"><strong>Total Ab / pool</strong></td><td class="num"><strong>' + (Math.round(tot * 100) / 100) + '</strong></td><td class="num"><strong>' + (Math.round(tot * over * 100) / 100) + '</strong></td></tr></tbody></table>';
+    let tot = 0;
+    const rows = SORT_PANEL.map((r, i) => {
+      const per = (r.ul === '' || r.ul == null) ? null : Number(r.ul) || 0; if (per != null) tot += per;
+      return '<tr>'
+        + '<td><input class="spx" data-r="' + i + '" data-c="0" value="' + escAttr(r.channel || '') + '" style="width:110px"></td>'
+        + '<td><input class="spx" data-r="' + i + '" data-c="1" value="' + escAttr(r.marker || '') + '" style="width:120px"></td>'
+        + '<td><input class="spx num" data-r="' + i + '" data-c="2" value="' + escAttr(r.ul == null ? '' : r.ul) + '" style="width:70px"></td>'
+        + '<td class="num">' + (per == null ? '\u2014' : Math.round(per * over * 100) / 100) + '</td>'
+        + '<td><button class="btn tiny" data-sp-del="' + i + '">\u2715</button></td></tr>';
+    }).join('');
+    host.innerHTML = '<div style="overflow:auto"><table class="cost-table"><thead><tr><th>Channel</th><th>Marker</th><th class="num">µL / pool</th><th class="num">Total for ' + nPools + ' pools (+1)</th><th></th></tr></thead><tbody>' + rows
+      + '<tr><td colspan="2"><strong>Total Ab / pool</strong></td><td class="num"><strong>' + (Math.round(tot * 100) / 100) + '</strong></td><td class="num"><strong>' + (Math.round(tot * over * 100) / 100) + '</strong></td><td></td></tr>'
+      + '</tbody></table></div><div class="row-actions" style="margin-top:6px"><button class="btn ghost" id="spAddRow">+ Add row</button> <span class="muted small">Tip: paste multiple rows straight from Excel into any cell.</span></div>';
+
+    const setCell = (ri, ci, val) => { const key = ci === 0 ? 'channel' : (ci === 1 ? 'marker' : 'ul'); while (SORT_PANEL.length <= ri) SORT_PANEL.push({ channel: '', marker: '', ul: '' }); SORT_PANEL[ri][key] = (ci === 2 ? val.replace(/[^0-9.]/g, '') : val); };
+    host.querySelectorAll('.spx').forEach((el) => {
+      el.addEventListener('input', () => { setCell(+el.dataset.r, +el.dataset.c, el.value); onSelectionChange(); });
+      el.addEventListener('blur', () => renderSortPanelTable());
+      el.addEventListener('paste', (e) => {
+        const text = (e.clipboardData || window.clipboardData).getData('text');
+        if (!text || (text.indexOf('\t') < 0 && text.indexOf('\n') < 0)) return;   // single value: let default paste happen
+        e.preventDefault();
+        const startR = +el.dataset.r, startC = +el.dataset.c;
+        text.replace(/\r/g, '').split('\n').forEach((line, ri) => { if (line === '' && ri > 0) return;
+          line.split('\t').forEach((cell, ci) => { const c = startC + ci; if (c > 2) return; setCell(startR + ri, c, cell.trim()); });
+        });
+        onSelectionChange(); renderSortPanelTable();
+      });
+    });
+    const add = $('#spAddRow'); if (add) add.addEventListener('click', () => { SORT_PANEL.push({ channel: '', marker: '', ul: '' }); renderSortPanelTable(); });
+    host.querySelectorAll('button[data-sp-del]').forEach((b) => b.addEventListener('click', () => { SORT_PANEL.splice(+b.dataset.spDel, 1); onSelectionChange(); renderSortPanelTable(); }));
   }
   function sortSelList() {
     return (window.Pooling ? Pooling.SORT_MODEL.POPULATIONS : []).filter((p) => SORT_SEL.has(p));
@@ -3751,9 +3762,9 @@
         <li><strong>Post-sort:</strong> spin (save supernatant), resuspend; combine pDC+HSC into one lane; Treg and cDC can take their own lanes. Concentrate to ~77.4&nbsp;µL/lane and proceed to loading.</li>
       </ol>
       <div class="recipe-box"><h5>5&prime; sort antibody panel (per pool; &times;${plan.nPools} + controls)</h5>
-        ${(SORT_PANEL && SORT_PANEL.length) ? (function () {
+        ${(function () { const rowsP = (SORT_PANEL || []).filter((r) => (r.channel || r.marker || r.ul !== '')); return rowsP.length ? (function () {
           const over = plan.nPools + 1; let tot = 0;
-          const body = SORT_PANEL.map((r) => { const per = (r.ul === '' ? null : Number(r.ul) || 0); if (per != null) tot += per; return '<tr><td>' + esc(r.channel) + '</td><td>' + esc(r.marker) + '</td><td class="num">' + (per == null ? '&mdash;' : per) + '</td><td class="num">' + (per == null ? '&mdash;' : Math.round(per * over * 100) / 100) + '</td></tr>'; }).join('');
+          const body = rowsP.map((r) => { const per = (r.ul === '' ? null : Number(r.ul) || 0); if (per != null) tot += per; return '<tr><td>' + esc(r.channel) + '</td><td>' + esc(r.marker) + '</td><td class="num">' + (per == null ? '&mdash;' : per) + '</td><td class="num">' + (per == null ? '&mdash;' : Math.round(per * over * 100) / 100) + '</td></tr>'; }).join('');
           return '<table><tr><th>Channel</th><th>Marker</th><th>µL / pool</th><th>Total for ' + plan.nPools + ' pools (+1 overage)</th></tr>' + body
             + '<tr><td colspan="2"><strong>Total antibody / pool</strong></td><td class="num"><strong>' + (Math.round(tot * 100) / 100) + '</strong></td><td class="num"><strong>' + (Math.round(tot * over * 100) / 100) + '</strong></td></tr></table>';
         })() : (
@@ -3767,7 +3778,7 @@
         + '<tr><td>AF647</td><td>CD34</td><td class="num">5</td></tr>'
         + '<tr><td>PE-TexasRed</td><td>L/D (Zombie Red, 1:1000)</td><td class="num">&mdash;</td></tr>'
         + '<tr><td colspan="2"><strong>Total antibody / pool</strong></td><td class="num"><strong>61.5</strong></td></tr></table>'
-        + '<p class="pp-source" style="margin-top:4px">Tip: paste your actual panel on Plan &rarr; Sort populations to auto-fill this table with a total-for-pools column.</p>')}</div>
+        + '<p class="pp-source" style="margin-top:4px">Tip: paste your actual panel on Plan &rarr; Sort populations to auto-fill this table with a total-for-pools column.</p>'); })()}</div>
       ${recordCounts('sort pool cell counts', 'Sort', plan.nPools)}
       ${recordSortYield()}
       <p class="pp-source">Source: MADI02 batch1 &amp; CITE-seq batch2 sort panels.</p>`;
