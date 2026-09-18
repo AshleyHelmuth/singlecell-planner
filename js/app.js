@@ -52,11 +52,11 @@
       { id: 'rec-cellaca', label: 'Cellaca counts' }, { id: 'rec-batchday', label: 'Batch Day Worksheet' },
       { id: 'rec-sort', label: 'Sort summary' },
       { id: 'rec-library', label: 'Library Worksheets' }, { id: 'rec-tapestation', label: 'Tapestation Output' },
-      { id: 'rec-supply', label: 'Supply Usage' }, { id: 'rec-seqdata', label: 'Sequencing data' } ] },
+      { id: 'rec-supply', label: 'Supply Usage' }, { id: 'rec-seqdata', label: 'Sequencing data' }, { id: 'rec-notes', label: 'General notes' } ] },
     review: { sidebar: true, panels: [
       { id: 'rev-design', label: 'Experimental design' }, { id: 'rev-seq', label: 'Sequencing' },
       { id: 'rev-sort', label: 'Sort' }, { id: 'rev-counts', label: 'Counts' },
-      { id: 'rev-kits', label: 'Kit and supply usage' }, { id: 'rev-worksheets', label: 'Worksheets' }, { id: 'rev-data', label: 'Tapestation' } ] }
+      { id: 'rev-kits', label: 'Kit and supply usage' }, { id: 'rev-worksheets', label: 'Worksheets' }, { id: 'rev-data', label: 'Tapestation' }, { id: 'rev-notes', label: 'General notes' } ] }
   };
   let CUR_TOP = 'projects';
 
@@ -177,6 +177,7 @@
     if (id === 'rec-sort') { renderSortRecord(); return; }
     if (id === 'rec-batchday') { renderWorksheet('batchday'); return; }
     if (id === 'rec-library') { renderWorksheet('library'); return; }
+    if (id === 'rec-notes') { renderNotes(); return; }
     const s = REC_STUBS[id]; if (s) stubPage(s[0], s[1], s[2]);
   }
 
@@ -972,6 +973,7 @@
     if (id === 'rev-counts') { renderReviewCounts(); return; }
     if (id === 'rev-kits') { renderReviewKits(); return; }
     if (id === 'rev-worksheets') { renderReviewWorksheets(); return; }
+    if (id === 'rev-notes') { renderNotesReview(); return; }
     const s = REV_STUBS[id]; if (s) stubPage(s[0], s[1], s[2]);
   }
   // Counts summary: cells per sample at each stage (Cellaca counts by purpose),
@@ -1030,6 +1032,45 @@
       + (kitRows ? '<table class="cost-table"><thead><tr><th>Worksheet</th><th>10X kit</th><th>PN</th><th>Lot #</th><th class="num">Rxns used</th><th>Notes</th></tr></thead><tbody>' + kitRows + '</tbody></table>' : '<p class="empty">No kit lots recorded yet. Enter them on Record \u2192 Batch Day / Library Worksheets.</p>')
       + '<p class="who" style="margin-top:10px">Planned reagent quantities &amp; cost are on Plan \u2192 Reagents &amp; cost.</p>';
   }
+  // ===== General notes: rich-text editor (Record) + read-only view (Review) =====
+  const NOTES_CMDS = [
+    { cmd: 'bold', label: 'B', style: 'font-weight:700' },
+    { cmd: 'italic', label: 'I', style: 'font-style:italic' },
+    { cmd: 'underline', label: 'U', style: 'text-decoration:underline' },
+    { cmd: 'insertUnorderedList', label: '\u2022 List' },
+    { cmd: 'insertOrderedList', label: '1. List' }
+  ];
+  function renderNotes() {
+    const host = $('#recNotesContent'); if (!host) return;
+    const rec = CURRENT_EXP_ID ? Store.getExperiment(CURRENT_EXP_ID) : null;
+    if (!rec) { host.innerHTML = '<h2>General notes</h2><p class="empty">Select a project and experiment in the sidebar first.</p>'; return; }
+    const toolbar = NOTES_CMDS.map((c) => '<button type="button" class="nt-btn" data-cmd="' + c.cmd + '"' + (c.style ? ' style="' + c.style + '"' : '') + '>' + esc(c.label) + '</button>').join('')
+      + '<select class="nt-size" title="Font size"><option value="">Size</option><option value="2">Small</option><option value="3">Normal</option><option value="5">Large</option><option value="6">X-Large</option></select>'
+      + '<button type="button" class="nt-btn" data-cmd="formatBlock" data-val="h3">H</button>'
+      + '<button type="button" class="nt-btn" data-cmd="removeFormat">Clear</button>';
+    host.innerHTML = '<h2>General notes <span class="who">' + esc(rec.name || '') + '</span></h2>'
+      + '<p class="step-hint">Free-form notes for this experiment. Formatting (bold, lists, size\u2026) is saved with the experiment and shown on Review \u2192 General notes.</p>'
+      + '<div class="nt-toolbar">' + toolbar + '</div>'
+      + '<div id="ntEditor" class="nt-editor" contenteditable="true"></div>'
+      + '<div class="row-actions" style="margin-top:8px"><button class="btn primary" id="ntSave">Save notes</button><span id="ntStatus" class="muted"></span></div>';
+    const ed = $('#ntEditor'); if (ed) ed.innerHTML = rec.notesHtml || '';
+    host.querySelectorAll('.nt-btn').forEach((b) => b.addEventListener('mousedown', (e) => { e.preventDefault(); ed.focus(); document.execCommand(b.dataset.cmd, false, b.dataset.val || null); }));
+    const sizeSel = host.querySelector('.nt-size');
+    if (sizeSel) sizeSel.addEventListener('change', () => { if (!sizeSel.value) return; ed.focus(); document.execCommand('fontSize', false, sizeSel.value); sizeSel.value = ''; });
+    const save = $('#ntSave'); if (save) save.addEventListener('click', () => {
+      rec.notesHtml = ed.innerHTML; rec.notesUpdated = new Date().toISOString().slice(0, 16).replace('T', ' ');
+      Store.saveExperiment(rec); const st = $('#ntStatus'); if (st) st.textContent = ' Saved.';
+    });
+  }
+  function renderNotesReview() {
+    const host = $('#revNotesContent'); if (!host) return;
+    const rec = CURRENT_EXP_ID ? Store.getExperiment(CURRENT_EXP_ID) : null;
+    if (!rec) { host.innerHTML = '<h2>General notes</h2><p class="empty">Select a project and experiment in the sidebar first.</p>'; return; }
+    host.innerHTML = '<h2>General notes <span class="who">' + esc(rec.name || '') + '</span></h2>'
+      + (rec.notesUpdated ? '<p class="who">Last updated ' + esc(rec.notesUpdated) + '</p>' : '')
+      + (rec.notesHtml ? '<div class="nt-view">' + rec.notesHtml + '</div>' : '<p class="empty">No notes yet. Add them on Record \u2192 General notes.</p>');
+  }
+
   function renderReviewWorksheets() {
     const host = $('#revWorksheetsContent'); if (!host) return;
     const rec = CURRENT_EXP_ID ? Store.getExperiment(CURRENT_EXP_ID) : null;
