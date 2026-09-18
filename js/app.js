@@ -690,11 +690,16 @@
     const rec = CURRENT_EXP_ID ? Store.getExperiment(CURRENT_EXP_ID) : null;
     if (!rec) { host.innerHTML = '<h2>Cellaca counts</h2><p class="empty">Select a project and experiment in the sidebar first.</p>'; return; }
     const list = (rec.cellacaCountsList || []).slice();
-    const _ccNoMap = (function () { try { return sampleNoMap().byId; } catch (e) { return {}; } })();
+    const _ccMap = (function () { try { return sampleNoMap(); } catch (e) { return { byId: {}, byNo: {} }; } })();
+    const _ccNoMap = _ccMap.byId;
     const storedRows = list.map((c, i) => {
       const _dn = (c.sampleId && _ccNoMap[c.sampleId] != null) ? _ccNoMap[c.sampleId] : (c.sampleNo != null && c.sampleNo !== '' ? c.sampleNo : '');
-      const idCell = c.tubeLabel ? esc(c.tubeLabel) : (esc(c.sampleId || '') + (_dn !== '' ? ' <span class="who">#' + esc(_dn) + '</span>' : ''));
-      return '<tr><td>' + idCell + '</td>'
+      const orphan = !c.tubeLabel && c.sampleId && _ccNoMap[c.sampleId] == null;   // its sample was removed/renamed
+      let idCell;
+      if (c.tubeLabel) idCell = esc(c.tubeLabel);
+      else idCell = '<input class="cc-fix-no" data-i="' + i + '" type="number" min="1" value="' + escAttr(_dn) + '" style="width:56px" title="Sample # \u2014 edit to re-link this count"> '
+        + esc(c.sampleId || '') + (orphan ? ' <span class="ph-tag" title="This count\u2019s sample was removed/renamed \u2014 re-number it or delete it">\u26a0 orphaned</span>' : '');
+      return '<tr' + (orphan ? ' style="background:#fff6f6"' : '') + '><td>' + idCell + '</td>'
         + '<td class="who">' + esc(c.well || '') + '</td><td>' + esc(c.purpose || '') + '</td><td>' + esc(c.thawer || '') + '</td>'
         + '<td class="num">' + (c.live != null ? Number(c.live).toLocaleString() : '\u2014') + '</td>'
         + '<td class="num">' + (c.viability != null ? c.viability + '%' : '\u2014') + '</td>'
@@ -702,7 +707,7 @@
         + '<td class="who">' + esc(c.notes || '') + '</td>'
         + '<td><button class="btn tiny" data-cc-del="' + i + '">\u2715</button></td></tr>'; }).join('');
     const storedTable = list.length
-      ? '<h3>Stored counts (' + list.length + ' rows)</h3><table class="cost-table"><thead><tr><th>Sample / tube</th><th>Well</th><th>Count for</th><th>Thawer</th><th class="num">Live (cells/mL)</th><th class="num">Viability</th><th class="num">Total (cells/mL)</th><th>Notes</th><th></th></tr></thead><tbody>' + storedRows + '</tbody></table>'
+      ? '<h3>Stored counts (' + list.length + ' rows)</h3><p class="who small">Edit a Sample # to re-link a count to the current sample with that number (fixes counts left over from a removed/renamed sample). Orphaned rows are flagged.</p><table class="cost-table"><thead><tr><th>Sample / tube</th><th>Well</th><th>Count for</th><th>Thawer</th><th class="num">Live (cells/mL)</th><th class="num">Viability</th><th class="num">Total (cells/mL)</th><th>Notes</th><th></th></tr></thead><tbody>' + storedRows + '</tbody></table>'
       : '<p class="muted">No counts stored yet for this experiment.</p>';
 
     let mapUI = '';
@@ -822,6 +827,15 @@
     host.querySelectorAll('button[data-cc-del]').forEach((b) => b.addEventListener('click', () => {
       const i = parseInt(b.dataset.ccDel, 10);
       if (rec.cellacaCountsList && !isNaN(i)) { rec.cellacaCountsList.splice(i, 1); Store.saveExperiment(rec); renderCellaca(); }
+    }));
+    host.querySelectorAll('.cc-fix-no').forEach((el) => el.addEventListener('change', () => {
+      const i = parseInt(el.dataset.i, 10); const v = parseInt(el.value, 10);
+      const nmap = sampleNoMap(); const sid = nmap.byNo[v];
+      if (rec.cellacaCountsList && rec.cellacaCountsList[i]) {
+        if (!sid) { alert('No sample is currently #' + v + ' (max is ' + nmap.max + '). Re-number the sample on Modify experiment, or delete this count.'); renderCellaca(); return; }
+        rec.cellacaCountsList[i].sampleNo = v; rec.cellacaCountsList[i].sampleId = sid;
+        Store.saveExperiment(rec); renderCellaca();
+      }
     }));
   }
   function confirmOverwrite(name) {
