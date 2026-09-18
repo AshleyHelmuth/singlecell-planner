@@ -28,6 +28,7 @@
   // A reuploaded, user-edited pooling strategy, if any. When present and its
   // sample set matches the grid exactly, it overrides the automatic algorithm.
   let POOL_OVERRIDE = null; // { bySampleId: Map(sampleId -> {pool:0-based, hto, superPool:0-based|null}), hasFullHTO }
+  let SAMPLE_NO_OVERRIDE = {}; // { sampleId -> explicit sample number } (set on Modify experiment)
   let PLAN_INPUT = 'grid'; // 'grid' (real samples) | 'counts' (planning: synthesize from counts)
   let SORT_SEL = new Set((window.Pooling && Pooling.SORT_MODEL) ? Pooling.SORT_MODEL.DEFAULT_ON : ['HSC', 'pDC', 'cDC', 'Treg']);
   let CUSTOM_SORT_POPS = [];   // user-added sort populations
@@ -677,17 +678,22 @@
     const calc = computePooling();
     const byId = {}, byNo = {}; let n = 0;
     if (calc && calc.poolRes && calc.poolRes.pools) {
-      calc.poolRes.pools.forEach((pool) => pool.forEach((s) => { n += 1; byId[s.sampleId] = n; byNo[n] = s.sampleId; }));
+      calc.poolRes.pools.forEach((pool) => pool.forEach((s) => { n += 1; byId[s.sampleId] = n; }));
     }
-    return { byId: byId, byNo: byNo, max: n };
+    // explicit per-sample overrides (set on Modify experiment) win over pool order
+    Object.keys(byId).forEach((sid) => { const ov = SAMPLE_NO_OVERRIDE[sid]; if (ov != null && ov !== '' && !isNaN(Number(ov))) byId[sid] = Number(ov); });
+    let max = n; Object.keys(byId).forEach((sid) => { byNo[byId[sid]] = sid; if (byId[sid] > max) max = byId[sid]; });
+    return { byId: byId, byNo: byNo, max: max };
   }
   function renderCellaca() {
     const host = $('#recCellacaContent'); if (!host) return;
     const rec = CURRENT_EXP_ID ? Store.getExperiment(CURRENT_EXP_ID) : null;
     if (!rec) { host.innerHTML = '<h2>Cellaca counts</h2><p class="empty">Select a project and experiment in the sidebar first.</p>'; return; }
     const list = (rec.cellacaCountsList || []).slice();
+    const _ccNoMap = (function () { try { return sampleNoMap().byId; } catch (e) { return {}; } })();
     const storedRows = list.map((c, i) => {
-      const idCell = c.tubeLabel ? esc(c.tubeLabel) : (esc(c.sampleId || '') + (c.sampleNo != null && c.sampleNo !== '' ? ' <span class="who">#' + esc(c.sampleNo) + '</span>' : ''));
+      const _dn = (c.sampleId && _ccNoMap[c.sampleId] != null) ? _ccNoMap[c.sampleId] : (c.sampleNo != null && c.sampleNo !== '' ? c.sampleNo : '');
+      const idCell = c.tubeLabel ? esc(c.tubeLabel) : (esc(c.sampleId || '') + (_dn !== '' ? ' <span class="who">#' + esc(_dn) + '</span>' : ''));
       return '<tr><td>' + idCell + '</td>'
         + '<td class="who">' + esc(c.well || '') + '</td><td>' + esc(c.purpose || '') + '</td><td>' + esc(c.thawer || '') + '</td>'
         + '<td class="num">' + (c.live != null ? Number(c.live).toLocaleString() : '\u2014') + '</td>'
@@ -1033,12 +1039,15 @@
     // 1) Cellaca counts \u2014 one row per count: identifier, count, viability, count type
     const list = rec.cellacaCountsList || [];
     if (list.length) {
-      const ordered = list.slice().sort((a, b) => (Number(a.sampleNo) || 999) - (Number(b.sampleNo) || 999)
+      const noMap = (function () { try { return sampleNoMap().byId; } catch (e) { return {}; } })();
+      const dispNo = (c) => (c.sampleId && noMap[c.sampleId] != null) ? noMap[c.sampleId] : (c.sampleNo != null && c.sampleNo !== '' ? c.sampleNo : '');
+      const ordered = list.slice().sort((a, b) => (Number(dispNo(a)) || 999) - (Number(dispNo(b)) || 999)
         || String(a.tubeLabel || '').localeCompare(String(b.tubeLabel || '')) || String(a.purpose || '').localeCompare(String(b.purpose || '')));
-      const rows = ordered.map((c) => '<tr><td>' + esc(c.tubeLabel || c.sampleId || '') + (c.sampleNo != null && c.sampleNo !== '' ? ' <span class="who">#' + esc(c.sampleNo) + '</span>' : '') + '</td>'
+      const rows = ordered.map((c) => { const dn = dispNo(c);
+        return '<tr><td>' + esc(c.tubeLabel || c.sampleId || '') + (dn !== '' ? ' <span class="who">#' + esc(dn) + '</span>' : '') + '</td>'
         + '<td class="num">' + (c.live != null ? fmtN(c.live) : '\u2014') + '</td>'
         + '<td class="num">' + (c.viability != null ? c.viability + '%' : '\u2014') + '</td>'
-        + '<td>' + esc(c.purpose || '') + '</td></tr>').join('');
+        + '<td>' + esc(c.purpose || '') + '</td></tr>'; }).join('');
       body += '<h3>Cellaca counts <span class="who">(live cells/mL)</span></h3>'
         + '<table class="cost-table"><thead><tr><th>Sample / tube</th><th class="num">Count (cells/mL)</th><th class="num">Viability</th><th>Count type</th></tr></thead><tbody>' + rows + '</tbody></table>';
     }
@@ -1179,9 +1188,10 @@
       }).join('');
       body = regionUI + '<table class="cost-table"><thead><tr><th>Full ID</th><th>Section</th><th>Type</th><th class="num">Well</th><th class="num">Trace conc [pg/\u00b5l]</th><th>Dilution</th><th class="num">Region conc [pg/\u00b5l]</th><th class="num">Avg bp</th><th class="num">Total library [ng/\u00b5l]</th><th>Run / notes</th></tr></thead><tbody>' + rows + '</tbody></table>';
     } else {
-      // Trace images grouped by section, sorted by well within each section.
+      // Trace images grouped by section + sample type (e.g. "5' unsort GEX"), sorted by well within each.
       const bySec = {}; const secOrder = [];
-      shown.forEach((w) => { const s = w.arm || 'Unassigned'; if (!bySec[s]) { bySec[s] = []; secOrder.push(s); } bySec[s].push(w); });
+      shown.forEach((w) => { const s = ((w.arm || 'Unassigned') + (w.sampleType ? ' ' + w.sampleType : '')).trim(); if (!bySec[s]) { bySec[s] = []; secOrder.push(s); } bySec[s].push(w); });
+      secOrder.sort();
       const wellKey = (w) => { const m = String(w.well || '').match(/^([A-Za-z]+)(\d+)$/); return m ? [m[1], parseInt(m[2], 10)] : [String(w.well || ''), 0]; };
       secOrder.forEach((s) => bySec[s].sort((a, b) => { const ka = wellKey(a), kb = wellKey(b); return ka[0] < kb[0] ? -1 : (ka[0] > kb[0] ? 1 : ka[1] - kb[1]); }));
       body = secOrder.map((s) => '<h3 style="margin:14px 0 6px">' + esc(s) + '</h3><div class="ts-traces">'
@@ -3085,12 +3095,12 @@
     const arms = (function () { try { return buildArmInstances(SEL); } catch (e) { return []; } })();
     const modList = []; arms.forEach((a) => { const lbl = a.label || a.key || a.chem; if (lbl && modList.indexOf(lbl) < 0) modList.push(lbl); });
     const poolOf = {}; if (calc.poolRes && calc.poolRes.pools) calc.poolRes.pools.forEach((p, i) => p.forEach((s) => { poolOf[s.sampleId] = i + 1; }));
-    const sampleNo = {}; let n = 0; if (calc.poolRes && calc.poolRes.pools) calc.poolRes.pools.forEach((p) => p.forEach((s) => { sampleNo[s.sampleId] = ++n; }));
+    const sampleNo = sampleNoMap().byId;
 
     const laneRow = (key, label) => '<tr><td>' + esc(label) + '</td><td class="num"><input type="number" min="0" class="mod-lane" data-mod="' + key + '" value="' + (lanes[key] || 0) + '" style="width:80px"></td></tr>';
     const poolOpts = (cur) => { let o = ''; for (let k = 1; k <= Math.max(nPools, 1); k++) o += '<option value="' + k + '"' + (cur === k ? ' selected' : '') + '>' + k + '</option>'; o += '<option value="' + (nPools + 1) + '"' + (cur === nPools + 1 ? ' selected' : '') + '>+ new pool ' + (nPools + 1) + '</option>'; return o; };
     const sampleRows = calc.samples.slice().sort((a, b) => (sampleNo[a.sampleId] || 0) - (sampleNo[b.sampleId] || 0))
-      .map((s) => '<tr><td class="num">' + (sampleNo[s.sampleId] || '') + '</td>'
+      .map((s) => '<tr><td><input class="mod-no" data-sid="' + escAttr(s.sampleId) + '" type="number" min="1" value="' + escAttr(sampleNo[s.sampleId] || '') + '" style="width:60px" title="Sample # (edit to override)"></td>'
         + '<td><input class="mod-sid" data-gid="' + s.id + '" data-sid="' + escAttr(s.sampleId) + '" value="' + escAttr(s.sampleId) + '" style="width:170px"></td>'
         + '<td><select class="mod-pool" data-sid="' + escAttr(s.sampleId) + '">' + poolOpts(poolOf[s.sampleId] || 1) + '</select></td>'
         + '<td><button class="btn tiny" data-mod-delsample="' + s.id + '">\u2715</button></td></tr>').join('');
@@ -3109,7 +3119,8 @@
       + '</tbody></table>'
       + '<div class="row-actions" style="margin-top:8px"><button class="btn ghost" id="modReset">Reset lanes to computed</button></div>'
       + '</div>'
-      + '<div style="flex:1;min-width:280px"><h3>Samples &amp; pool assignments <span class="who">(editable)</span></h3><div style="max-height:360px;overflow:auto"><table class="cost-table"><thead><tr><th class="num">#</th><th>Sample ID</th><th>Pool</th><th></th></tr></thead><tbody>' + sampleRows + '</tbody></table></div>'
+      + '<div style="flex:1;min-width:280px"><h3>Samples &amp; pool assignments <span class="who">(editable)</span></h3><p class="who small">Sample # defaults to pool order; type to override it (used on labels, Cell count &amp; Cellaca mapping).</p><div style="max-height:360px;overflow:auto"><table class="cost-table"><thead><tr><th class="num">Sample #</th><th>Sample ID</th><th>Pool</th><th></th></tr></thead><tbody>' + sampleRows + '</tbody></table></div>'
+      + '<div class="row-actions" style="margin-top:6px"><button class="btn ghost" id="modResetNos">Reset # to pool order</button></div>'
       + '<div class="row-actions" style="margin-top:6px"><button class="btn ghost" id="modAddSample">+ Add sample</button></div></div>'
       + '</div>'
       + '<h3 style="margin-top:22px">Pipeline cell-flow (this strategy)</h3><div id="modifyFlow"></div>'
@@ -3140,6 +3151,11 @@
     const reset = $('#modReset'); if (reset) reset.addEventListener('click', () => { LANE_OVERRIDE = null; renderModify(); });
     // pool assignment edits (via POOL_OVERRIDE)
     host.querySelectorAll('.mod-pool').forEach((el) => el.addEventListener('change', () => { modSetPool(el.dataset.sid, parseInt(el.value, 10) - 1); }));
+    host.querySelectorAll('.mod-no').forEach((el) => el.addEventListener('change', () => {
+      const sid = el.dataset.sid; const v = el.value.trim();
+      if (v === '' || isNaN(Number(v))) delete SAMPLE_NO_OVERRIDE[sid]; else SAMPLE_NO_OVERRIDE[sid] = Number(v);
+      modPersist(); renderModify();
+    }));
     // sample id rename (edits the grid; repools fresh to avoid stale keys)
     host.querySelectorAll('.mod-sid').forEach((el) => el.addEventListener('change', () => {
       const gid = parseInt(el.dataset.gid, 10); const val = el.value.trim();
@@ -3154,6 +3170,7 @@
       GRID_ROWS.push([name, '', '', ''].concat(CUSTOM_COLS.map(() => ''))); POOL_OVERRIDE = null; modPersist(); renderModify();
     });
     const regen = $('#modRegen'); if (regen) regen.addEventListener('click', () => regenerateMaterials(rec));
+    const resetNos = $('#modResetNos'); if (resetNos) resetNos.addEventListener('click', () => { if (confirm('Reset all sample numbers to pool order?')) { SAMPLE_NO_OVERRIDE = {}; modPersist(); renderModify(); } });
   }
   function modPersist() {
     if (!CURRENT_EXP_ID) return; const rec = Store.getExperiment(CURRENT_EXP_ID); if (!rec) return;
@@ -3952,7 +3969,7 @@
       customCols: CUSTOM_COLS.slice(),
       confounderIdx: Array.from(CONFOUNDER_CHECKED_IDX),
       poolOverride, optValues,
-      sortSel: sortSelList(), customSortPops: CUSTOM_SORT_POPS.slice(), sortPanel: SORT_PANEL.slice(),
+      sortSel: sortSelList(), customSortPops: CUSTOM_SORT_POPS.slice(), sortPanel: SORT_PANEL.slice(), sampleNoOverride: Object.assign({}, SAMPLE_NO_OVERRIDE),
       inputMode: PLAN_INPUT,
       planningCounts: (function () { const v = {}; document.querySelectorAll('#planningCounts input').forEach((el) => { v[el.id] = el.value; }); return v; })()
     };
@@ -3970,6 +3987,7 @@
     if (state.planningCounts) Object.keys(state.planningCounts).forEach((id) => { const el = document.getElementById(id); if (el) el.value = state.planningCounts[id]; });
     CUSTOM_SORT_POPS = (state.customSortPops || []).slice();
     SORT_PANEL = (state.sortPanel || []).slice();
+    SAMPLE_NO_OVERRIDE = Object.assign({}, state.sampleNoOverride || {});
     if (state.sortSel && window.Pooling) { SORT_SEL = new Set(state.sortSel); renderSortToggles(); }
     const box = $('#useMadiDefault'); if (box) box.checked = false;
     renderPopulationBuilder();
@@ -4159,8 +4177,7 @@
 
     // Canonical sample number = pool-grouped order (pool 1 samples first, then
     // pool 2, ...) — the SAME numbering used by the Samples and Cell count tabs.
-    const sampleNo = {}; let _sn = 0;
-    calc.poolRes.pools.forEach((pool) => pool.forEach((s) => { sampleNo[s.sampleId] = ++_sn; }));
+    const sampleNo = sampleNoMap().byId;
     const sampleList = calc.samples.slice().sort((a, b) => (sampleNo[a.sampleId] || 0) - (sampleNo[b.sampleId] || 0));
 
     // ===== Sheet 1: sample prep + FACS + controls + sort output + bulk =====
@@ -4994,14 +5011,16 @@
     // row 14: single header row
     const hdr = ['Pool', 'Sample #', 'Original ID (cryovial)', 'Sample ID', 'Thawer', 'Pool', 'Live %', 'Live Cells/mL', 'Vol. dilute for count (mL)', 'Total viable cells', 'Cells pooled', 'Pool volume (uL)', 'Cells for unsort', 'Vol for unsort (uL)', 'Cells for ASAP', 'Vol for ASAP (uL)', 'Cells to sort (leftover)'];
     cc2.push(hdr.slice());
+    const noMap = (function () { try { return sampleNoMap().byId; } catch (e) { return {}; } })();
     let nC = 0;
     poolKeys.forEach((pk) => {
       const dataRows = [];
       const startIdx = cc2.length;                 // 0-based index of first sample row
       poolMap[pk].forEach((sm) => {
         nC += 1; const r = cc2.length + 1;          // 1-based sheet row
+        const sNo = (noMap[sm.sampleId] != null) ? noMap[sm.sampleId] : nC;
         dataRows.push(r);
-        cc2.push([dataRows.length === 1 ? ('Pool ' + pk) : '', nC, sm.patientId || '', sm.sampleId, '', pk, '', '', '',
+        cc2.push([dataRows.length === 1 ? ('Pool ' + pk) : '', sNo, sm.patientId || '', sm.sampleId, '', pk, '', '', '',
           { t: 'n', f: 'H' + r + '*I' + r },        // J: total viable = Live Cells/mL * Vol dilute
           { t: 'n', f: CPS },                        // K: cells pooled = $I$8
           { t: 'n', f: 'K' + r + '/H' + r + '*1000' }, // L: pool volume = cells pooled / (cells/mL) * 1000
@@ -5036,8 +5055,10 @@
     const cellList = (rec && rec.cellacaCountsList) || [];
     const ctRows = [['How to use: populated from the Cellaca WellLevel files uploaded on Record \u2192 Cellaca counts.'], [],
       ['Sample #', 'Sample ID', 'Tube label', 'Well', 'Count for', 'Thawer', 'Live (cells/mL)', 'Viability (%)', 'Total (cells/mL)', 'Notes']];
-    cellList.slice().sort((a, b) => (a.sampleNo || 0) - (b.sampleNo || 0) || String(a.purpose || '').localeCompare(String(b.purpose || '')))
-      .forEach((c) => ctRows.push([c.sampleNo != null ? c.sampleNo : '', c.sampleId || '', c.tubeLabel || '', c.well || '', c.purpose || '', c.thawer || '', c.live != null ? c.live : '', c.viability != null ? c.viability : '', c.total != null ? c.total : '', c.notes || '']));
+    const _ctNoMap = (function () { try { return sampleNoMap().byId; } catch (e) { return {}; } })();
+    const _ctNo = (c) => (c.sampleId && _ctNoMap[c.sampleId] != null) ? _ctNoMap[c.sampleId] : (c.sampleNo != null ? c.sampleNo : '');
+    cellList.slice().sort((a, b) => (Number(_ctNo(a)) || 0) - (Number(_ctNo(b)) || 0) || String(a.purpose || '').localeCompare(String(b.purpose || '')))
+      .forEach((c) => ctRows.push([_ctNo(c), c.sampleId || '', c.tubeLabel || '', c.well || '', c.purpose || '', c.thawer || '', c.live != null ? c.live : '', c.viability != null ? c.viability : '', c.total != null ? c.total : '', c.notes || '']));
     const wsCT = XLSX.utils.aoa_to_sheet(ctRows);
     wsCT['!cols'] = [{ wch: 9 }, { wch: 20 }, { wch: 12 }, { wch: 7 }, { wch: 16 }, { wch: 14 }, { wch: 16 }, { wch: 13 }, { wch: 16 }, { wch: 20 }];
     XLSX.utils.book_append_sheet(wb, wsCT, 'Counts');
