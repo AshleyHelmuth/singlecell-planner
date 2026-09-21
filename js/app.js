@@ -1200,76 +1200,102 @@
     const out = [];
     arms.forEach((arm) => {
       const pfx = LIB_PREFIX[arm] || '';
-      byArm[arm].forEach((type) => {
-        const n = laneCount(arm) || 1;
+      const n = laneCount(arm) || 1;
+      const types = (arm === 'ASAP' ? [] : ['cDNA']).concat(byArm[arm]);   // cDNA input only for 5' arms
+      const groups = types.map((type) => {
         const libs = [];
         for (let i = 1; i <= n; i++) libs.push({ arm: arm, type: type, laneNo: i, id: pfx + i + '-' + type, name: arm + ' ' + pfx + i + '-' + type });
-        out.push({ arm: arm, type: type, libs: libs });
+        return { arm: arm, type: type, libs: libs };
       });
+      out.push({ arm: arm, pfx: pfx, groups: groups });
     });
-    return out;
+    return out;   // [{ arm, pfx, groups:[{arm,type,libs:[...]}] }]
   }
   function renderLibStatus(hostId, editable) {
     const host = $('#' + hostId); if (!host) return;
     const rec = CURRENT_EXP_ID ? Store.getExperiment(CURRENT_EXP_ID) : null;
     if (!rec) { host.innerHTML = '<h2>Library status</h2><p class="empty">Select a project and experiment in the sidebar first.</p>'; return; }
     rec.libStatus = rec.libStatus || {};
-    const groups = libStatusLibs(rec);
-    if (!groups.length) { host.innerHTML = '<h2>Library status</h2><p class="empty">Build a plan (and/or upload TapeStation) so libraries can be listed here.</p>'; return; }
+    const sections = libStatusLibs(rec);
+    if (!sections.length) { host.innerHTML = '<h2>Library status</h2><p class="empty">Build a plan (and/or upload TapeStation) so libraries can be listed here.</p>'; return; }
     // TapeStation index by arm|type|laneNo
     const tsIdx = {};
     (rec.tapestation || []).forEach((run) => (run.wells || []).forEach((w) => { const k = (w.arm || '') + '|' + (w.sampleType || '') + '|' + (w.sampleNo || ''); if (!tsIdx[k]) tsIdx[k] = { conc: w.conc || '', img: (w.imgFileId || w.imgKey || w.img) ? w : null }; }));
-    // Qubit index: all qubit rows across the 4 tables; match by tube ID containing the lib id
-    const qAll = []; const qt = (rec.worksheets && rec.worksheets.library && rec.worksheets.library.qubit) || {};
-    if (qt && !Array.isArray(qt)) QUBIT_TABLES.forEach((t) => (qt[t.key] || []).forEach((r) => { if (r && r[0]) qAll.push({ tube: String(r[0]), conc: r[2] || '', stage: t.title }); }));
+    // Qubit index
+    const qt = (rec.worksheets && rec.worksheets.library && rec.worksheets.library.qubit) || {};
+    const qAll = []; if (qt && !Array.isArray(qt)) QUBIT_TABLES.forEach((t) => (qt[t.key] || []).forEach((r) => { if (r && r[0]) qAll.push({ tube: String(r[0]), conc: r[2] || '', stage: t.title, key: t.key }); }));
     const qubitFor = (lib) => qAll.filter((q) => q.tube.toUpperCase().indexOf(lib.id.toUpperCase()) >= 0);
+    // cDNA input Qubit for a lane (from the 5' cDNA table, tube containing prefix+laneNo)
+    const cdnaQubitFor = (pfx, laneNo) => { const tag = (pfx + laneNo).toUpperCase(); const hit = (qt.cdna5 || []).filter((r) => r && r[0] && String(r[0]).toUpperCase().indexOf(tag) >= 0)[0]; return hit ? (hit[2] || '') : ''; };
+    const statusOf = (id) => (rec.libStatus[id] && rec.libStatus[id].status) || 'In progress';
+    const pillClass = (s) => s === 'Good' ? 'ok' : (s === 'Needs re-prep' ? 'bad' : 'wip');
+    // aggregate a group's status: bad if any needs re-prep, good if all good, else wip
+    const groupStatus = (g) => { let anyBad = false, allGood = true; g.libs.forEach((l) => { const s = statusOf(l.id); if (s === 'Needs re-prep') anyBad = true; if (s !== 'Good') allGood = false; }); return anyBad ? 'Needs re-prep' : (allGood ? 'Good' : 'In progress'); };
+
+    // ---- summary status overview (compact matrix) ----
+    let summary = '<div class="lib-summary"><table class="lib-gantt"><thead><tr><th>Section</th>';
+    const allTypes = []; sections.forEach((sec) => sec.groups.forEach((g) => { if (allTypes.indexOf(g.type) < 0) allTypes.push(g.type); }));
+    allTypes.forEach((t) => summary += '<th>' + esc(t) + '</th>');
+    summary += '</tr></thead><tbody>';
+    sections.forEach((sec) => {
+      summary += '<tr><td><strong>' + esc(sec.arm) + '</strong></td>';
+      allTypes.forEach((t) => { const g = sec.groups.filter((x) => x.type === t)[0]; if (!g) { summary += '<td></td>'; return; } const st = groupStatus(g); summary += '<td><span class="lib-cell ' + pillClass(st) + '" title="' + esc(sec.arm + ' ' + t + ': ' + st) + '"></span></td>'; });
+      summary += '</tr>';
+    });
+    summary += '</tbody></table><div class="lib-legend"><span class="lib-cell ok"></span> Good <span class="lib-cell wip"></span> In progress <span class="lib-cell bad"></span> Needs re-prep</div></div>';
 
     const inp = (cls, k, val, w, ph) => editable ? ('<input class="' + cls + '" data-k="' + escAttr(k) + '" value="' + escAttr(val || '') + '" style="width:' + (w || 90) + 'px"' + (ph ? ' placeholder="' + ph + '"' : '') + '>') : esc(val || '\u2014');
     const statusSel = (k, val) => editable
       ? '<select class="lib-st" data-k="' + escAttr(k) + '">' + ['In progress', 'Good', 'Needs re-prep'].map((o) => '<option' + (val === o ? ' selected' : '') + '>' + o + '</option>').join('') + '</select>'
-      : '<span class="lib-pill ' + (val === 'Good' ? 'ok' : (val === 'Needs re-prep' ? 'bad' : 'wip')) + '">' + esc(val || 'In progress') + '</span>';
+      : '<span class="lib-pill ' + pillClass(val || 'In progress') + '">' + esc(val || 'In progress') + '</span>';
 
     let body = '';
-    groups.forEach((g, gi) => {
-      const gkey = g.arm + '|' + g.type;
-      const open = !!LIBSTATUS_OPEN[gkey];
-      // summary of statuses in the group
-      const counts = { Good: 0, 'Needs re-prep': 0, 'In progress': 0 };
-      g.libs.forEach((l) => { const st = (rec.libStatus[l.id] && rec.libStatus[l.id].status) || 'In progress'; counts[st] = (counts[st] || 0) + 1; });
-      const summary = Object.keys(counts).filter((c) => counts[c]).map((c) => counts[c] + ' ' + c).join(' \u00b7 ');
-      body += '<div class="lib-group"><div class="lib-group-head" data-lib-grp="' + escAttr(gkey) + '"><span class="lib-caret">' + (open ? '\u25be' : '\u25b8') + '</span> <strong>' + esc(g.arm + ' \u2014 ' + g.type) + '</strong> <span class="who">(' + g.libs.length + ' librar' + (g.libs.length === 1 ? 'y' : 'ies') + ' \u00b7 ' + summary + ')</span></div>';
-      if (open) {
-        body += '<div style="overflow:auto"><table class="cost-table"><thead><tr><th>Library</th><th>Status</th><th class="num">Cycles</th><th>Qubit (ng/µL)</th><th class="num">TapeStation</th><th>Trace</th><th>Attempts</th><th>Note</th></tr></thead><tbody>';
-        g.libs.forEach((l) => {
-          const st = rec.libStatus[l.id] || {};
-          const ts = tsIdx[l.arm + '|' + l.type + '|' + l.laneNo] || { conc: '', img: null };
-          const qb = qubitFor(l).map((q) => esc(q.conc) + ' <span class="who">(' + esc(q.stage.replace('Final ', '').replace(' libraries', '')) + ')</span>').join('<br>');
-          const trace = ts.img ? '<img src="' + tsGetImgSrc(ts.img) + '" class="ts-zoom lib-thumb" data-caption="' + escAttr(l.name) + '" loading="lazy">' : '\u2014';
-          const nAtt = (st.attempts || []).length;
-          const attBtn = editable ? ('<button class="btn tiny" data-lib-att="' + escAttr(l.id) + '">' + (nAtt ? nAtt + ' \u25be' : '+ log') + '</button>') : (nAtt ? ('<button class="btn tiny" data-lib-att="' + escAttr(l.id) + '">' + nAtt + ' \u25be</button>') : '\u2014');
-          body += '<tr><td><strong>' + esc(l.id) + '</strong></td>'
-            + '<td>' + statusSel(l.id, st.status) + '</td>'
-            + '<td class="num">' + inp('lib-cyc', l.id, st.cycles, 56) + '</td>'
-            + '<td class="who">' + (qb || '\u2014') + '</td>'
-            + '<td class="num">' + (ts.conc || '\u2014') + '</td>'
-            + '<td>' + trace + '</td>'
-            + '<td>' + attBtn + '</td>'
-            + '<td class="who">' + inp('lib-note', l.id, st.note, 150, 'note') + '</td></tr>';
-          if (LIBSTATUS_OPEN['A:' + l.id]) {
-            const att = st.attempts || [];
-            body += '<tr class="lib-att-row"><td></td><td colspan="7"><div class="lib-att"><table class="cost-table"><thead><tr><th>#</th><th>Date</th><th>Stage</th><th>Qubit</th><th class="num">Cycles</th><th>Status</th><th>Note</th>' + (editable ? '<th></th>' : '') + '</tr></thead><tbody>'
-              + att.map((a, ai) => '<tr><td>' + (ai + 1) + '</td>'
-                  + ['date', 'stage', 'qubit', 'cycles', 'status', 'note'].map((f) => '<td' + (f === 'cycles' ? ' class="num"' : '') + '>' + (editable ? '<input class="la-f" data-k="' + escAttr(l.id) + '" data-i="' + ai + '" data-f="' + f + '" value="' + escAttr(a[f] || '') + '" style="width:' + (f === 'note' ? 140 : (f === 'cycles' ? 50 : 90)) + 'px">' : esc(a[f] || '\u2014')) + '</td>').join('')
-                  + (editable ? '<td><button class="btn tiny" data-la-del="' + escAttr(l.id) + '" data-i="' + ai + '">\u2715</button></td>' : '') + '</tr>').join('')
-              + '</tbody></table>' + (editable ? '<div class="row-actions" style="margin-top:6px"><button class="btn ghost tiny" data-la-add="' + escAttr(l.id) + '">+ Add attempt</button></div>' : '') + '</div></td></tr>';
-          }
-        });
-        body += '</tbody></table></div>';
-      }
+    sections.forEach((sec) => {
+      body += '<div class="lib-section"><h3 style="margin:18px 0 6px">' + esc(sec.arm) + '</h3>';
+      sec.groups.forEach((g) => {
+        const gkey = g.arm + '|' + g.type; const open = !!LIBSTATUS_OPEN[gkey];
+        const counts = {}; g.libs.forEach((l) => { const st = statusOf(l.id); counts[st] = (counts[st] || 0) + 1; });
+        const summ = Object.keys(counts).map((c) => counts[c] + ' ' + c).join(' \u00b7 ');
+        const isCdna = g.type === 'cDNA';
+        const showCdnaIn = (g.arm !== 'ASAP') && !isCdna;
+        body += '<div class="lib-group' + (isCdna ? ' lib-group-cdna' : '') + '"><div class="lib-group-head" data-lib-grp="' + escAttr(gkey) + '"><span class="lib-caret">' + (open ? '\u25be' : '\u25b8') + '</span> ' + (isCdna ? '<em>cDNA (input)</em>' : '<strong>' + esc(g.type) + '</strong>') + ' <span class="who">(' + g.libs.length + ' \u00b7 ' + summ + ')</span></div>';
+        if (open) {
+          body += '<div style="overflow:auto"><table class="cost-table"><thead><tr><th>Library</th><th>Status</th><th class="num">Cycles</th>' + (showCdnaIn ? '<th class="num">cDNA input (ng/µL)</th>' : '') + '<th>Qubit (ng/µL)</th><th class="num">TapeStation</th><th>Trace</th><th>Attempts</th><th>Note</th></tr></thead><tbody>';
+          g.libs.forEach((l) => {
+            const st = rec.libStatus[l.id] || {};
+            const ts = tsIdx[l.arm + '|' + l.type + '|' + l.laneNo] || { conc: '', img: null };
+            const qb = qubitFor(l).map((q) => esc(q.conc)).filter((x) => x).join('<br>');
+            const cdIn = isCdna ? '' : cdnaQubitFor(sec.pfx, l.laneNo);
+            const trace = ts.img ? '<img src="' + tsGetImgSrc(ts.img) + '" class="ts-zoom lib-thumb" data-caption="' + escAttr(l.name) + '" loading="lazy">' : '\u2014';
+            const nAtt = (st.attempts || []).length;
+            const attBtn = (editable || nAtt) ? ('<button class="btn tiny" data-lib-att="' + escAttr(l.id) + '">' + (nAtt ? nAtt + ' \u25be' : '+ log') + '</button>') : '\u2014';
+            body += '<tr><td><strong>' + esc(l.id) + '</strong></td>'
+              + '<td>' + statusSel(l.id, st.status) + '</td>'
+              + '<td class="num">' + inp('lib-cyc', l.id, st.cycles, 56) + '</td>'
+              + (showCdnaIn ? '<td class="num who">' + (cdIn || '\u2014') + '</td>' : '')
+              + '<td class="who">' + (qb || '\u2014') + '</td>'
+              + '<td class="num">' + (ts.conc || '\u2014') + '</td>'
+              + '<td>' + trace + '</td>'
+              + '<td>' + attBtn + '</td>'
+              + '<td class="who">' + inp('lib-note', l.id, st.note, 140, 'note') + '</td></tr>';
+            if (LIBSTATUS_OPEN['A:' + l.id]) {
+              const att = st.attempts || []; const cspan = showCdnaIn ? 8 : 7;
+              body += '<tr class="lib-att-row"><td></td><td colspan="' + cspan + '"><div class="lib-att"><table class="cost-table"><thead><tr><th>#</th><th>Date</th><th>Stage</th><th>Qubit</th><th class="num">Cycles</th><th>Status</th><th>Note</th>' + (editable ? '<th></th>' : '') + '</tr></thead><tbody>'
+                + att.map((a, ai) => '<tr><td>' + (ai + 1) + '</td>'
+                    + ['date', 'stage', 'qubit', 'cycles', 'status', 'note'].map((f) => '<td' + (f === 'cycles' ? ' class="num"' : '') + '>' + (editable ? '<input class="la-f" data-k="' + escAttr(l.id) + '" data-i="' + ai + '" data-f="' + f + '" value="' + escAttr(a[f] || '') + '" style="width:' + (f === 'note' ? 130 : (f === 'cycles' ? 50 : 90)) + 'px">' : esc(a[f] || '\u2014')) + '</td>').join('')
+                    + (editable ? '<td><button class="btn tiny" data-la-del="' + escAttr(l.id) + '" data-i="' + ai + '">\u2715</button></td>' : '') + '</tr>').join('')
+                + '</tbody></table>' + (editable ? '<div class="row-actions" style="margin-top:6px"><button class="btn ghost tiny" data-la-add="' + escAttr(l.id) + '">+ Add attempt</button></div>' : '') + '</div></td></tr>';
+            }
+          });
+          body += '</tbody></table></div>';
+        }
+        body += '</div>';
+      });
       body += '</div>';
     });
     host.innerHTML = '<h2>Library status <span class="who">' + esc(rec.name || '') + '</span></h2>'
-      + '<p class="step-hint">' + (editable ? 'Track every library through prep. Click a modality/type to expand its libraries; set status/cycles/notes and log repeated preps under <em>Attempts</em>. Qubit + TapeStation are pulled in automatically.' : 'Read-only view. Edit on Record \u2192 Library status.') + '</p>' + body;
+      + '<p class="step-hint">' + (editable ? 'Status of every library through prep, grouped by modality with its input cDNA on top. Click a group to expand; set status/cycles/notes and log repeated preps under <em>Attempts</em>.' : 'Read-only view. Edit on Record \u2192 Library status.') + '</p>'
+      + summary + body;
 
     host.querySelectorAll('[data-lib-grp]').forEach((el) => el.addEventListener('click', () => { const k = el.dataset.libGrp; LIBSTATUS_OPEN[k] = !LIBSTATUS_OPEN[k]; renderLibStatus(hostId, editable); }));
     host.querySelectorAll('.ts-zoom').forEach((img) => img.addEventListener('click', () => openImageLightbox(img.src, img.getAttribute('data-caption') || '')));
@@ -1283,7 +1309,6 @@
     host.querySelectorAll('button[data-la-add]').forEach((b) => b.addEventListener('click', () => { const k = b.dataset.laAdd; rec.libStatus[k].attempts.push({ date: '', stage: '', qubit: '', cycles: '', status: '', note: '' }); save(); renderLibStatus(hostId, editable); }));
     host.querySelectorAll('button[data-la-del]').forEach((b) => b.addEventListener('click', () => { const k = b.dataset.laDel, i = +b.dataset.i; rec.libStatus[k].attempts.splice(i, 1); save(); renderLibStatus(hostId, editable); }));
   }
-
   function renderReviewWorksheets() {
     const host = $('#revWorksheetsContent'); if (!host) return;
     const rec = CURRENT_EXP_ID ? Store.getExperiment(CURRENT_EXP_ID) : null;

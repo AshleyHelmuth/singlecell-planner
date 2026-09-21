@@ -861,3 +861,15 @@ main > .panel { flex: 1 1 auto; min-width: 0; }
 .lib-group-head { padding: 8px 12px; background: #f4f7fa; cursor: pointer; user-select: none; }
 .lib-group-head:hover { background: #eef4fb; }
 .lib-caret { display: inline-block; width: 14px; color: var(--muted); }
+
+/* ===== Library status: sections, cDNA subgroup, summary matrix ===== */
+.lib-section { margin-bottom: 10px; }
+.lib-group-cdna .lib-group-head { background: #eef7f4; }
+.lib-summary { margin: 8px 0 16px; }
+.lib-gantt { border-collapse: collapse; }
+.lib-gantt th, .lib-gantt td { padding: 4px 10px; text-align: center; font-size: 12px; border: 1px solid #eef2f6; }
+.lib-gantt th:first-child, .lib-gantt td:first-child { text-align: left; }
+.lib-cell { display: inline-block; width: 16px; height: 16px; border-radius: 4px; vertical-align: middle; }
+.lib-cell.ok { background: #35b46a; } .lib-cell.bad { background: #e0574f; } .lib-cell.wip { background: #c7d2dd; }
+.lib-legend { margin-top: 6px; font-size: 12px; color: var(--muted); display: flex; gap: 8px; align-items: center; }
+.lib-legend .lib-cell { width: 12px; height: 12px; }
