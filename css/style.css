@@ -855,3 +855,9 @@ main > .panel { flex: 1 1 auto; min-width: 0; }
 .lib-thumb { height: 40px; border: 1px solid #e4e9ef; border-radius: 4px; cursor: zoom-in; display: block; }
 .lib-att { background: #f7f9fc; border: 1px solid #e4e9ef; border-radius: 8px; padding: 8px; }
 .lib-st option, .la-f option { font-size: 13px; }
+
+/* ===== Library status groups ===== */
+.lib-group { border: 1px solid #e4e9ef; border-radius: 8px; margin-bottom: 8px; overflow: hidden; }
+.lib-group-head { padding: 8px 12px; background: #f4f7fa; cursor: pointer; user-select: none; }
+.lib-group-head:hover { background: #eef4fb; }
+.lib-caret { display: inline-block; width: 14px; color: var(--muted); }

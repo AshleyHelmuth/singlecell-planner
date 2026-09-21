@@ -54,7 +54,7 @@
       { id: 'rec-cellaca', label: 'Cellaca counts' }, { id: 'rec-batchday', label: 'Batch Day Worksheet' },
       { id: 'rec-sort', label: 'Sort summary' },
       { id: 'rec-library', label: 'Library Worksheets' }, { id: 'rec-tapestation', label: 'Tapestation Output' },
-      { id: 'rec-supply', label: 'Supply Usage' }, { id: 'rec-seqdata', label: 'Sequencing data' }, { id: 'rec-notes', label: 'General notes' } ] },
+      { id: 'rec-supply', label: 'Supply Usage' }, { id: 'rec-seqdata', label: 'Sequencing data' }, { id: 'rec-libstatus', label: 'Library status' }, { id: 'rec-notes', label: 'General notes' } ] },
     review: { sidebar: true, panels: [
       { id: 'rev-design', label: 'Experimental design' }, { id: 'rev-seq', label: 'Sequencing' },
       { id: 'rev-sort', label: 'Sort' }, { id: 'rev-counts', label: 'Counts' },
@@ -180,12 +180,19 @@
     if (id === 'rec-batchday') { renderWorksheet('batchday'); return; }
     if (id === 'rec-library') { renderWorksheet('library'); return; }
     if (id === 'rec-notes') { renderNotes(); return; }
+    if (id === 'rec-libstatus') { renderLibStatus('recLibStatusContent', true); return; }
     const s = REC_STUBS[id]; if (s) stubPage(s[0], s[1], s[2]);
   }
 
   // ===== Worksheet recorder: capture the fill-in tables from the batch-day (ASAP)
   // and library (5') worksheets \u2014 kit lots + rxns used, cell counts, key metrics,
   // and notes. Stored on the record + a durable Drive companion sheet. =====
+  const QUBIT_TABLES = [
+    { key: 'cdna5', title: "5' cDNA" },
+    { key: 'tcrbcr', title: 'TCR / BCR initial amplification' },
+    { key: 'final5', title: "Final 5' libraries (GEX, ADT, TCR/BCR)" },
+    { key: 'finalasap', title: 'Final ASAP libraries (ATAC, ADT, HTO)' }
+  ];
   const WORKSHEET_CFG = {
     batchday: { title: 'Batch Day Worksheet', host: 'recBatchdayContent',
       kits: [['Chromium Next GEM Single Cell ATAC Library Kit v2', ''], ['Chromium Next GEM Single Cell ATAC Gel Bead Kit v2', ''], ['Chromium Next GEM Chip H Single Cell Kit', ''], ['Single Index Kit N Set A, 96 rxns', 'PN-1000212']],
@@ -200,7 +207,7 @@
       const cfg = WORKSHEET_CFG[type];
       rec.worksheets[type] = { expId: rec.experimentId || '', operator: '', date: '', notes: '',
         kits: cfg.kits.map((k) => ({ kit: k[0], pn: k[1], lot: '', rxns: '', notes: '' })),
-        counts: [cfg.countCols.map(() => '')], qubit: [['', '', '', '']] };
+        counts: [cfg.countCols.map(() => '')], qubit: { cdna5: [['', '', '']], tcrbcr: [['', '', '']], final5: [['', '', '']], finalasap: [['', '', '']] } };
     }
     return rec.worksheets[type];
   }
@@ -223,11 +230,14 @@
       + '<h3 style="margin-top:18px">Cell counts &amp; dilution</h3><div style="overflow:auto"><table class="cost-table"><thead><tr>' + cHead + '<th></th></tr></thead><tbody>' + cRows + '</tbody></table></div>'
       + '<div class="row-actions" style="margin:6px 0"><button class="btn ghost" id="wsAddRow">+ Add count row</button></div>'
       + (type === 'library' ? (function () {
-          const qc = ['Tube ID', 'Qubit dilution', 'Qubit conc (ng/µL)', 'Stage (cDNA / library)'];
-          if (!w.qubit || !w.qubit.length) w.qubit = [['', '', '', '']];
-          const qrows = w.qubit.map((row, ri) => '<tr>' + qc.map((c, ci) => '<td><input class="ws-qb" data-r="' + ri + '" data-c="' + ci + '" value="' + escAttr(row[ci] || '') + '" style="width:120px"></td>').join('') + '<td><button class="btn tiny" data-ws-qdel="' + ri + '">\u2715</button></td></tr>').join('');
-          return '<h3 style="margin-top:18px">Qubit concentrations</h3><div style="overflow:auto"><table class="cost-table"><thead><tr>' + qc.map((c) => '<th>' + esc(c) + '</th>').join('') + '<th></th></tr></thead><tbody>' + qrows + '</tbody></table></div>'
-            + '<div class="row-actions" style="margin:6px 0"><button class="btn ghost" id="wsAddQb">+ Add Qubit row</button></div>';
+          const qc = ['Tube ID', 'Qubit dilution', 'Qubit conc (ng/µL)'];
+          if (!w.qubit || Array.isArray(w.qubit)) { const old = Array.isArray(w.qubit) ? w.qubit : []; w.qubit = { cdna5: old.length ? old.map((r) => [r[0] || '', r[1] || '', r[2] || '']) : [['', '', '']], tcrbcr: [['', '', '']], final5: [['', '', '']], finalasap: [['', '', '']] }; }
+          return QUBIT_TABLES.map((qt) => {
+            const rowsQ = w.qubit[qt.key] && w.qubit[qt.key].length ? w.qubit[qt.key] : (w.qubit[qt.key] = [['', '', '']]);
+            const body = rowsQ.map((row, ri) => '<tr>' + qc.map((c, ci) => '<td><input class="ws-qb" data-qt="' + qt.key + '" data-r="' + ri + '" data-c="' + ci + '" value="' + escAttr(row[ci] || '') + '" style="width:130px"></td>').join('') + '<td><button class="btn tiny" data-ws-qdel="' + qt.key + '|' + ri + '">\u2715</button></td></tr>').join('');
+            return '<h3 style="margin-top:18px">Qubit \u2014 ' + esc(qt.title) + '</h3><div style="overflow:auto"><table class="cost-table"><thead><tr>' + qc.map((c) => '<th>' + esc(c) + '</th>').join('') + '<th></th></tr></thead><tbody>' + body + '</tbody></table></div>'
+              + '<div class="row-actions" style="margin:6px 0"><button class="btn ghost" data-ws-qadd="' + qt.key + '">+ Add row</button></div>';
+          }).join('');
         })() : '')
       + '<h3 style="margin-top:18px">Notes</h3><textarea id="wsNotes" style="width:100%;min-height:80px">' + esc(w.notes || '') + '</textarea>'
       + '<div class="row-actions" style="margin-top:12px"><button class="btn primary" id="wsSave">Save worksheet</button><span id="wsStatus" class="muted"></span></div>';
@@ -240,9 +250,9 @@
     host.querySelectorAll('.ws-cnt').forEach((el) => el.addEventListener('input', () => { w.counts[+el.dataset.r][+el.dataset.c] = el.value; }));
     const addRow = $('#wsAddRow'); if (addRow) addRow.addEventListener('click', () => { w.counts.push(cfg.countCols.map(() => '')); renderWorksheet(type); });
     host.querySelectorAll('button[data-ws-delrow]').forEach((b) => b.addEventListener('click', () => { w.counts.splice(+b.dataset.wsDelrow, 1); if (!w.counts.length) w.counts.push(cfg.countCols.map(() => '')); renderWorksheet(type); }));
-    host.querySelectorAll('.ws-qb').forEach((el) => el.addEventListener('input', () => { w.qubit[+el.dataset.r][+el.dataset.c] = el.value; }));
-    const addQb = $('#wsAddQb'); if (addQb) addQb.addEventListener('click', () => { (w.qubit = w.qubit || []).push(['', '', '', '']); renderWorksheet(type); });
-    host.querySelectorAll('button[data-ws-qdel]').forEach((b) => b.addEventListener('click', () => { w.qubit.splice(+b.dataset.wsQdel, 1); if (!w.qubit.length) w.qubit.push(['', '', '', '']); renderWorksheet(type); }));
+    host.querySelectorAll('.ws-qb').forEach((el) => el.addEventListener('input', () => { w.qubit[el.dataset.qt][+el.dataset.r][+el.dataset.c] = el.value; }));
+    host.querySelectorAll('button[data-ws-qadd]').forEach((b) => b.addEventListener('click', () => { const k = b.dataset.wsQadd; (w.qubit[k] = w.qubit[k] || []).push(['', '', '']); renderWorksheet(type); }));
+    host.querySelectorAll('button[data-ws-qdel]').forEach((b) => b.addEventListener('click', () => { const p = b.dataset.wsQdel.split('|'); const k = p[0], ri = +p[1]; w.qubit[k].splice(ri, 1); if (!w.qubit[k].length) w.qubit[k].push(['', '', '']); renderWorksheet(type); }));
     const save = $('#wsSave'); if (save) save.addEventListener('click', () => saveWorksheet(rec, type));
     const reload = $('#wsReload'); if (reload) reload.addEventListener('click', () => reloadWorksheetFromDrive(rec, type));
   }
@@ -255,7 +265,7 @@
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([['Experiment ID', w.expId || ''], ['Operator', w.operator || ''], ['Date', w.date || ''], ['Notes', w.notes || '']]), 'Info');
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([['10X kit', 'PN', 'Lot #', 'Rxns used', 'Notes']].concat(w.kits.map((k) => [k.kit, k.pn, k.lot, k.rxns, k.notes]))), 'Kit lots');
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([cfg.countCols].concat(w.counts)), 'Cell counts');
-    if (w.qubit && w.qubit.length) XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([['Tube ID', 'Qubit dilution', 'Qubit conc (ng/µL)', 'Stage']].concat(w.qubit)), 'Qubit');
+    if (w.qubit && !Array.isArray(w.qubit)) { QUBIT_TABLES.forEach((qt) => { const rowsQ = (w.qubit[qt.key] || []).filter((r) => r.some((c) => c !== '')); if (rowsQ.length) XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([['Tube ID', 'Qubit dilution', 'Qubit conc (ng/µL)']].concat(rowsQ)), ('Qubit ' + qt.title).slice(0, 31)); }); }
     const b64 = XLSX.write(wb, { type: 'base64', bookType: 'xlsx' });
     const expId2 = rec.experimentId || projectLabel(rec.name || 'experiment');
     const req = rec.driveFolderId ? { action: 'ensurePath', parentId: rec.driveFolderId, subPath: ['data', 'worksheets'] } : { action: 'ensurePath', project: rec.project || CURRENT_PROJECT, experiment: rec.name || 'Experiment', subPath: ['data', 'worksheets'] };
@@ -1054,7 +1064,7 @@
     if (id === 'rev-counts') { renderReviewCounts(); return; }
     if (id === 'rev-kits') { renderReviewKits(); return; }
     if (id === 'rev-worksheets') { renderReviewWorksheets(); return; }
-    if (id === 'rev-libstatus') { renderLibStatus(); return; }
+    if (id === 'rev-libstatus') { renderLibStatus('revLibStatusContent', false); return; }
     if (id === 'rev-notes') { renderNotesReview(); return; }
     const s = REV_STUBS[id]; if (s) stubPage(s[0], s[1], s[2]);
   }
@@ -1180,68 +1190,98 @@
     (rec.tapestation || []).forEach((run) => (run.wells || []).forEach((w) => { if (w.arm && w.sampleType) { addArm(w.arm); if (byArm[w.arm].indexOf(w.sampleType) < 0) byArm[w.arm].push(w.sampleType); } }));
     return { arms: arms, byArm: byArm };
   }
-  function renderLibStatus() {
-    const host = $('#revLibStatusContent'); if (!host) return;
+  const LIB_PREFIX = { "5' unsort": 'U', 'ASAP': 'A', "5' sort": 'S' };
+  // Enumerate every individual library (per lane) grouped by modality -> type.
+  function libStatusLibs(rec) {
+    const { arms, byArm } = libStatusRows(rec);
+    let lanes = { unsort: 0, asap: 0, sort: 0 };
+    try { const c = computePooling(); lanes = laneOverridesFromCost(c.samples.length, (c.poolRes && c.poolRes.nPools) || 0, c.samples) || lanes; } catch (e) { /* */ }
+    const laneCount = (arm) => arm === 'ASAP' ? (lanes.asap || 0) : (arm === "5' sort" ? (lanes.sort || 0) : (lanes.unsort || 0));
+    const out = [];
+    arms.forEach((arm) => {
+      const pfx = LIB_PREFIX[arm] || '';
+      byArm[arm].forEach((type) => {
+        const n = laneCount(arm) || 1;
+        const libs = [];
+        for (let i = 1; i <= n; i++) libs.push({ arm: arm, type: type, laneNo: i, id: pfx + i + '-' + type, name: arm + ' ' + pfx + i + '-' + type });
+        out.push({ arm: arm, type: type, libs: libs });
+      });
+    });
+    return out;
+  }
+  function renderLibStatus(hostId, editable) {
+    const host = $('#' + hostId); if (!host) return;
     const rec = CURRENT_EXP_ID ? Store.getExperiment(CURRENT_EXP_ID) : null;
     if (!rec) { host.innerHTML = '<h2>Library status</h2><p class="empty">Select a project and experiment in the sidebar first.</p>'; return; }
     rec.libStatus = rec.libStatus || {};
-    const { arms, byArm } = libStatusRows(rec);
-    if (!arms.length) { host.innerHTML = '<h2>Library status</h2><p class="empty">Build a plan (and/or upload TapeStation) so libraries can be listed here.</p>'; return; }
-    // TapeStation index: arm|type -> { conc:[...], img: firstImgWell }
+    const groups = libStatusLibs(rec);
+    if (!groups.length) { host.innerHTML = '<h2>Library status</h2><p class="empty">Build a plan (and/or upload TapeStation) so libraries can be listed here.</p>'; return; }
+    // TapeStation index by arm|type|laneNo
     const tsIdx = {};
-    (rec.tapestation || []).forEach((run) => (run.wells || []).forEach((w) => { const k = (w.arm || '') + '|' + (w.sampleType || ''); if (!tsIdx[k]) tsIdx[k] = { concs: [], img: null }; if (w.conc) tsIdx[k].concs.push(w.conc); if (!tsIdx[k].img && (w.imgFileId || w.imgKey || w.img)) tsIdx[k].img = w; }));
-    // Qubit index from the library worksheet: type keyword -> [{conc, stage, tube}]
-    const qubitRows = (rec.worksheets && rec.worksheets.library && rec.worksheets.library.qubit) || [];
-    const qubitFor = (type) => qubitRows.filter((r) => r && r[0] && String(r[0]).toUpperCase().indexOf(String(type).toUpperCase().replace('/CSP', '')) >= 0);
+    (rec.tapestation || []).forEach((run) => (run.wells || []).forEach((w) => { const k = (w.arm || '') + '|' + (w.sampleType || '') + '|' + (w.sampleNo || ''); if (!tsIdx[k]) tsIdx[k] = { conc: w.conc || '', img: (w.imgFileId || w.imgKey || w.img) ? w : null }; }));
+    // Qubit index: all qubit rows across the 4 tables; match by tube ID containing the lib id
+    const qAll = []; const qt = (rec.worksheets && rec.worksheets.library && rec.worksheets.library.qubit) || {};
+    if (qt && !Array.isArray(qt)) QUBIT_TABLES.forEach((t) => (qt[t.key] || []).forEach((r) => { if (r && r[0]) qAll.push({ tube: String(r[0]), conc: r[2] || '', stage: t.title }); }));
+    const qubitFor = (lib) => qAll.filter((q) => q.tube.toUpperCase().indexOf(lib.id.toUpperCase()) >= 0);
 
-    const statusPill = (s) => '<span class="lib-pill ' + (s === 'Good' ? 'ok' : (s === 'Needs re-prep' ? 'bad' : 'wip')) + '">' + esc(s || 'In progress') + '</span>';
+    const inp = (cls, k, val, w, ph) => editable ? ('<input class="' + cls + '" data-k="' + escAttr(k) + '" value="' + escAttr(val || '') + '" style="width:' + (w || 90) + 'px"' + (ph ? ' placeholder="' + ph + '"' : '') + '>') : esc(val || '\u2014');
+    const statusSel = (k, val) => editable
+      ? '<select class="lib-st" data-k="' + escAttr(k) + '">' + ['In progress', 'Good', 'Needs re-prep'].map((o) => '<option' + (val === o ? ' selected' : '') + '>' + o + '</option>').join('') + '</select>'
+      : '<span class="lib-pill ' + (val === 'Good' ? 'ok' : (val === 'Needs re-prep' ? 'bad' : 'wip')) + '">' + esc(val || 'In progress') + '</span>';
+
     let body = '';
-    arms.forEach((arm) => {
-      body += '<h3 style="margin:16px 0 6px">' + esc(arm) + '</h3><div style="overflow:auto"><table class="cost-table"><thead><tr>'
-        + '<th>Library</th><th>Status</th><th class="num">Cycles</th><th>Qubit (ng/µL)</th><th class="num">TapeStation (pg/µL)</th><th>Trace</th><th>Attempts</th><th>Note</th></tr></thead><tbody>';
-      byArm[arm].forEach((type) => {
-        const key = arm + '|' + type; const st = rec.libStatus[key] || {};
-        const ts = tsIdx[key] || { concs: [], img: null };
-        const qb = qubitFor(type).map((r) => (r[3] ? esc(r[3]) + ': ' : '') + esc(r[2] || '')).filter((x) => x).join('<br>');
-        const traceCell = ts.img ? '<img src="' + tsGetImgSrc(ts.img) + '" class="ts-zoom lib-thumb" data-caption="' + escAttr(arm + ' ' + type) + '" loading="lazy">' : '\u2014';
-        const nAtt = (st.attempts || []).length;
-        body += '<tr><td><strong>' + esc(type) + '</strong></td>'
-          + '<td><select class="lib-st" data-k="' + escAttr(key) + '">' + ['In progress', 'Good', 'Needs re-prep'].map((o) => '<option' + (st.status === o ? ' selected' : '') + '>' + o + '</option>').join('') + '</select></td>'
-          + '<td class="num"><input class="lib-cyc" data-k="' + escAttr(key) + '" value="' + escAttr(st.cycles || '') + '" style="width:60px"></td>'
-          + '<td class="who">' + (qb || '\u2014') + '</td>'
-          + '<td class="num">' + (ts.concs.length ? esc(ts.concs.join(', ')) : '\u2014') + '</td>'
-          + '<td>' + traceCell + '</td>'
-          + '<td><button class="btn tiny" data-lib-att="' + escAttr(key) + '">' + (nAtt ? nAtt + ' \u25be' : '+ log') + '</button></td>'
-          + '<td><input class="lib-note" data-k="' + escAttr(key) + '" value="' + escAttr(st.note || '') + '" style="width:150px"></td></tr>';
-        if (LIBSTATUS_OPEN[key]) {
-          const att = st.attempts || [];
-          body += '<tr class="lib-att-row"><td></td><td colspan="7"><div class="lib-att">'
-            + '<table class="cost-table"><thead><tr><th>#</th><th>Date</th><th>Stage</th><th>Qubit</th><th class="num">Cycles</th><th>Status</th><th>Note</th><th></th></tr></thead><tbody>'
-            + att.map((a, ai) => '<tr><td>' + (ai + 1) + '</td>'
-                + '<td><input class="la-f" data-k="' + escAttr(key) + '" data-i="' + ai + '" data-f="date" value="' + escAttr(a.date || '') + '" style="width:100px"></td>'
-                + '<td><input class="la-f" data-k="' + escAttr(key) + '" data-i="' + ai + '" data-f="stage" value="' + escAttr(a.stage || '') + '" style="width:100px"></td>'
-                + '<td><input class="la-f" data-k="' + escAttr(key) + '" data-i="' + ai + '" data-f="qubit" value="' + escAttr(a.qubit || '') + '" style="width:80px"></td>'
-                + '<td class="num"><input class="la-f" data-k="' + escAttr(key) + '" data-i="' + ai + '" data-f="cycles" value="' + escAttr(a.cycles || '') + '" style="width:56px"></td>'
-                + '<td><select class="la-f" data-k="' + escAttr(key) + '" data-i="' + ai + '" data-f="status">' + ['', 'Good', 'Needs re-prep', 'In progress'].map((o) => '<option' + (a.status === o ? ' selected' : '') + '>' + (o || '\u2014') + '</option>').join('') + '</select></td>'
-                + '<td><input class="la-f" data-k="' + escAttr(key) + '" data-i="' + ai + '" data-f="note" value="' + escAttr(a.note || '') + '" style="width:150px"></td>'
-                + '<td><button class="btn tiny" data-la-del="' + escAttr(key) + '" data-i="' + ai + '">\u2715</button></td></tr>').join('')
-            + '</tbody></table><div class="row-actions" style="margin-top:6px"><button class="btn ghost tiny" data-la-add="' + escAttr(key) + '">+ Add attempt</button></div></div></td></tr>';
-        }
-      });
-      body += '</tbody></table></div>';
+    groups.forEach((g, gi) => {
+      const gkey = g.arm + '|' + g.type;
+      const open = !!LIBSTATUS_OPEN[gkey];
+      // summary of statuses in the group
+      const counts = { Good: 0, 'Needs re-prep': 0, 'In progress': 0 };
+      g.libs.forEach((l) => { const st = (rec.libStatus[l.id] && rec.libStatus[l.id].status) || 'In progress'; counts[st] = (counts[st] || 0) + 1; });
+      const summary = Object.keys(counts).filter((c) => counts[c]).map((c) => counts[c] + ' ' + c).join(' \u00b7 ');
+      body += '<div class="lib-group"><div class="lib-group-head" data-lib-grp="' + escAttr(gkey) + '"><span class="lib-caret">' + (open ? '\u25be' : '\u25b8') + '</span> <strong>' + esc(g.arm + ' \u2014 ' + g.type) + '</strong> <span class="who">(' + g.libs.length + ' librar' + (g.libs.length === 1 ? 'y' : 'ies') + ' \u00b7 ' + summary + ')</span></div>';
+      if (open) {
+        body += '<div style="overflow:auto"><table class="cost-table"><thead><tr><th>Library</th><th>Status</th><th class="num">Cycles</th><th>Qubit (ng/µL)</th><th class="num">TapeStation</th><th>Trace</th><th>Attempts</th><th>Note</th></tr></thead><tbody>';
+        g.libs.forEach((l) => {
+          const st = rec.libStatus[l.id] || {};
+          const ts = tsIdx[l.arm + '|' + l.type + '|' + l.laneNo] || { conc: '', img: null };
+          const qb = qubitFor(l).map((q) => esc(q.conc) + ' <span class="who">(' + esc(q.stage.replace('Final ', '').replace(' libraries', '')) + ')</span>').join('<br>');
+          const trace = ts.img ? '<img src="' + tsGetImgSrc(ts.img) + '" class="ts-zoom lib-thumb" data-caption="' + escAttr(l.name) + '" loading="lazy">' : '\u2014';
+          const nAtt = (st.attempts || []).length;
+          const attBtn = editable ? ('<button class="btn tiny" data-lib-att="' + escAttr(l.id) + '">' + (nAtt ? nAtt + ' \u25be' : '+ log') + '</button>') : (nAtt ? ('<button class="btn tiny" data-lib-att="' + escAttr(l.id) + '">' + nAtt + ' \u25be</button>') : '\u2014');
+          body += '<tr><td><strong>' + esc(l.id) + '</strong></td>'
+            + '<td>' + statusSel(l.id, st.status) + '</td>'
+            + '<td class="num">' + inp('lib-cyc', l.id, st.cycles, 56) + '</td>'
+            + '<td class="who">' + (qb || '\u2014') + '</td>'
+            + '<td class="num">' + (ts.conc || '\u2014') + '</td>'
+            + '<td>' + trace + '</td>'
+            + '<td>' + attBtn + '</td>'
+            + '<td class="who">' + inp('lib-note', l.id, st.note, 150, 'note') + '</td></tr>';
+          if (LIBSTATUS_OPEN['A:' + l.id]) {
+            const att = st.attempts || [];
+            body += '<tr class="lib-att-row"><td></td><td colspan="7"><div class="lib-att"><table class="cost-table"><thead><tr><th>#</th><th>Date</th><th>Stage</th><th>Qubit</th><th class="num">Cycles</th><th>Status</th><th>Note</th>' + (editable ? '<th></th>' : '') + '</tr></thead><tbody>'
+              + att.map((a, ai) => '<tr><td>' + (ai + 1) + '</td>'
+                  + ['date', 'stage', 'qubit', 'cycles', 'status', 'note'].map((f) => '<td' + (f === 'cycles' ? ' class="num"' : '') + '>' + (editable ? '<input class="la-f" data-k="' + escAttr(l.id) + '" data-i="' + ai + '" data-f="' + f + '" value="' + escAttr(a[f] || '') + '" style="width:' + (f === 'note' ? 140 : (f === 'cycles' ? 50 : 90)) + 'px">' : esc(a[f] || '\u2014')) + '</td>').join('')
+                  + (editable ? '<td><button class="btn tiny" data-la-del="' + escAttr(l.id) + '" data-i="' + ai + '">\u2715</button></td>' : '') + '</tr>').join('')
+              + '</tbody></table>' + (editable ? '<div class="row-actions" style="margin-top:6px"><button class="btn ghost tiny" data-la-add="' + escAttr(l.id) + '">+ Add attempt</button></div>' : '') + '</div></td></tr>';
+          }
+        });
+        body += '</tbody></table></div>';
+      }
+      body += '</div>';
     });
     host.innerHTML = '<h2>Library status <span class="who">' + esc(rec.name || '') + '</span></h2>'
-      + '<p class="step-hint">Status of every library through prep \u2014 Qubit (from the Library worksheet), TapeStation conc + trace, cycles, and good/re-prep status. Click a trace to enlarge; use <em>Attempts</em> to log a library prepped more than once.</p>' + body;
+      + '<p class="step-hint">' + (editable ? 'Track every library through prep. Click a modality/type to expand its libraries; set status/cycles/notes and log repeated preps under <em>Attempts</em>. Qubit + TapeStation are pulled in automatically.' : 'Read-only view. Edit on Record \u2192 Library status.') + '</p>' + body;
 
+    host.querySelectorAll('[data-lib-grp]').forEach((el) => el.addEventListener('click', () => { const k = el.dataset.libGrp; LIBSTATUS_OPEN[k] = !LIBSTATUS_OPEN[k]; renderLibStatus(hostId, editable); }));
+    host.querySelectorAll('.ts-zoom').forEach((img) => img.addEventListener('click', () => openImageLightbox(img.src, img.getAttribute('data-caption') || '')));
+    host.querySelectorAll('button[data-lib-att]').forEach((b) => b.addEventListener('click', () => { const k = 'A:' + b.dataset.libAtt; LIBSTATUS_OPEN[k] = !LIBSTATUS_OPEN[k]; if (editable && LIBSTATUS_OPEN[k]) { const id = b.dataset.libAtt; rec.libStatus[id] = rec.libStatus[id] || {}; rec.libStatus[id].attempts = rec.libStatus[id].attempts || []; if (!rec.libStatus[id].attempts.length) { rec.libStatus[id].attempts.push({ date: '', stage: '', qubit: '', cycles: '', status: '', note: '' }); Store.saveExperiment(rec); } } renderLibStatus(hostId, editable); }));
+    if (!editable) return;
     const save = () => Store.saveExperiment(rec);
-    host.querySelectorAll('.lib-st').forEach((el) => el.addEventListener('change', () => { const k = el.dataset.k; rec.libStatus[k] = rec.libStatus[k] || {}; rec.libStatus[k].status = el.value; save(); renderLibStatus(); }));
+    host.querySelectorAll('.lib-st').forEach((el) => el.addEventListener('change', () => { const k = el.dataset.k; rec.libStatus[k] = rec.libStatus[k] || {}; rec.libStatus[k].status = el.value; save(); renderLibStatus(hostId, editable); }));
     host.querySelectorAll('.lib-cyc').forEach((el) => el.addEventListener('change', () => { const k = el.dataset.k; rec.libStatus[k] = rec.libStatus[k] || {}; rec.libStatus[k].cycles = el.value; save(); }));
     host.querySelectorAll('.lib-note').forEach((el) => el.addEventListener('change', () => { const k = el.dataset.k; rec.libStatus[k] = rec.libStatus[k] || {}; rec.libStatus[k].note = el.value; save(); }));
-    host.querySelectorAll('button[data-lib-att]').forEach((b) => b.addEventListener('click', () => { const k = b.dataset.libAtt; LIBSTATUS_OPEN[k] = !LIBSTATUS_OPEN[k]; if (LIBSTATUS_OPEN[k] && !(rec.libStatus[k] && rec.libStatus[k].attempts && rec.libStatus[k].attempts.length)) { rec.libStatus[k] = rec.libStatus[k] || {}; rec.libStatus[k].attempts = rec.libStatus[k].attempts || []; rec.libStatus[k].attempts.push({ date: '', stage: '', qubit: '', cycles: '', status: '', note: '' }); save(); } renderLibStatus(); }));
     host.querySelectorAll('.la-f').forEach((el) => el.addEventListener('change', () => { const k = el.dataset.k, i = +el.dataset.i, f = el.dataset.f; rec.libStatus[k].attempts[i][f] = el.value; save(); }));
-    host.querySelectorAll('button[data-la-add]').forEach((b) => b.addEventListener('click', () => { const k = b.dataset.laAdd; rec.libStatus[k].attempts.push({ date: '', stage: '', qubit: '', cycles: '', status: '', note: '' }); save(); renderLibStatus(); }));
-    host.querySelectorAll('button[data-la-del]').forEach((b) => b.addEventListener('click', () => { const k = b.dataset.laDel, i = +b.dataset.i; rec.libStatus[k].attempts.splice(i, 1); save(); renderLibStatus(); }));
-    host.querySelectorAll('.ts-zoom').forEach((img) => img.addEventListener('click', () => openImageLightbox(img.src, img.getAttribute('data-caption') || '')));
+    host.querySelectorAll('button[data-la-add]').forEach((b) => b.addEventListener('click', () => { const k = b.dataset.laAdd; rec.libStatus[k].attempts.push({ date: '', stage: '', qubit: '', cycles: '', status: '', note: '' }); save(); renderLibStatus(hostId, editable); }));
+    host.querySelectorAll('button[data-la-del]').forEach((b) => b.addEventListener('click', () => { const k = b.dataset.laDel, i = +b.dataset.i; rec.libStatus[k].attempts.splice(i, 1); save(); renderLibStatus(hostId, editable); }));
   }
 
   function renderReviewWorksheets() {
