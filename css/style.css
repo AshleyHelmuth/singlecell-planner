@@ -873,3 +873,15 @@ main > .panel { flex: 1 1 auto; min-width: 0; }
 .lib-cell.ok { background: #35b46a; } .lib-cell.bad { background: #e0574f; } .lib-cell.wip { background: #c7d2dd; }
 .lib-legend { margin-top: 6px; font-size: 12px; color: var(--muted); display: flex; gap: 8px; align-items: center; }
 .lib-legend .lib-cell { width: 12px; height: 12px; }
+
+/* ===== Library status progress bars ===== */
+.lib-prog-row { display: flex; align-items: center; gap: 10px; margin: 4px 0; }
+.lib-prog-name { flex: 0 0 180px; font-size: 13px; font-weight: 600; }
+.lib-prog-bar { position: relative; flex: 1 1 auto; height: 20px; background: #eef2f6; border-radius: 5px; overflow: hidden; min-width: 200px; }
+.lib-prog-fill { position: absolute; left: 0; top: 0; bottom: 0; opacity: .5; }
+.lib-prog-fill.ok { background: #35b46a; } .lib-prog-fill.bad { background: #e0574f; } .lib-prog-fill.wip { background: #6b9bd1; }
+.lib-prog-txt { position: absolute; left: 8px; top: 0; line-height: 20px; font-size: 11px; color: var(--ink); white-space: nowrap; }
+.lib-prog-note { flex: 0 0 auto; font-size: 12px; max-width: 220px; }
+.lib-grp-title { cursor: pointer; }
+.lib-grp-ctrl { margin-left: 10px; font-size: 12px; }
+.lib-grp-ctrl select, .lib-grp-ctrl input { font-size: 12px; }

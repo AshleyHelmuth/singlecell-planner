@@ -1191,6 +1191,19 @@
     return { arms: arms, byArm: byArm };
   }
   const LIB_PREFIX = { "5' unsort": 'U', 'ASAP': 'A', "5' sort": 'S' };
+  // Ordered library-prep steps per library type (from the 10x protocols) for the progress bars.
+  const STEP_TRACKS = {
+    cDNA: ['GEM generation & barcoding', 'Post-GEM cleanup (Dynabeads)', 'cDNA amplification', 'cDNA cleanup (SPRI)', 'cDNA QC (Qubit / TapeStation)'],
+    GEX: ['Fragmentation / ER / A-tail', 'Adaptor ligation', 'Sample index PCR', 'Library cleanup (double-sided SPRI)', 'Library QC (Qubit / TapeStation)'],
+    'ADT/CSP': ['SPRI cleanup', 'Sample index PCR', 'Library cleanup', 'Library QC'],
+    ADT: ['SPRI cleanup', 'Sample index PCR', 'Library cleanup', 'Library QC'],
+    HTO: ['SPRI cleanup', 'Sample index PCR', 'Library cleanup', 'Library QC'],
+    TCR: ['Target enrichment PCR 1', 'Target enrichment PCR 2', 'Enriched cDNA QC', 'Fragmentation / ER / A-tail', 'Adaptor ligation', 'Sample index PCR', 'Library cleanup', 'Library QC'],
+    BCR: ['Target enrichment PCR 1', 'Target enrichment PCR 2', 'Enriched cDNA QC', 'Fragmentation / ER / A-tail', 'Adaptor ligation', 'Sample index PCR', 'Library cleanup', 'Library QC'],
+    ATAC: ['GEM generation & barcoding', 'Post-GEM cleanup', 'Sample index PCR', 'Library cleanup', 'Library QC']
+  };
+  const STEP_TRACK_DEFAULT = ['SPRI cleanup', 'Sample index PCR', 'Library cleanup', 'Library QC'];
+  function stepsFor(type) { return STEP_TRACKS[type] || STEP_TRACK_DEFAULT; }
   // Enumerate every individual library (per lane) grouped by modality -> type.
   function libStatusLibs(rec) {
     const { arms, byArm } = libStatusRows(rec);
@@ -1220,7 +1233,7 @@
     if (!sections.length) { host.innerHTML = '<h2>Library status</h2><p class="empty">Build a plan (and/or upload TapeStation) so libraries can be listed here.</p>'; return; }
     // TapeStation index by arm|type|laneNo
     const tsIdx = {};
-    (rec.tapestation || []).forEach((run) => (run.wells || []).forEach((w) => { const k = (w.arm || '') + '|' + (w.sampleType || '') + '|' + (w.sampleNo || ''); if (!tsIdx[k]) tsIdx[k] = { conc: w.conc || '', img: (w.imgFileId || w.imgKey || w.img) ? w : null }; }));
+    (rec.tapestation || []).forEach((run) => (run.wells || []).forEach((w) => { const k = (w.arm || '') + '|' + (w.sampleType || '') + '|' + (w.sampleNo || ''); if (!tsIdx[k]) tsIdx[k] = { concs: [], imgs: [] }; if (w.conc) tsIdx[k].concs.push(w.conc); if (w.imgFileId || w.imgKey || w.img) tsIdx[k].imgs.push(w); }));
     // Qubit index
     const qt = (rec.worksheets && rec.worksheets.library && rec.worksheets.library.qubit) || {};
     const qAll = []; if (qt && !Array.isArray(qt)) QUBIT_TABLES.forEach((t) => (qt[t.key] || []).forEach((r) => { if (r && r[0]) qAll.push({ tube: String(r[0]), conc: r[2] || '', stage: t.title, key: t.key }); }));
@@ -1233,16 +1246,22 @@
     const groupStatus = (g) => { let anyBad = false, allGood = true; g.libs.forEach((l) => { const s = statusOf(l.id); if (s === 'Needs re-prep') anyBad = true; if (s !== 'Good') allGood = false; }); return anyBad ? 'Needs re-prep' : (allGood ? 'Good' : 'In progress'); };
 
     // ---- summary status overview (compact matrix) ----
-    let summary = '<div class="lib-summary"><table class="lib-gantt"><thead><tr><th>Section</th>';
-    const allTypes = []; sections.forEach((sec) => sec.groups.forEach((g) => { if (allTypes.indexOf(g.type) < 0) allTypes.push(g.type); }));
-    allTypes.forEach((t) => summary += '<th>' + esc(t) + '</th>');
-    summary += '</tr></thead><tbody>';
+    // ---- summary: a progress bar per library group (how far through prep) ----
+    rec.libProgress = rec.libProgress || {};
+    let summary = '<div class="lib-summary">';
     sections.forEach((sec) => {
-      summary += '<tr><td><strong>' + esc(sec.arm) + '</strong></td>';
-      allTypes.forEach((t) => { const g = sec.groups.filter((x) => x.type === t)[0]; if (!g) { summary += '<td></td>'; return; } const st = groupStatus(g); summary += '<td><span class="lib-cell ' + pillClass(st) + '" title="' + esc(sec.arm + ' ' + t + ': ' + st) + '"></span></td>'; });
-      summary += '</tr>';
+      sec.groups.forEach((g) => {
+        const gkey = g.arm + '|' + g.type; const steps = stepsFor(g.type);
+        const prog = rec.libProgress[gkey] || {}; const stepIdx = (prog.step == null || prog.step === '') ? -1 : Number(prog.step);
+        const pctDone = stepIdx < 0 ? 0 : Math.round((stepIdx + 1) / steps.length * 100);
+        const gst = groupStatus(g);
+        const label = stepIdx < 0 ? 'Not started' : ((stepIdx + 1) + '/' + steps.length + ' \u00b7 ' + steps[stepIdx]);
+        summary += '<div class="lib-prog-row"><div class="lib-prog-name">' + esc(sec.arm + ' ' + (g.type === 'cDNA' ? 'cDNA' : g.type)) + '</div>'
+          + '<div class="lib-prog-bar"><div class="lib-prog-fill ' + pillClass(gst) + '" style="width:' + pctDone + '%"></div><span class="lib-prog-txt">' + esc(label) + '</span></div>'
+          + (prog.note ? '<div class="lib-prog-note who">' + esc(prog.note) + '</div>' : '') + '</div>';
+      });
     });
-    summary += '</tbody></table><div class="lib-legend"><span class="lib-cell ok"></span> Good <span class="lib-cell wip"></span> In progress <span class="lib-cell bad"></span> Needs re-prep</div></div>';
+    summary += '</div>';
 
     const inp = (cls, k, val, w, ph) => editable ? ('<input class="' + cls + '" data-k="' + escAttr(k) + '" value="' + escAttr(val || '') + '" style="width:' + (w || 90) + 'px"' + (ph ? ' placeholder="' + ph + '"' : '') + '>') : esc(val || '\u2014');
     const statusSel = (k, val) => editable
@@ -1258,15 +1277,20 @@
         const summ = Object.keys(counts).map((c) => counts[c] + ' ' + c).join(' \u00b7 ');
         const isCdna = g.type === 'cDNA';
         const showCdnaIn = (g.arm !== 'ASAP') && !isCdna;
-        body += '<div class="lib-group' + (isCdna ? ' lib-group-cdna' : '') + '"><div class="lib-group-head" data-lib-grp="' + escAttr(gkey) + '"><span class="lib-caret">' + (open ? '\u25be' : '\u25b8') + '</span> ' + (isCdna ? '<em>cDNA (input)</em>' : '<strong>' + esc(g.type) + '</strong>') + ' <span class="who">(' + g.libs.length + ' \u00b7 ' + summ + ')</span></div>';
+        body += '<div class="lib-group' + (isCdna ? ' lib-group-cdna' : '') + '"><div class="lib-group-head"><span class="lib-grp-title" data-lib-grp="' + escAttr(gkey) + '"><span class="lib-caret">' + (open ? '\u25be' : '\u25b8') + '</span> ' + (isCdna ? '<em>cDNA (input)</em>' : '<strong>' + esc(g.type) + '</strong>') + ' <span class="who">(' + g.libs.length + ' \u00b7 ' + summ + ')</span></span>'
+          + (function () { const steps = stepsFor(g.type); const prog = (rec.libProgress && rec.libProgress[gkey]) || {};
+              if (editable) { return ' <span class="lib-grp-ctrl">Step: <select class="lib-step" data-k="' + escAttr(gkey) + '"><option value="">Not started</option>' + steps.map((s, si) => '<option value="' + si + '"' + (String(prog.step) === String(si) ? ' selected' : '') + '>' + (si + 1) + '. ' + esc(s) + '</option>').join('') + '</select> <input class="lib-step-note" data-k="' + escAttr(gkey) + '" value="' + escAttr(prog.note || '') + '" placeholder="note" style="width:150px"></span>'; }
+              const si = (prog.step == null || prog.step === '') ? -1 : Number(prog.step);
+              return ' <span class="who">\u2014 ' + (si < 0 ? 'Not started' : esc((si + 1) + '/' + steps.length + ' ' + steps[si])) + (prog.note ? ' \u00b7 ' + esc(prog.note) : '') + '</span>'; })()
+          + '</div>';
         if (open) {
           body += '<div style="overflow:auto"><table class="cost-table"><thead><tr><th>Library</th><th>Status</th><th class="num">Cycles</th>' + (showCdnaIn ? '<th class="num">cDNA input (ng/µL)</th>' : '') + '<th>Qubit (ng/µL)</th><th class="num">TapeStation</th><th>Trace</th><th>Attempts</th><th>Note</th></tr></thead><tbody>';
           g.libs.forEach((l) => {
             const st = rec.libStatus[l.id] || {};
-            const ts = tsIdx[l.arm + '|' + l.type + '|' + l.laneNo] || { conc: '', img: null };
+            const ts = tsIdx[l.arm + '|' + l.type + '|' + l.laneNo] || { concs: [], imgs: [] };
             const qb = qubitFor(l).map((q) => esc(q.conc)).filter((x) => x).join('<br>');
             const cdIn = isCdna ? '' : cdnaQubitFor(sec.pfx, l.laneNo);
-            const trace = ts.img ? '<img src="' + tsGetImgSrc(ts.img) + '" class="ts-zoom lib-thumb" data-caption="' + escAttr(l.name) + '" loading="lazy">' : '\u2014';
+            const trace = ts.imgs.length ? ts.imgs.map((w, ti) => '<img src="' + tsGetImgSrc(w) + '" class="ts-zoom lib-thumb" data-caption="' + escAttr(l.name + (ts.imgs.length > 1 ? ' (' + (ti + 1) + ')' : '')) + '" loading="lazy">').join(' ') : '\u2014';
             const nAtt = (st.attempts || []).length;
             const attBtn = (editable || nAtt) ? ('<button class="btn tiny" data-lib-att="' + escAttr(l.id) + '">' + (nAtt ? nAtt + ' \u25be' : '+ log') + '</button>') : '\u2014';
             body += '<tr><td><strong>' + esc(l.id) + '</strong></td>'
@@ -1274,7 +1298,7 @@
               + '<td class="num">' + inp('lib-cyc', l.id, st.cycles, 56) + '</td>'
               + (showCdnaIn ? '<td class="num who">' + (cdIn || '\u2014') + '</td>' : '')
               + '<td class="who">' + (qb || '\u2014') + '</td>'
-              + '<td class="num">' + (ts.conc || '\u2014') + '</td>'
+              + '<td class="num">' + (ts.concs.length ? esc(ts.concs.join(', ')) : '\u2014') + '</td>'
               + '<td>' + trace + '</td>'
               + '<td>' + attBtn + '</td>'
               + '<td class="who">' + inp('lib-note', l.id, st.note, 140, 'note') + '</td></tr>';
@@ -1302,6 +1326,8 @@
     host.querySelectorAll('button[data-lib-att]').forEach((b) => b.addEventListener('click', () => { const k = 'A:' + b.dataset.libAtt; LIBSTATUS_OPEN[k] = !LIBSTATUS_OPEN[k]; if (editable && LIBSTATUS_OPEN[k]) { const id = b.dataset.libAtt; rec.libStatus[id] = rec.libStatus[id] || {}; rec.libStatus[id].attempts = rec.libStatus[id].attempts || []; if (!rec.libStatus[id].attempts.length) { rec.libStatus[id].attempts.push({ date: '', stage: '', qubit: '', cycles: '', status: '', note: '' }); Store.saveExperiment(rec); } } renderLibStatus(hostId, editable); }));
     if (!editable) return;
     const save = () => Store.saveExperiment(rec);
+    host.querySelectorAll('.lib-step').forEach((el) => el.addEventListener('change', () => { const k = el.dataset.k; rec.libProgress = rec.libProgress || {}; rec.libProgress[k] = rec.libProgress[k] || {}; rec.libProgress[k].step = el.value; save(); renderLibStatus(hostId, editable); }));
+    host.querySelectorAll('.lib-step-note').forEach((el) => el.addEventListener('change', () => { const k = el.dataset.k; rec.libProgress = rec.libProgress || {}; rec.libProgress[k] = rec.libProgress[k] || {}; rec.libProgress[k].note = el.value; save(); renderLibStatus(hostId, editable); }));
     host.querySelectorAll('.lib-st').forEach((el) => el.addEventListener('change', () => { const k = el.dataset.k; rec.libStatus[k] = rec.libStatus[k] || {}; rec.libStatus[k].status = el.value; save(); renderLibStatus(hostId, editable); }));
     host.querySelectorAll('.lib-cyc').forEach((el) => el.addEventListener('change', () => { const k = el.dataset.k; rec.libStatus[k] = rec.libStatus[k] || {}; rec.libStatus[k].cycles = el.value; save(); }));
     host.querySelectorAll('.lib-note').forEach((el) => el.addEventListener('change', () => { const k = el.dataset.k; rec.libStatus[k] = rec.libStatus[k] || {}; rec.libStatus[k].note = el.value; save(); }));
