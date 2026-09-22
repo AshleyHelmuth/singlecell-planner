@@ -1246,20 +1246,19 @@
     const groupStatus = (g) => { let anyBad = false, allGood = true; g.libs.forEach((l) => { const s = statusOf(l.id); if (s === 'Needs re-prep') anyBad = true; if (s !== 'Good') allGood = false; }); return anyBad ? 'Needs re-prep' : (allGood ? 'Good' : 'In progress'); };
 
     // ---- summary status overview (compact matrix) ----
-    // ---- summary: a progress bar per library group (how far through prep) ----
-    rec.libProgress = rec.libProgress || {};
+    // ---- summary: one color-coded milestone bar per modality ----
+    rec.libMilestones = rec.libMilestones || {};
+    const milestonesFor = (sec) => {
+      const types = sec.groups.map((g) => g.type).filter((t) => t !== 'cDNA');
+      const shared = sec.arm === 'ASAP' ? ['GEM generation'] : ['GEM generation', 'cDNA amplification'];
+      return shared.concat(types.map((t) => t + ' library'));
+    };
     let summary = '<div class="lib-summary">';
     sections.forEach((sec) => {
-      sec.groups.forEach((g) => {
-        const gkey = g.arm + '|' + g.type; const steps = stepsFor(g.type);
-        const prog = rec.libProgress[gkey] || {}; const stepIdx = (prog.step == null || prog.step === '') ? -1 : Number(prog.step);
-        const pctDone = stepIdx < 0 ? 0 : Math.round((stepIdx + 1) / steps.length * 100);
-        const gst = groupStatus(g);
-        const label = stepIdx < 0 ? 'Not started' : ((stepIdx + 1) + '/' + steps.length + ' \u00b7 ' + steps[stepIdx]);
-        summary += '<div class="lib-prog-row"><div class="lib-prog-name">' + esc(sec.arm + ' ' + (g.type === 'cDNA' ? 'cDNA' : g.type)) + '</div>'
-          + '<div class="lib-prog-bar"><div class="lib-prog-fill ' + pillClass(gst) + '" style="width:' + pctDone + '%"></div><span class="lib-prog-txt">' + esc(label) + '</span></div>'
-          + (prog.note ? '<div class="lib-prog-note who">' + esc(prog.note) + '</div>' : '') + '</div>';
-      });
+      const ms = milestonesFor(sec); const done = rec.libMilestones[sec.arm] || {};
+      const seg = ms.map((m, mi) => { const isDone = !!done[m]; return '<div class="lib-seg' + (isDone ? ' done c' + (mi % 8) : '') + '" style="width:' + (100 / ms.length) + '%" title="' + escAttr(m + (isDone ? ' \u2713' : ' (not done)')) + '">' + (isDone ? esc(m) : '') + '</div>'; }).join('');
+      const nDone = ms.filter((m) => done[m]).length;
+      summary += '<div class="lib-mbar-row"><div class="lib-prog-name">' + esc(sec.arm) + ' <span class="who">' + nDone + '/' + ms.length + '</span></div><div class="lib-mbar">' + seg + '</div></div>';
     });
     summary += '</div>';
 
@@ -1271,18 +1270,24 @@
     let body = '';
     sections.forEach((sec) => {
       body += '<div class="lib-section"><h3 style="margin:18px 0 6px">' + esc(sec.arm) + '</h3>';
+      // milestone checkboxes (editable on Record) + color-coded mini bar
+      const ms = milestonesFor(sec); const done = rec.libMilestones[sec.arm] || {};
+      const mseg = ms.map((m, mi) => '<div class="lib-seg' + (done[m] ? ' done c' + (mi % 8) : '') + '" style="width:' + (100 / ms.length) + '%" title="' + escAttr(m) + '"></div>').join('');
+      body += '<div class="lib-mbar" style="margin-bottom:6px">' + mseg + '</div>';
+      if (editable) {
+        body += '<div class="lib-ms-checks">' + ms.map((m, mi) => '<label class="lib-ms-chk"><input type="checkbox" class="lib-ms" data-arm="' + escAttr(sec.arm) + '" data-m="' + escAttr(m) + '"' + (done[m] ? ' checked' : '') + '> <span class="lib-swatch c' + (mi % 8) + '"></span>' + esc(m) + '</label>').join('') + '</div>';
+      }
+      // flags for this modality
+      const flags = (rec.libFlags || []).map((f, fi) => ({ f: f, fi: fi })).filter((x) => x.f.arm === sec.arm);
+      if (flags.length) body += '<div class="lib-flags">' + flags.map((x) => '<div class="lib-flag">\u2691 ' + esc(x.f.note || '') + (editable ? ' <button class="btn tiny" data-flag-del="' + x.fi + '">\u2715</button>' : '') + '</div>').join('') + '</div>';
+      if (!editable) body += '<div class="row-actions" style="margin:4px 0"><input class="lib-flag-note" data-arm="' + escAttr(sec.arm) + '" placeholder="flag note (e.g. CSP needs re-prep)" style="width:280px"> <button class="btn ghost tiny" data-flag-add="' + escAttr(sec.arm) + '">+ Add flag</button></div>';
       sec.groups.forEach((g) => {
         const gkey = g.arm + '|' + g.type; const open = !!LIBSTATUS_OPEN[gkey];
         const counts = {}; g.libs.forEach((l) => { const st = statusOf(l.id); counts[st] = (counts[st] || 0) + 1; });
         const summ = Object.keys(counts).map((c) => counts[c] + ' ' + c).join(' \u00b7 ');
         const isCdna = g.type === 'cDNA';
         const showCdnaIn = (g.arm !== 'ASAP') && !isCdna;
-        body += '<div class="lib-group' + (isCdna ? ' lib-group-cdna' : '') + '"><div class="lib-group-head"><span class="lib-grp-title" data-lib-grp="' + escAttr(gkey) + '"><span class="lib-caret">' + (open ? '\u25be' : '\u25b8') + '</span> ' + (isCdna ? '<em>cDNA (input)</em>' : '<strong>' + esc(g.type) + '</strong>') + ' <span class="who">(' + g.libs.length + ' \u00b7 ' + summ + ')</span></span>'
-          + (function () { const steps = stepsFor(g.type); const prog = (rec.libProgress && rec.libProgress[gkey]) || {};
-              if (editable) { return ' <span class="lib-grp-ctrl">Step: <select class="lib-step" data-k="' + escAttr(gkey) + '"><option value="">Not started</option>' + steps.map((s, si) => '<option value="' + si + '"' + (String(prog.step) === String(si) ? ' selected' : '') + '>' + (si + 1) + '. ' + esc(s) + '</option>').join('') + '</select> <input class="lib-step-note" data-k="' + escAttr(gkey) + '" value="' + escAttr(prog.note || '') + '" placeholder="note" style="width:150px"></span>'; }
-              const si = (prog.step == null || prog.step === '') ? -1 : Number(prog.step);
-              return ' <span class="who">\u2014 ' + (si < 0 ? 'Not started' : esc((si + 1) + '/' + steps.length + ' ' + steps[si])) + (prog.note ? ' \u00b7 ' + esc(prog.note) : '') + '</span>'; })()
-          + '</div>';
+        body += '<div class="lib-group' + (isCdna ? ' lib-group-cdna' : '') + '"><div class="lib-group-head"><span class="lib-grp-title" data-lib-grp="' + escAttr(gkey) + '"><span class="lib-caret">' + (open ? '\u25be' : '\u25b8') + '</span> ' + (isCdna ? '<em>cDNA (input)</em>' : '<strong>' + esc(g.type) + '</strong>') + ' <span class="who">(' + g.libs.length + ' \u00b7 ' + summ + ')</span></span></div>';
         if (open) {
           body += '<div style="overflow:auto"><table class="cost-table"><thead><tr><th>Library</th><th>Status</th><th class="num">Cycles</th>' + (showCdnaIn ? '<th class="num">cDNA input (ng/µL)</th>' : '') + '<th>Qubit (ng/µL)</th><th class="num">TapeStation</th><th>Trace</th><th>Attempts</th><th>Note</th></tr></thead><tbody>';
           g.libs.forEach((l) => {
@@ -1324,8 +1329,14 @@
     host.querySelectorAll('[data-lib-grp]').forEach((el) => el.addEventListener('click', () => { const k = el.dataset.libGrp; LIBSTATUS_OPEN[k] = !LIBSTATUS_OPEN[k]; renderLibStatus(hostId, editable); }));
     host.querySelectorAll('.ts-zoom').forEach((img) => img.addEventListener('click', () => openImageLightbox(img.src, img.getAttribute('data-caption') || '')));
     host.querySelectorAll('button[data-lib-att]').forEach((b) => b.addEventListener('click', () => { const k = 'A:' + b.dataset.libAtt; LIBSTATUS_OPEN[k] = !LIBSTATUS_OPEN[k]; if (editable && LIBSTATUS_OPEN[k]) { const id = b.dataset.libAtt; rec.libStatus[id] = rec.libStatus[id] || {}; rec.libStatus[id].attempts = rec.libStatus[id].attempts || []; if (!rec.libStatus[id].attempts.length) { rec.libStatus[id].attempts.push({ date: '', stage: '', qubit: '', cycles: '', status: '', note: '' }); Store.saveExperiment(rec); } } renderLibStatus(hostId, editable); }));
+    host.querySelectorAll('button[data-flag-add]').forEach((b) => b.addEventListener('click', () => {
+      const arm = b.dataset.flagAdd; const inpEl = b.parentNode.querySelector('.lib-flag-note'); const note = inpEl ? inpEl.value.trim() : '';
+      if (!note) return; rec.libFlags = rec.libFlags || []; rec.libFlags.push({ arm: arm, note: note, at: new Date().toISOString().slice(0, 10) }); Store.saveExperiment(rec); renderLibStatus(hostId, editable);
+    }));
+    host.querySelectorAll('button[data-flag-del]').forEach((b) => b.addEventListener('click', () => { const fi = +b.dataset.flagDel; if (rec.libFlags) { rec.libFlags.splice(fi, 1); Store.saveExperiment(rec); renderLibStatus(hostId, editable); } }));
     if (!editable) return;
     const save = () => Store.saveExperiment(rec);
+    host.querySelectorAll('.lib-ms').forEach((el) => el.addEventListener('change', () => { const arm = el.dataset.arm, m = el.dataset.m; rec.libMilestones = rec.libMilestones || {}; rec.libMilestones[arm] = rec.libMilestones[arm] || {}; if (el.checked) rec.libMilestones[arm][m] = true; else delete rec.libMilestones[arm][m]; save(); renderLibStatus(hostId, editable); }));
     host.querySelectorAll('.lib-step').forEach((el) => el.addEventListener('change', () => { const k = el.dataset.k; rec.libProgress = rec.libProgress || {}; rec.libProgress[k] = rec.libProgress[k] || {}; rec.libProgress[k].step = el.value; save(); renderLibStatus(hostId, editable); }));
     host.querySelectorAll('.lib-step-note').forEach((el) => el.addEventListener('change', () => { const k = el.dataset.k; rec.libProgress = rec.libProgress || {}; rec.libProgress[k] = rec.libProgress[k] || {}; rec.libProgress[k].note = el.value; save(); renderLibStatus(hostId, editable); }));
     host.querySelectorAll('.lib-st').forEach((el) => el.addEventListener('change', () => { const k = el.dataset.k; rec.libStatus[k] = rec.libStatus[k] || {}; rec.libStatus[k].status = el.value; save(); renderLibStatus(hostId, editable); }));
@@ -3356,9 +3367,9 @@
     host.querySelectorAll('.mod-lane').forEach((el) => el.addEventListener('change', () => {
       const base = LANE_OVERRIDE || Object.assign({}, LANE_COMPUTED || lanes);
       const v = parseInt(el.value, 10); base[el.dataset.mod] = isNaN(v) || v < 0 ? 0 : v;
-      LANE_OVERRIDE = base; renderModify();
+      LANE_OVERRIDE = base; modPersist(); renderModify();
     }));
-    const reset = $('#modReset'); if (reset) reset.addEventListener('click', () => { LANE_OVERRIDE = null; renderModify(); });
+    const reset = $('#modReset'); if (reset) reset.addEventListener('click', () => { LANE_OVERRIDE = null; modPersist(); renderModify(); });
     // pool assignment edits (via POOL_OVERRIDE)
     host.querySelectorAll('.mod-pool').forEach((el) => el.addEventListener('change', () => { modSetPool(el.dataset.sid, parseInt(el.value, 10) - 1); }));
     host.querySelectorAll('.mod-no').forEach((el) => el.addEventListener('change', () => {
@@ -4180,6 +4191,7 @@
       confounderIdx: Array.from(CONFOUNDER_CHECKED_IDX),
       poolOverride, optValues,
       sortSel: sortSelList(), customSortPops: CUSTOM_SORT_POPS.slice(), sortPanel: SORT_PANEL.slice(), sampleNoOverride: Object.assign({}, SAMPLE_NO_OVERRIDE),
+      laneOverride: LANE_OVERRIDE ? { unsort: LANE_OVERRIDE.unsort, asap: LANE_OVERRIDE.asap, sort: LANE_OVERRIDE.sort } : null,
       inputMode: PLAN_INPUT,
       planningCounts: (function () { const v = {}; document.querySelectorAll('#planningCounts input').forEach((el) => { v[el.id] = el.value; }); return v; })()
     };
@@ -4198,6 +4210,7 @@
     CUSTOM_SORT_POPS = (state.customSortPops || []).slice();
     SORT_PANEL = (state.sortPanel || []).slice();
     SAMPLE_NO_OVERRIDE = Object.assign({}, state.sampleNoOverride || {});
+    LANE_OVERRIDE = state.laneOverride ? { unsort: state.laneOverride.unsort, asap: state.laneOverride.asap, sort: state.laneOverride.sort } : null;
     if (state.sortSel && window.Pooling) { SORT_SEL = new Set(state.sortSel); renderSortToggles(); }
     const box = $('#useMadiDefault'); if (box) box.checked = false;
     renderPopulationBuilder();

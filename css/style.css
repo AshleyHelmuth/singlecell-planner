@@ -885,3 +885,20 @@ main > .panel { flex: 1 1 auto; min-width: 0; }
 .lib-grp-title { cursor: pointer; }
 .lib-grp-ctrl { margin-left: 10px; font-size: 12px; }
 .lib-grp-ctrl select, .lib-grp-ctrl input { font-size: 12px; }
+
+/* ===== Library status milestone bars + flags ===== */
+.lib-mbar-row { display: flex; align-items: center; gap: 10px; margin: 5px 0; }
+.lib-mbar { display: flex; flex: 1 1 auto; height: 22px; border-radius: 5px; overflow: hidden; border: 1px solid #e4e9ef; min-width: 240px; }
+.lib-seg { background: #eef2f6; border-right: 1px solid #fff; font-size: 10px; color: #fff; line-height: 22px; text-align: center; overflow: hidden; white-space: nowrap; }
+.lib-seg.done { color: #fff; }
+.lib-seg.c0.done { background: #2f7ed8; } .lib-seg.c1.done { background: #35b46a; } .lib-seg.c2.done { background: #e0863a; }
+.lib-seg.c3.done { background: #8e5bd0; } .lib-seg.c4.done { background: #d94f8a; } .lib-seg.c5.done { background: #1f9e9e; }
+.lib-seg.c6.done { background: #c7a021; } .lib-seg.c7.done { background: #5a6b7b; }
+.lib-ms-checks { display: flex; flex-wrap: wrap; gap: 6px 16px; margin: 6px 0 10px; }
+.lib-ms-chk { font-size: 12px; display: inline-flex; align-items: center; gap: 4px; }
+.lib-swatch { display: inline-block; width: 11px; height: 11px; border-radius: 3px; }
+.lib-swatch.c0 { background: #2f7ed8; } .lib-swatch.c1 { background: #35b46a; } .lib-swatch.c2 { background: #e0863a; }
+.lib-swatch.c3 { background: #8e5bd0; } .lib-swatch.c4 { background: #d94f8a; } .lib-swatch.c5 { background: #1f9e9e; }
+.lib-swatch.c6 { background: #c7a021; } .lib-swatch.c7 { background: #5a6b7b; }
+.lib-flags { margin: 4px 0; }
+.lib-flag { background: #fff6e5; border: 1px solid #f0d9a8; border-radius: 6px; padding: 3px 10px; font-size: 12px; margin: 2px 0; display: inline-block; }
