@@ -1317,11 +1317,11 @@ async function handleDrivePost(request, env) {
         info.forEach((r) => { const k = String((r[0] || '')).toLowerCase(); if (k === 'run notes') notes = r[1] || ''; if (k === 'run') runName = r[1] || runName; });
         const hdr = (tags[0] || []).map((h) => String(h).toLowerCase());
         const col = (n) => hdr.findIndex((h) => h.indexOf(n) === 0);
-        const iWell = col('well'), iOrig = col('original'), iSec = col('section'), iType = col('type'), iNo = col('sample #'), iFull = col('full'), iDil = col('dilution'), iConc = col('conc'), iNote = col('notes'), iPk = col('peaks');
+        const iWell = col('well'), iOrig = col('original'), iSec = col('section'), iType = col('type'), iNo = col('sample #'), iRound = col('round'), iFull = col('full'), iDil = col('dilution'), iConc = col('conc'), iNote = col('notes'), iPk = col('peaks');
         const wells = [];
         for (let i = 1; i < tags.length; i++) { const r = tags[i]; if (!r || !r[iWell]) continue;
           let peaks = []; try { peaks = JSON.parse(r[iPk] || '[]'); } catch (e) { /* leave empty */ }
-          wells.push({ well: r[iWell], description: r[iOrig] || '', arm: r[iSec] || '', sampleType: r[iType] || '', sampleNo: r[iNo] || '', name: r[iFull] || '', dilution: r[iDil] || '', conc: r[iConc] || '', note: r[iNote] || '', peaks: peaks, imgFileId: imgByWell[r[iWell]] || '' });
+          wells.push({ well: r[iWell], description: r[iOrig] || '', arm: r[iSec] || '', sampleType: r[iType] || '', sampleNo: r[iNo] || '', round: (iRound >= 0 ? (r[iRound] || 1) : 1), name: r[iFull] || '', dilution: r[iDil] || '', conc: r[iConc] || '', note: r[iNote] || '', peaks: peaks, imgFileId: imgByWell[r[iWell]] || '' });
         }
         runs.push({ runName: runName, notes: notes, folder: rf.name, wells: wells });
       }

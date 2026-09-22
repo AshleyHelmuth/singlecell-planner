@@ -193,6 +193,18 @@
     { key: 'final5', title: "Final 5' libraries (GEX, ADT, TCR/BCR)" },
     { key: 'finalasap', title: 'Final ASAP libraries (ATAC, ADT, HTO)' }
   ];
+  // Expected tube IDs for a Qubit table, from the plan's lane counts per arm.
+  function qubitExpectedTubes(qtKey) {
+    let lanes = { unsort: 0, asap: 0, sort: 0 };
+    try { const c = computePooling(); lanes = laneOverridesFromCost(c.samples.length, (c.poolRes && c.poolRes.nPools) || 0, c.samples) || lanes; } catch (e) { /* */ }
+    const out = [];
+    const add5 = (types) => { [['U', lanes.unsort], ['S', lanes.sort]].forEach((a) => { const pfx = a[0], n = a[1] || 0; types.forEach((t) => { for (let i = 1; i <= n; i++) out.push(pfx + i + '-' + t); }); }); };
+    if (qtKey === 'cdna5') add5(['cDNA']);
+    else if (qtKey === 'tcrbcr') add5(['TCR', 'BCR']);
+    else if (qtKey === 'final5') add5(['GEX', 'ADT/CSP', 'TCR', 'BCR']);
+    else if (qtKey === 'finalasap') { ['ATAC', 'ADT', 'HTO'].forEach((t) => { for (let i = 1; i <= (lanes.asap || 0); i++) out.push('A' + i + '-' + t); }); }
+    return out;
+  }
   const WORKSHEET_CFG = {
     batchday: { title: 'Batch Day Worksheet', host: 'recBatchdayContent',
       kits: [['Chromium Next GEM Single Cell ATAC Library Kit v2', ''], ['Chromium Next GEM Single Cell ATAC Gel Bead Kit v2', ''], ['Chromium Next GEM Chip H Single Cell Kit', ''], ['Single Index Kit N Set A, 96 rxns', 'PN-1000212']],
@@ -230,13 +242,18 @@
       + '<h3 style="margin-top:18px">Cell counts &amp; dilution</h3><div style="overflow:auto"><table class="cost-table"><thead><tr>' + cHead + '<th></th></tr></thead><tbody>' + cRows + '</tbody></table></div>'
       + '<div class="row-actions" style="margin:6px 0"><button class="btn ghost" id="wsAddRow">+ Add count row</button></div>'
       + (type === 'library' ? (function () {
-          const qc = ['Tube ID', 'Qubit dilution', 'Qubit conc (ng/µL)'];
-          if (!w.qubit || Array.isArray(w.qubit)) { const old = Array.isArray(w.qubit) ? w.qubit : []; w.qubit = { cdna5: old.length ? old.map((r) => [r[0] || '', r[1] || '', r[2] || '']) : [['', '', '']], tcrbcr: [['', '', '']], final5: [['', '', '']], finalasap: [['', '', '']] }; }
+          const qc = ['Tube ID', 'Qubit dilution', 'Qubit conc (ng/µL)', 'Prep round'];
+          if (!w.qubit || Array.isArray(w.qubit)) { const old = Array.isArray(w.qubit) ? w.qubit : []; w.qubit = { cdna5: old.length ? old.map((r) => [r[0] || '', r[1] || '', r[2] || '', '']) : [['', '', '', '']], tcrbcr: [['', '', '', '']], final5: [['', '', '', '']], finalasap: [['', '', '', '']] }; }
+          w.qubitNotes = w.qubitNotes || {}; w.qubitInit = w.qubitInit || {};
           return QUBIT_TABLES.map((qt) => {
-            const rowsQ = w.qubit[qt.key] && w.qubit[qt.key].length ? w.qubit[qt.key] : (w.qubit[qt.key] = [['', '', '']]);
-            const body = rowsQ.map((row, ri) => '<tr>' + qc.map((c, ci) => '<td><input class="ws-qb" data-qt="' + qt.key + '" data-r="' + ri + '" data-c="' + ci + '" value="' + escAttr(row[ci] || '') + '" style="width:130px"></td>').join('') + '<td><button class="btn tiny" data-ws-qdel="' + qt.key + '|' + ri + '">\u2715</button></td></tr>').join('');
-            return '<h3 style="margin-top:18px">Qubit \u2014 ' + esc(qt.title) + '</h3><div style="overflow:auto"><table class="cost-table"><thead><tr>' + qc.map((c) => '<th>' + esc(c) + '</th>').join('') + '<th></th></tr></thead><tbody>' + body + '</tbody></table></div>'
-              + '<div class="row-actions" style="margin:6px 0"><button class="btn ghost" data-ws-qadd="' + qt.key + '">+ Add row</button></div>';
+            // auto-populate expected tube IDs once
+            if (!w.qubitInit[qt.key]) { const exp = qubitExpectedTubes(qt.key); if (exp.length) { w.qubit[qt.key] = exp.map((t) => [t, '', '', '']); } w.qubitInit[qt.key] = true; }
+            const rowsQ = w.qubit[qt.key] && w.qubit[qt.key].length ? w.qubit[qt.key] : (w.qubit[qt.key] = [['', '', '', '']]);
+            const body = rowsQ.map((row, ri) => '<tr>' + qc.map((c, ci) => '<td class="qb-cell"><input class="ws-qb" data-qt="' + qt.key + '" data-r="' + ri + '" data-c="' + ci + '" value="' + escAttr(row[ci] || '') + '" style="width:130px"><span class="qb-fill" data-qt="' + qt.key + '" data-r="' + ri + '" data-c="' + ci + '" title="Drag down to fill"></span></td>').join('') + '<td><button class="btn tiny" data-ws-qdel="' + qt.key + '|' + ri + '">\u2715</button></td></tr>').join('');
+            const heads = qc.map((c) => '<th>' + esc(c) + (c === 'Prep round' ? ' ' + infoDot('prepRound') : '') + '</th>').join('');
+            return '<h3 style="margin-top:18px">Qubit \u2014 ' + esc(qt.title) + '</h3><div style="overflow:auto"><table class="cost-table qb-table"><thead><tr>' + heads + '<th></th></tr></thead><tbody>' + body + '</tbody></table></div>'
+              + '<div class="row-actions" style="margin:6px 0"><button class="btn ghost" data-ws-qadd="' + qt.key + '">+ Add row</button> <button class="btn ghost" data-ws-qfill="' + qt.key + '">Fill expected tube IDs</button></div>'
+              + '<label class="who" style="display:block">Note for this group: <input class="ws-qnote" data-qt="' + qt.key + '" value="' + escAttr(w.qubitNotes[qt.key] || '') + '" style="width:60%"></label>';
           }).join('');
         })() : '')
       + '<h3 style="margin-top:18px">Notes</h3><textarea id="wsNotes" style="width:100%;min-height:80px">' + esc(w.notes || '') + '</textarea>'
@@ -251,8 +268,31 @@
     const addRow = $('#wsAddRow'); if (addRow) addRow.addEventListener('click', () => { w.counts.push(cfg.countCols.map(() => '')); renderWorksheet(type); });
     host.querySelectorAll('button[data-ws-delrow]').forEach((b) => b.addEventListener('click', () => { w.counts.splice(+b.dataset.wsDelrow, 1); if (!w.counts.length) w.counts.push(cfg.countCols.map(() => '')); renderWorksheet(type); }));
     host.querySelectorAll('.ws-qb').forEach((el) => el.addEventListener('input', () => { w.qubit[el.dataset.qt][+el.dataset.r][+el.dataset.c] = el.value; }));
-    host.querySelectorAll('button[data-ws-qadd]').forEach((b) => b.addEventListener('click', () => { const k = b.dataset.wsQadd; (w.qubit[k] = w.qubit[k] || []).push(['', '', '']); renderWorksheet(type); }));
-    host.querySelectorAll('button[data-ws-qdel]').forEach((b) => b.addEventListener('click', () => { const p = b.dataset.wsQdel.split('|'); const k = p[0], ri = +p[1]; w.qubit[k].splice(ri, 1); if (!w.qubit[k].length) w.qubit[k].push(['', '', '']); renderWorksheet(type); }));
+    host.querySelectorAll('button[data-ws-qadd]').forEach((b) => b.addEventListener('click', () => { const k = b.dataset.wsQadd; (w.qubit[k] = w.qubit[k] || []).push(['', '', '', '']); renderWorksheet(type); }));
+    host.querySelectorAll('button[data-ws-qdel]').forEach((b) => b.addEventListener('click', () => { const p = b.dataset.wsQdel.split('|'); const k = p[0], ri = +p[1]; w.qubit[k].splice(ri, 1); if (!w.qubit[k].length) w.qubit[k].push(['', '', '', '']); renderWorksheet(type); }));
+    host.querySelectorAll('button[data-ws-qfill]').forEach((b) => b.addEventListener('click', () => { const k = b.dataset.wsQfill; const exp = qubitExpectedTubes(k); if (!exp.length) { alert('No expected tube IDs \u2014 build the plan first.'); return; }
+      const existing = {}; (w.qubit[k] || []).forEach((r) => { if (r[0]) existing[r[0]] = r; });
+      w.qubit[k] = exp.map((t) => existing[t] || [t, '', '', '']); renderWorksheet(type); }));
+    host.querySelectorAll('.ws-qnote').forEach((el) => el.addEventListener('input', () => { w.qubitNotes = w.qubitNotes || {}; w.qubitNotes[el.dataset.qt] = el.value; }));
+    // spreadsheet-style keyboard nav: Enter / arrows move between rows
+    host.querySelectorAll('.ws-qb').forEach((el) => el.addEventListener('keydown', (e) => {
+      if (e.key !== 'Enter' && e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
+      const qtk = el.dataset.qt, r = +el.dataset.r, c = +el.dataset.c;
+      if (e.key === 'ArrowUp') { const t = host.querySelector('.ws-qb[data-qt="' + qtk + '"][data-r="' + (r - 1) + '"][data-c="' + c + '"]'); if (t) { e.preventDefault(); t.focus(); t.select && t.select(); } return; }
+      e.preventDefault();
+      let t = host.querySelector('.ws-qb[data-qt="' + qtk + '"][data-r="' + (r + 1) + '"][data-c="' + c + '"]');
+      if (!t) { w.qubit[qtk].push(['', '', '', '']); renderWorksheet(type); t = host.querySelector('.ws-qb[data-qt="' + qtk + '"][data-r="' + (r + 1) + '"][data-c="' + c + '"]'); }
+      if (t) { t.focus(); t.select && t.select(); }
+    }));
+    // drag the fill handle down to autopopulate lower rows
+    host.querySelectorAll('.qb-fill').forEach((h) => h.addEventListener('mousedown', (e) => {
+      e.preventDefault(); const qtk = h.dataset.qt, sr = +h.dataset.r, c = +h.dataset.c; const val = w.qubit[qtk][sr][c];
+      const rowEls = Array.prototype.slice.call(host.querySelectorAll('.ws-qb[data-qt="' + qtk + '"][data-c="' + c + '"]'));
+      let lastR = sr;
+      const onMove = (ev) => { const under = document.elementFromPoint(ev.clientX, ev.clientY); const cell = under && under.closest && under.closest('.qb-cell'); const inp = cell && cell.querySelector('.ws-qb[data-qt="' + qtk + '"][data-c="' + c + '"]'); if (inp) { lastR = +inp.dataset.r; rowEls.forEach((el) => { const rr = +el.dataset.r; el.style.background = (rr > sr && rr <= lastR) ? '#eef4fb' : ''; }); } };
+      const onUp = () => { document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseup', onUp); for (let rr = sr + 1; rr <= lastR; rr++) { if (w.qubit[qtk][rr]) w.qubit[qtk][rr][c] = val; } renderWorksheet(type); };
+      document.addEventListener('mousemove', onMove); document.addEventListener('mouseup', onUp);
+    }));
     const save = $('#wsSave'); if (save) save.addEventListener('click', () => saveWorksheet(rec, type));
     const reload = $('#wsReload'); if (reload) reload.addEventListener('click', () => reloadWorksheetFromDrive(rec, type));
   }
@@ -265,7 +305,7 @@
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([['Experiment ID', w.expId || ''], ['Operator', w.operator || ''], ['Date', w.date || ''], ['Notes', w.notes || '']]), 'Info');
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([['10X kit', 'PN', 'Lot #', 'Rxns used', 'Notes']].concat(w.kits.map((k) => [k.kit, k.pn, k.lot, k.rxns, k.notes]))), 'Kit lots');
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([cfg.countCols].concat(w.counts)), 'Cell counts');
-    if (w.qubit && !Array.isArray(w.qubit)) { QUBIT_TABLES.forEach((qt) => { const rowsQ = (w.qubit[qt.key] || []).filter((r) => r.some((c) => c !== '')); if (rowsQ.length) XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([['Tube ID', 'Qubit dilution', 'Qubit conc (ng/µL)']].concat(rowsQ)), ('Qubit ' + qt.title).slice(0, 31)); }); }
+    if (w.qubit && !Array.isArray(w.qubit)) { QUBIT_TABLES.forEach((qt) => { const rowsQ = (w.qubit[qt.key] || []).filter((r) => r.some((c) => c !== '')); if (rowsQ.length) { const note = (w.qubitNotes && w.qubitNotes[qt.key]) ? [['Note', w.qubitNotes[qt.key]], []] : []; XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(note.concat([['Tube ID', 'Qubit dilution', 'Qubit conc (ng/µL)', 'Prep round']]).concat(rowsQ)), ('Qubit ' + qt.title).slice(0, 31)); } }); }
     const b64 = XLSX.write(wb, { type: 'base64', bookType: 'xlsx' });
     const expId2 = rec.experimentId || projectLabel(rec.name || 'experiment');
     const req = rec.driveFolderId ? { action: 'ensurePath', parentId: rec.driveFolderId, subPath: ['data', 'worksheets'] } : { action: 'ensurePath', project: rec.project || CURRENT_PROJECT, experiment: rec.name || 'Experiment', subPath: ['data', 'worksheets'] };
@@ -502,6 +542,7 @@
         + '<td><select class="ts-arm" data-i="' + i + '">' + armOptions(w.arm) + '</select></td>'
         + '<td><select class="ts-type" data-i="' + i + '">' + typeOptions(w.arm, w.sampleType) + '</select></td>'
         + '<td><select class="ts-no" data-i="' + i + '">' + noOptions(w.sampleNo) + '</select></td>'
+        + '<td><input class="ts-round" data-i="' + i + '" type="number" min="1" value="' + escAttr(w.round || 1) + '" style="width:52px" title="Prep round (1 = first prep, 2 = re-prep)"></td>'
         + '<td class="who">' + esc(tsLaneName(w)) + '</td>'
         + '<td class="num">' + esc(w.conc) + '</td>'
         + '<td><input class="ts-dil" data-i="' + i + '" value="' + escAttr(w.dilution) + '" placeholder="e.g. 1:5" style="width:70px"></td>'
@@ -510,7 +551,7 @@
       editUI = '<h3>This run <span class="who">' + esc(TS_PENDING.fileName) + '</span></h3>'
         + '<div class="row-actions" style="margin:6px 0"><label>Run notes <input id="tsNotes" style="width:300px" value="' + escAttr(TS_PENDING.notes) + '"></label></div>'
         + '<p class="step-hint">Tag each lane: <strong>experimental section</strong> \u2192 <strong>sample type</strong> \u2192 <strong>sample #</strong> (auto-filled from the descriptions where possible). The full ID (e.g. \u201cASAP A9-ATAC\u201d) is built from those. Enter the dilution used and any notes.</p>'
-        + '<div style="overflow:auto"><table class="cost-table"><thead><tr><th>Well</th><th>Original name (from file)</th><th>Section</th><th>Type</th><th>Sample #</th><th>Full ID</th><th class="num">Conc [pg/\u00b5l]</th><th>Dilution</th><th>Notes</th><th>Trace</th></tr></thead><tbody>' + rows + '</tbody></table></div>'
+        + '<div style="overflow:auto"><table class="cost-table"><thead><tr><th>Well</th><th>Original name (from file)</th><th>Section</th><th>Type</th><th>Sample #</th><th title="Prep round (1 = first prep, 2 = re-prep)">Round</th><th>Full ID</th><th class="num">Conc [pg/\u00b5l]</th><th>Dilution</th><th>Notes</th><th>Trace</th></tr></thead><tbody>' + rows + '</tbody></table></div>'
         + '<div class="row-actions" style="margin-top:12px"><button class="btn primary" id="tsSave">Save run + upload to Drive</button> <button class="btn ghost" id="tsCancel">Cancel</button></div>'
         + '<div id="tsStatus" class="muted" style="margin-top:8px"></div>';
     }
@@ -534,6 +575,7 @@
     host.querySelectorAll('.ts-arm').forEach((el) => el.addEventListener('change', () => { const w = TS_PENDING.wells[+el.dataset.i]; w.arm = el.value; const types = (TS_ARMS[w.arm] && TS_ARMS[w.arm].types) || []; if (types.indexOf(w.sampleType) < 0) w.sampleType = ''; renderTapestation(); }));
     host.querySelectorAll('.ts-type').forEach((el) => el.addEventListener('change', () => { const w = TS_PENDING.wells[+el.dataset.i]; w.sampleType = el.value; el.closest('tr').querySelector('.who').textContent = tsLaneName(w); }));
     host.querySelectorAll('.ts-no').forEach((el) => el.addEventListener('change', () => { const w = TS_PENDING.wells[+el.dataset.i]; w.sampleNo = el.value; el.closest('tr').querySelector('.who').textContent = tsLaneName(w); }));
+    host.querySelectorAll('.ts-round').forEach((el) => el.addEventListener('input', () => { TS_PENDING.wells[+el.dataset.i].round = el.value; }));
     host.querySelectorAll('.ts-dil').forEach((el) => el.addEventListener('input', () => { TS_PENDING.wells[+el.dataset.i].dilution = el.value; }));
     host.querySelectorAll('.ts-note').forEach((el) => el.addEventListener('input', () => { TS_PENDING.wells[+el.dataset.i].note = el.value; }));
     const cancel = $('#tsCancel'); if (cancel) cancel.addEventListener('click', () => { TS_PENDING = null; renderTapestation(); });
@@ -601,7 +643,7 @@
         const runs = res.runs || [];
         if (!runs.length) { if (stEl) stEl.textContent = ' No lane-tags sheets found in Drive for this experiment.'; return; }
         rec.tapestation = runs.map((r) => ({ runName: r.runName, notes: r.notes || '', folder: r.folder,
-          wells: (r.wells || []).map((w) => ({ well: w.well, arm: w.arm || '', sampleType: w.sampleType || '', sampleNo: w.sampleNo || '', name: w.name || tsLaneName(w), description: w.description || '', conc: w.conc || '', dilution: w.dilution || '', note: w.note || '', peaks: w.peaks || [], imgFileId: w.imgFileId || '', imgKey: tsImgKey(rec.id, r.runName, w.well) })) }));
+          wells: (r.wells || []).map((w) => ({ well: w.well, arm: w.arm || '', sampleType: w.sampleType || '', sampleNo: w.sampleNo || '', round: w.round || 1, name: w.name || tsLaneName(w), description: w.description || '', conc: w.conc || '', dilution: w.dilution || '', note: w.note || '', peaks: w.peaks || [], imgFileId: w.imgFileId || '', imgKey: tsImgKey(rec.id, r.runName, w.well) })) }));
         Store.saveExperiment(rec);
         if (stEl) stEl.textContent = ' Loaded ' + runs.length + ' run(s) from Drive.';
         renderTapestation();
@@ -635,8 +677,8 @@
         TS_PENDING._imgFileByWell = imgFileByWell;
         // Durable lane-tags Google Sheet (source of truth for tags + notes, survives any record reset)
         stEl.textContent = 'Saving lane tags\u2026';
-        const tagRows = [['Well', 'Original name', 'Section', 'Type', 'Sample #', 'Full ID', 'Dilution', 'Conc [pg/µl]', 'Notes', 'Peaks (JSON)']];
-        TS_PENDING.wells.forEach((w) => tagRows.push([w.well, w.description || '', w.arm || '', w.sampleType || '', w.sampleNo || '', tsLaneName(w), w.dilution || '', w.conc || '', w.note || '', JSON.stringify(w.peaks || [])]));
+        const tagRows = [['Well', 'Original name', 'Section', 'Type', 'Sample #', 'Round', 'Full ID', 'Dilution', 'Conc [pg/µl]', 'Notes', 'Peaks (JSON)']];
+        TS_PENDING.wells.forEach((w) => tagRows.push([w.well, w.description || '', w.arm || '', w.sampleType || '', w.sampleNo || '', w.round || 1, tsLaneName(w), w.dilution || '', w.conc || '', w.note || '', JSON.stringify(w.peaks || [])]));
         const tagWb = XLSX.utils.book_new();
         XLSX.utils.book_append_sheet(tagWb, XLSX.utils.aoa_to_sheet([['Run', TS_PENDING.runName], ['Run notes', TS_PENDING.notes || ''], ['Saved', new Date().toISOString().slice(0, 16).replace('T', ' ')]]), 'Run info');
         XLSX.utils.book_append_sheet(tagWb, XLSX.utils.aoa_to_sheet(tagRows), 'Lane tags');
@@ -646,7 +688,7 @@
         rec.tapestation = rec.tapestation || [];
         rec.tapestation.push({ runName: TS_PENDING.runName, notes: TS_PENDING.notes || '', folder: runFolder, fileCount: files.length, savedAt: new Date().toISOString().slice(0, 10),
           wells: TS_PENDING.wells.map((w) => { let imgKey = ''; if (w.img) { imgKey = tsImgKey(rec.id, TS_PENDING.runName, w.well); tsSetImg(imgKey, w.img); }
-            return { well: w.well, arm: w.arm || '', sampleType: w.sampleType || '', sampleNo: w.sampleNo || '', name: tsLaneName(w), description: w.description, conc: w.conc, dilution: w.dilution, note: w.note, imgKey: imgKey, imgFileId: (TS_PENDING._imgFileByWell && TS_PENDING._imgFileByWell[w.well]) || '', peaks: w.peaks || [] }; }) });
+            return { well: w.well, arm: w.arm || '', sampleType: w.sampleType || '', sampleNo: w.sampleNo || '', round: w.round || 1, name: tsLaneName(w), description: w.description, conc: w.conc, dilution: w.dilution, note: w.note, imgKey: imgKey, imgFileId: (TS_PENDING._imgFileByWell && TS_PENDING._imgFileByWell[w.well]) || '', peaks: w.peaks || [] }; }) });
         Store.saveExperiment(rec);
         TS_PENDING = null; renderTapestation();
       })
@@ -1171,7 +1213,7 @@
   // pulling in Qubit + TapeStation conc/traces, with editable status/cycles and a
   // repeatable "attempts" log for libraries prepped more than once. =====
   const LIB_ARM_TYPES = {
-    "5' unsort": ['GEX', 'ADT/CSP', 'TCR', 'BCR', 'HTO'],
+    "5' unsort": ['GEX', 'ADT/CSP', 'TCR', 'BCR'],
     'ASAP': ['ATAC', 'ADT', 'HTO'],
     "5' sort": ['GEX', 'ADT/CSP', 'TCR', 'BCR']
   };
@@ -1233,11 +1275,13 @@
     if (!sections.length) { host.innerHTML = '<h2>Library status</h2><p class="empty">Build a plan (and/or upload TapeStation) so libraries can be listed here.</p>'; return; }
     // TapeStation index by arm|type|laneNo
     const tsIdx = {};
-    (rec.tapestation || []).forEach((run) => (run.wells || []).forEach((w) => { const k = (w.arm || '') + '|' + (w.sampleType || '') + '|' + (w.sampleNo || ''); if (!tsIdx[k]) tsIdx[k] = { concs: [], imgs: [] }; if (w.conc) tsIdx[k].concs.push(w.conc); if (w.imgFileId || w.imgKey || w.img) tsIdx[k].imgs.push(w); }));
-    // Qubit index
+    (rec.tapestation || []).forEach((run) => (run.wells || []).forEach((w) => { const rd = w.round || 1; const k = (w.arm || '') + '|' + (w.sampleType || '') + '|' + (w.sampleNo || '') + '|' + rd; if (!tsIdx[k]) tsIdx[k] = { concs: [], imgs: [] }; if (w.conc) tsIdx[k].concs.push(w.conc); if (w.imgFileId || w.imgKey || w.img) tsIdx[k].imgs.push(w); }));
+    // Qubit index: base tube (minus -N suffix) + round (from suffix or the Prep round column)
     const qt = (rec.worksheets && rec.worksheets.library && rec.worksheets.library.qubit) || {};
-    const qAll = []; if (qt && !Array.isArray(qt)) QUBIT_TABLES.forEach((t) => (qt[t.key] || []).forEach((r) => { if (r && r[0]) qAll.push({ tube: String(r[0]), conc: r[2] || '', stage: t.title, key: t.key }); }));
-    const qubitFor = (lib) => qAll.filter((q) => q.tube.toUpperCase().indexOf(lib.id.toUpperCase()) >= 0);
+    const qAll = []; if (qt && !Array.isArray(qt)) QUBIT_TABLES.forEach((t) => (qt[t.key] || []).forEach((r) => { if (r && r[0]) { const tube = String(r[0]); const m = tube.match(/-(\d+)\s*$/); const round = m ? Number(m[1]) : (parseInt(r[3], 10) || 1); const base = tube.replace(/-\d+\s*$/, ''); qAll.push({ tube: tube, base: base, round: round, conc: r[2] || '', stage: t.title }); } }));
+    const qubitForRound = (lib, round) => qAll.filter((q) => q.base.toUpperCase() === lib.id.toUpperCase() && q.round === round);
+    const roundsForLib = (lib) => { const rs = new Set([1]); qAll.forEach((q) => { if (q.base.toUpperCase() === lib.id.toUpperCase()) rs.add(q.round); }); Object.keys(tsIdx).forEach((k) => { const p = k.split('|'); if (p[0] === lib.arm && p[1] === lib.type && String(p[2]) === String(lib.laneNo)) rs.add(Number(p[3])); }); const st = rec.libStatus[lib.id] || {}; Object.keys(st.rounds || {}).forEach((r) => rs.add(Number(r))); return Array.prototype.slice.call(rs).sort((a, b) => a - b); };
+    const tsForRound = (lib, round) => tsIdx[lib.arm + '|' + lib.type + '|' + lib.laneNo + '|' + round] || { concs: [], imgs: [] };
     // cDNA input Qubit for a lane (from the 5' cDNA table, tube containing prefix+laneNo)
     const cdnaQubitFor = (pfx, laneNo) => { const tag = (pfx + laneNo).toUpperCase(); const hit = (qt.cdna5 || []).filter((r) => r && r[0] && String(r[0]).toUpperCase().indexOf(tag) >= 0)[0]; return hit ? (hit[2] || '') : ''; };
     const statusOf = (id) => (rec.libStatus[id] && rec.libStatus[id].status) || 'In progress';
@@ -1250,7 +1294,7 @@
     rec.libMilestones = rec.libMilestones || {};
     const milestonesFor = (sec) => {
       const types = sec.groups.map((g) => g.type).filter((t) => t !== 'cDNA');
-      const shared = sec.arm === 'ASAP' ? ['GEM generation'] : ['GEM generation', 'cDNA amplification'];
+      const shared = sec.arm === 'ASAP' ? ['GEM generation'] : ['GEM generation', 'cDNA-pellet', 'cDNA-supernatant'];
       return shared.concat(types.map((t) => t + ' library'));
     };
     let summary = '<div class="lib-summary">';
@@ -1279,8 +1323,8 @@
       }
       // flags for this modality
       const flags = (rec.libFlags || []).map((f, fi) => ({ f: f, fi: fi })).filter((x) => x.f.arm === sec.arm);
-      if (flags.length) body += '<div class="lib-flags">' + flags.map((x) => '<div class="lib-flag">\u2691 ' + esc(x.f.note || '') + (editable ? ' <button class="btn tiny" data-flag-del="' + x.fi + '">\u2715</button>' : '') + '</div>').join('') + '</div>';
-      if (!editable) body += '<div class="row-actions" style="margin:4px 0"><input class="lib-flag-note" data-arm="' + escAttr(sec.arm) + '" placeholder="flag note (e.g. CSP needs re-prep)" style="width:280px"> <button class="btn ghost tiny" data-flag-add="' + escAttr(sec.arm) + '">+ Add flag</button></div>';
+      if (flags.length) body += '<div class="lib-flags">' + flags.map((x) => '<div class="lib-flag">\u2691 ' + esc(x.f.note || '') + ' <button class="btn tiny" data-flag-del="' + x.fi + '">\u2715</button></div>').join('') + '</div>';
+      body += '<div class="row-actions" style="margin:4px 0"><input class="lib-flag-note" data-arm="' + escAttr(sec.arm) + '" placeholder="flag note (e.g. CSP needs re-prep)" style="width:280px"> <button class="btn ghost tiny" data-flag-add="' + escAttr(sec.arm) + '">+ Add flag</button></div>';
       sec.groups.forEach((g) => {
         const gkey = g.arm + '|' + g.type; const open = !!LIBSTATUS_OPEN[gkey];
         const counts = {}; g.libs.forEach((l) => { const st = statusOf(l.id); counts[st] = (counts[st] || 0) + 1; });
@@ -1289,31 +1333,38 @@
         const showCdnaIn = (g.arm !== 'ASAP') && !isCdna;
         body += '<div class="lib-group' + (isCdna ? ' lib-group-cdna' : '') + '"><div class="lib-group-head"><span class="lib-grp-title" data-lib-grp="' + escAttr(gkey) + '"><span class="lib-caret">' + (open ? '\u25be' : '\u25b8') + '</span> ' + (isCdna ? '<em>cDNA (input)</em>' : '<strong>' + esc(g.type) + '</strong>') + ' <span class="who">(' + g.libs.length + ' \u00b7 ' + summ + ')</span></span></div>';
         if (open) {
-          body += '<div style="overflow:auto"><table class="cost-table"><thead><tr><th>Library</th><th>Status</th><th class="num">Cycles</th>' + (showCdnaIn ? '<th class="num">cDNA input (ng/µL)</th>' : '') + '<th>Qubit (ng/µL)</th><th class="num">TapeStation</th><th>Trace</th><th>Attempts</th><th>Note</th></tr></thead><tbody>';
+          body += '<div style="overflow:auto"><table class="cost-table"><thead><tr><th>Library</th><th>Status</th><th class="num">Cycles</th>' + (showCdnaIn ? '<th class="num">Input cDNA qubit conc (ng/µL)</th>' : '') + '<th>Library qubit conc (ng/µL)</th><th class="num">TapeStation</th><th>Trace</th><th>Preps</th><th>Note</th></tr></thead><tbody>';
+          const roundInp = (f, id, rd, val, wd) => editable ? ('<input class="lib-rf" data-k="' + escAttr(id) + '" data-round="' + rd + '" data-f="' + f + '" value="' + escAttr(val || '') + '" style="width:' + wd + 'px">') : esc(val || '\u2014');
           g.libs.forEach((l) => {
-            const st = rec.libStatus[l.id] || {};
-            const ts = tsIdx[l.arm + '|' + l.type + '|' + l.laneNo] || { concs: [], imgs: [] };
-            const qb = qubitFor(l).map((q) => esc(q.conc)).filter((x) => x).join('<br>');
+            const st = rec.libStatus[l.id] = rec.libStatus[l.id] || {}; st.rounds = st.rounds || {};
+            const rounds = roundsForLib(l); const chosen = Number(st.chosen) || rounds[rounds.length - 1]; const cr = st.rounds[chosen] || {};
             const cdIn = isCdna ? '' : cdnaQubitFor(sec.pfx, l.laneNo);
-            const trace = ts.imgs.length ? ts.imgs.map((w, ti) => '<img src="' + tsGetImgSrc(w) + '" class="ts-zoom lib-thumb" data-caption="' + escAttr(l.name + (ts.imgs.length > 1 ? ' (' + (ti + 1) + ')' : '')) + '" loading="lazy">').join(' ') : '\u2014';
-            const nAtt = (st.attempts || []).length;
-            const attBtn = (editable || nAtt) ? ('<button class="btn tiny" data-lib-att="' + escAttr(l.id) + '">' + (nAtt ? nAtt + ' \u25be' : '+ log') + '</button>') : '\u2014';
-            body += '<tr><td><strong>' + esc(l.id) + '</strong></td>'
+            const qbC = qubitForRound(l, chosen).map((q) => esc(q.conc)).filter((x) => x).join('<br>');
+            const tsC = tsForRound(l, chosen);
+            const traceC = tsC.imgs.length ? tsC.imgs.map((w, ti) => '<img src="' + tsGetImgSrc(w) + '" class="ts-zoom lib-thumb" data-caption="' + escAttr(l.id + (chosen > 1 ? '-' + chosen : '')) + '" loading="lazy">').join(' ') : '\u2014';
+            const prepBtn = '<button class="btn tiny" data-lib-att="' + escAttr(l.id) + '">' + rounds.length + ' prep' + (rounds.length === 1 ? '' : 's') + ' \u25be</button>';
+            body += '<tr><td><strong>' + esc(l.id) + '</strong>' + (rounds.length > 1 ? ' <span class="who">\u2192 seq prep ' + chosen + '</span>' : '') + '</td>'
               + '<td>' + statusSel(l.id, st.status) + '</td>'
-              + '<td class="num">' + inp('lib-cyc', l.id, st.cycles, 56) + '</td>'
+              + '<td class="num">' + roundInp('cycles', l.id, chosen, cr.cycles, 56) + '</td>'
               + (showCdnaIn ? '<td class="num who">' + (cdIn || '\u2014') + '</td>' : '')
-              + '<td class="who">' + (qb || '\u2014') + '</td>'
-              + '<td class="num">' + (ts.concs.length ? esc(ts.concs.join(', ')) : '\u2014') + '</td>'
-              + '<td>' + trace + '</td>'
-              + '<td>' + attBtn + '</td>'
-              + '<td class="who">' + inp('lib-note', l.id, st.note, 140, 'note') + '</td></tr>';
+              + '<td class="who">' + (qbC || '\u2014') + '</td>'
+              + '<td class="num">' + (tsC.concs.length ? esc(tsC.concs.join(', ')) : '\u2014') + '</td>'
+              + '<td>' + traceC + '</td>'
+              + '<td>' + prepBtn + '</td>'
+              + '<td class="who">' + roundInp('note', l.id, chosen, cr.note, 140) + '</td></tr>';
             if (LIBSTATUS_OPEN['A:' + l.id]) {
-              const att = st.attempts || []; const cspan = showCdnaIn ? 8 : 7;
-              body += '<tr class="lib-att-row"><td></td><td colspan="' + cspan + '"><div class="lib-att"><table class="cost-table"><thead><tr><th>#</th><th>Date</th><th>Stage</th><th>Qubit</th><th class="num">Cycles</th><th>Status</th><th>Note</th>' + (editable ? '<th></th>' : '') + '</tr></thead><tbody>'
-                + att.map((a, ai) => '<tr><td>' + (ai + 1) + '</td>'
-                    + ['date', 'stage', 'qubit', 'cycles', 'status', 'note'].map((f) => '<td' + (f === 'cycles' ? ' class="num"' : '') + '>' + (editable ? '<input class="la-f" data-k="' + escAttr(l.id) + '" data-i="' + ai + '" data-f="' + f + '" value="' + escAttr(a[f] || '') + '" style="width:' + (f === 'note' ? 130 : (f === 'cycles' ? 50 : 90)) + 'px">' : esc(a[f] || '\u2014')) + '</td>').join('')
-                    + (editable ? '<td><button class="btn tiny" data-la-del="' + escAttr(l.id) + '" data-i="' + ai + '">\u2715</button></td>' : '') + '</tr>').join('')
-                + '</tbody></table>' + (editable ? '<div class="row-actions" style="margin-top:6px"><button class="btn ghost tiny" data-la-add="' + escAttr(l.id) + '">+ Add attempt</button></div>' : '') + '</div></td></tr>';
+              const cspan = showCdnaIn ? 8 : 7;
+              body += '<tr class="lib-att-row"><td></td><td colspan="' + cspan + '"><div class="lib-att"><table class="cost-table"><thead><tr><th>Send for seq</th><th>Prep</th><th>Library qubit conc (ng/µL)</th><th class="num">Cycles</th><th class="num">TapeStation</th><th>Traces</th><th>Note</th></tr></thead><tbody>'
+                + rounds.map((rd) => { const rr = st.rounds[rd] || {}; const qbr = qubitForRound(l, rd).map((q) => esc(q.conc)).filter((x) => x).join('<br>'); const tsr = tsForRound(l, rd);
+                    const tr = tsr.imgs.length ? tsr.imgs.map((w, ti) => '<img src="' + tsGetImgSrc(w) + '" class="ts-zoom lib-thumb" data-caption="' + escAttr(l.id + (rd > 1 ? '-' + rd : '') + ' (' + (ti + 1) + ')') + '" loading="lazy">').join(' ') : '\u2014';
+                    return '<tr' + (rd === chosen ? ' class="lib-chosen"' : '') + '><td>' + (editable ? '<input type="radio" name="seq-' + escAttr(l.id) + '" class="lib-choose" data-k="' + escAttr(l.id) + '" data-round="' + rd + '"' + (rd === chosen ? ' checked' : '') + '>' : (rd === chosen ? '\u2713' : '')) + '</td>'
+                      + '<td><strong>' + esc(l.id + (rd > 1 ? '-' + rd : '')) + '</strong> <span class="who">prep ' + rd + '</span></td>'
+                      + '<td class="who">' + (qbr || '\u2014') + '</td>'
+                      + '<td class="num">' + roundInp('cycles', l.id, rd, rr.cycles, 50) + '</td>'
+                      + '<td class="num">' + (tsr.concs.length ? esc(tsr.concs.join(', ')) : '\u2014') + '</td>'
+                      + '<td>' + tr + '</td>'
+                      + '<td class="who">' + roundInp('note', l.id, rd, rr.note, 130) + '</td></tr>'; }).join('')
+                + '</tbody></table>' + (editable ? '<div class="row-actions" style="margin-top:6px"><button class="btn ghost tiny" data-prep-add="' + escAttr(l.id) + '">+ Add prep round</button></div>' : '') + '</div></td></tr>';
             }
           });
           body += '</tbody></table></div>';
@@ -1328,7 +1379,7 @@
 
     host.querySelectorAll('[data-lib-grp]').forEach((el) => el.addEventListener('click', () => { const k = el.dataset.libGrp; LIBSTATUS_OPEN[k] = !LIBSTATUS_OPEN[k]; renderLibStatus(hostId, editable); }));
     host.querySelectorAll('.ts-zoom').forEach((img) => img.addEventListener('click', () => openImageLightbox(img.src, img.getAttribute('data-caption') || '')));
-    host.querySelectorAll('button[data-lib-att]').forEach((b) => b.addEventListener('click', () => { const k = 'A:' + b.dataset.libAtt; LIBSTATUS_OPEN[k] = !LIBSTATUS_OPEN[k]; if (editable && LIBSTATUS_OPEN[k]) { const id = b.dataset.libAtt; rec.libStatus[id] = rec.libStatus[id] || {}; rec.libStatus[id].attempts = rec.libStatus[id].attempts || []; if (!rec.libStatus[id].attempts.length) { rec.libStatus[id].attempts.push({ date: '', stage: '', qubit: '', cycles: '', status: '', note: '' }); Store.saveExperiment(rec); } } renderLibStatus(hostId, editable); }));
+    host.querySelectorAll('button[data-lib-att]').forEach((b) => b.addEventListener('click', () => { const k = 'A:' + b.dataset.libAtt; LIBSTATUS_OPEN[k] = !LIBSTATUS_OPEN[k]; renderLibStatus(hostId, editable); }));
     host.querySelectorAll('button[data-flag-add]').forEach((b) => b.addEventListener('click', () => {
       const arm = b.dataset.flagAdd; const inpEl = b.parentNode.querySelector('.lib-flag-note'); const note = inpEl ? inpEl.value.trim() : '';
       if (!note) return; rec.libFlags = rec.libFlags || []; rec.libFlags.push({ arm: arm, note: note, at: new Date().toISOString().slice(0, 10) }); Store.saveExperiment(rec); renderLibStatus(hostId, editable);
@@ -1342,9 +1393,9 @@
     host.querySelectorAll('.lib-st').forEach((el) => el.addEventListener('change', () => { const k = el.dataset.k; rec.libStatus[k] = rec.libStatus[k] || {}; rec.libStatus[k].status = el.value; save(); renderLibStatus(hostId, editable); }));
     host.querySelectorAll('.lib-cyc').forEach((el) => el.addEventListener('change', () => { const k = el.dataset.k; rec.libStatus[k] = rec.libStatus[k] || {}; rec.libStatus[k].cycles = el.value; save(); }));
     host.querySelectorAll('.lib-note').forEach((el) => el.addEventListener('change', () => { const k = el.dataset.k; rec.libStatus[k] = rec.libStatus[k] || {}; rec.libStatus[k].note = el.value; save(); }));
-    host.querySelectorAll('.la-f').forEach((el) => el.addEventListener('change', () => { const k = el.dataset.k, i = +el.dataset.i, f = el.dataset.f; rec.libStatus[k].attempts[i][f] = el.value; save(); }));
-    host.querySelectorAll('button[data-la-add]').forEach((b) => b.addEventListener('click', () => { const k = b.dataset.laAdd; rec.libStatus[k].attempts.push({ date: '', stage: '', qubit: '', cycles: '', status: '', note: '' }); save(); renderLibStatus(hostId, editable); }));
-    host.querySelectorAll('button[data-la-del]').forEach((b) => b.addEventListener('click', () => { const k = b.dataset.laDel, i = +b.dataset.i; rec.libStatus[k].attempts.splice(i, 1); save(); renderLibStatus(hostId, editable); }));
+    host.querySelectorAll('.lib-rf').forEach((el) => el.addEventListener('change', () => { const k = el.dataset.k, rd = el.dataset.round, f = el.dataset.f; rec.libStatus[k] = rec.libStatus[k] || {}; rec.libStatus[k].rounds = rec.libStatus[k].rounds || {}; rec.libStatus[k].rounds[rd] = rec.libStatus[k].rounds[rd] || {}; rec.libStatus[k].rounds[rd][f] = el.value; save(); }));
+    host.querySelectorAll('.lib-choose').forEach((el) => el.addEventListener('change', () => { const k = el.dataset.k; rec.libStatus[k] = rec.libStatus[k] || {}; rec.libStatus[k].chosen = Number(el.dataset.round); save(); renderLibStatus(hostId, editable); }));
+    host.querySelectorAll('button[data-prep-add]').forEach((b) => b.addEventListener('click', () => { const k = b.dataset.prepAdd; rec.libStatus[k] = rec.libStatus[k] || {}; rec.libStatus[k].rounds = rec.libStatus[k].rounds || {}; const rs = Object.keys(rec.libStatus[k].rounds).map(Number); const next = (rs.length ? Math.max.apply(null, rs) : 1) + 1; rec.libStatus[k].rounds[next] = {}; save(); renderLibStatus(hostId, editable); }));
   }
   function renderReviewWorksheets() {
     const host = $('#revWorksheetsContent'); if (!host) return;
@@ -1929,7 +1980,8 @@
     thawCapacity: { title: 'Thaw capacity', body: 'People available \u00d7 max samples one person can thaw in the working window (19). Exceeding it means you should add a person or split the thaw across days.' },
     confounderSpread: { title: 'Confounder spread', body: 'A 0\u2013100% score for how evenly a flagged confounder\u2019s values (e.g. timepoints, conditions) are distributed across the genetic pools. 100% means each pool has a near-identical mix; a low score means some pools are dominated by one value (e.g. a pool that is almost all V00), which can confound batch effects with biology. The pooling algorithm maximizes this while never breaking the hard same-patient / same-lineage rule.' },
     laneEdit: { title: 'Adjusting lanes per modality', body: 'The tool computes lane counts to hit your per-sample cell targets. You can override any modality here \u2014 e.g. drop ASAP from 16 to 14 lanes to save reagents. Cells recovered per sample scale roughly linearly with lanes (\u2248 lanes \u00d7 recovered cells/lane \u00f7 samples), so fewer lanes means fewer cells/sample. The ~cells/sample figure is an estimate to help you weigh the trade-off; your chosen lane counts flow through to tube labels, the chip layout, index assignments, and the reagent/cost estimate. Reducing lanes below the computed value means you should confirm the resulting cells/sample is still adequate for your assay.' },
-    poolComposition: { title: 'Pool composition & ALLCELLS', body: 'Each genetic pool combines the per-sample pooled contributions of its members, plus an even share of the batch-wide ALLCELLS control (ALLCELLS % \u00d7 one sample\u2019s pool contribution, split across all pools). ALLCELLS is a common reference aliquot loaded into every pool so cross-pool batch effects can be normalized during analysis.' }
+    poolComposition: { title: 'Pool composition & ALLCELLS', body: 'Each genetic pool combines the per-sample pooled contributions of its members, plus an even share of the batch-wide ALLCELLS control (ALLCELLS % \u00d7 one sample\u2019s pool contribution, split across all pools). ALLCELLS is a common reference aliquot loaded into every pool so cross-pool batch effects can be normalized during analysis.' },
+    prepRound: { title: 'Prep round', body: 'Which attempt at preparing this library the Qubit reading is from \u2014 e.g. 1 for the first prep, 2 if the library had to be re-prepared. This lets you keep Qubit values from repeat preps distinct (a library that was made twice will have a round-1 and a round-2 reading), and ties into the Attempts log on Library status.' }
   };
 
   function infoDot(key) {
