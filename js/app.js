@@ -395,6 +395,7 @@
     return parts.join(' ') || (w.description || w.well);
   }
   let TS_PENDING = null;   // { fileName, base64(zip), runName, part, notes, wells:[{well,description,name,conc,dilution,note,img}] }
+  const TS_EDIT_OPEN = {}; // which saved TapeStation runs are expanded for editing
   function parseCsvText(text) {
     const rows = []; let i = 0, field = '', row = [], inQ = false;
     while (i < text.length) { const ch = text[i];
@@ -525,10 +526,27 @@
     const rec = CURRENT_EXP_ID ? Store.getExperiment(CURRENT_EXP_ID) : null;
     if (!rec) { host.innerHTML = '<h2>Tapestation Output</h2><p class="empty">Select a project and experiment in the sidebar first.</p>'; return; }
     const runs = rec.tapestation || [];
+    const armOpts2 = (sel) => TS_ARM_NAMES.map((a) => '<option' + (sel === a ? ' selected' : '') + '>' + esc(a) + '</option>').join('');
+    const typeOpts2 = (arm, sel) => { const t = (TS_ARMS[arm] && TS_ARMS[arm].types) || []; return '<option value="">\u2014</option>' + t.map((x) => '<option' + (sel === x ? ' selected' : '') + '>' + esc(x) + '</option>').join(''); };
     const runList = runs.length
-      ? '<h3>Saved runs (' + runs.length + ')</h3><table class="cost-table"><thead><tr><th>Run</th><th>Sections</th><th class="num">Lanes</th><th>Notes</th><th></th></tr></thead><tbody>'
+      ? '<h3>Saved runs (' + runs.length + ')</h3><table class="cost-table"><thead><tr><th>Run</th><th>Date</th><th>Sections</th><th class="num">Lanes</th><th>Notes</th><th></th><th></th></tr></thead><tbody>'
         + runs.map((r, i) => { const secs = []; (r.wells || []).forEach((w) => { if (w.arm && secs.indexOf(w.arm) < 0) secs.push(w.arm); });
-          return '<tr><td>' + esc(r.runName || '') + '</td><td>' + esc(secs.join(', ') || r.part || '') + '</td><td class="num">' + (r.wells || []).length + '</td><td class="who">' + esc(r.notes || '') + '</td><td><button class="btn tiny" data-ts-del="' + i + '">\u2715</button></td></tr>'; }).join('')
+          let row = '<tr><td>' + esc(r.runName || '') + '</td><td class="who">' + esc(r.savedAt || '') + '</td><td>' + esc(secs.join(', ') || r.part || '') + '</td><td class="num">' + (r.wells || []).length + '</td><td class="who">' + esc(r.notes || '') + '</td>'
+            + '<td><button class="btn tiny" data-ts-edit="' + i + '">' + (TS_EDIT_OPEN[i] ? 'close' : 'edit') + '</button></td><td><button class="btn tiny" data-ts-del="' + i + '">\u2715</button></td></tr>';
+          if (TS_EDIT_OPEN[i]) {
+            row += '<tr><td colspan="7"><div class="lib-att"><table class="cost-table"><thead><tr><th>Well</th><th>Section</th><th>Type</th><th>Sample #</th><th>Round</th><th>Full ID</th><th class="num">Conc</th><th>Trace</th><th></th></tr></thead><tbody>'
+              + (r.wells || []).map((w, wi) => '<tr><td class="num">' + esc(w.well) + '</td>'
+                  + '<td><select class="tse-arm" data-run="' + i + '" data-w="' + wi + '">' + armOpts2(w.arm) + '</select></td>'
+                  + '<td><select class="tse-type" data-run="' + i + '" data-w="' + wi + '">' + typeOpts2(w.arm, w.sampleType) + '</select></td>'
+                  + '<td><input class="tse-no" data-run="' + i + '" data-w="' + wi + '" value="' + escAttr(w.sampleNo || '') + '" style="width:50px"></td>'
+                  + '<td><input class="tse-round" data-run="' + i + '" data-w="' + wi + '" type="number" min="1" value="' + escAttr(w.round || 1) + '" style="width:48px"></td>'
+                  + '<td class="who">' + esc(tsLaneName(w)) + '</td>'
+                  + '<td class="num">' + esc(w.conc || '') + '</td>'
+                  + '<td>' + (tsGetImgSrc(w) ? '<img src="' + tsGetImgSrc(w) + '" class="ts-zoom lib-thumb" data-caption="' + escAttr(tsLaneName(w)) + '">' : '\u2014') + '</td>'
+                  + '<td><button class="btn tiny" data-tse-del="' + i + '|' + wi + '">\u2715</button></td></tr>').join('')
+              + '</tbody></table><p class="who small">Edit section/type/sample #/round to re-tag a trace, or \u2715 to delete a single trace. Changes save immediately.</p></div></td></tr>';
+          }
+          return row; }).join('')
         + '</tbody></table>'
       : '<p class="muted">No TapeStation runs saved yet.</p>';
 
@@ -583,8 +601,15 @@
     const reloadBtn = $('#tsReload'); if (reloadBtn) reloadBtn.addEventListener('click', () => reloadTapestationFromDrive(rec));
     const backfillBtn = $('#tsBackfill'); if (backfillBtn) backfillBtn.addEventListener('click', () => backfillTapestationImages(rec));
     host.querySelectorAll('button[data-ts-del]').forEach((b) => b.addEventListener('click', () => {
-      const i = +b.dataset.tsDel; if (rec.tapestation && !isNaN(i)) { rec.tapestation.splice(i, 1); Store.saveExperiment(rec); renderTapestation(); }
+      const i = +b.dataset.tsDel; if (rec.tapestation && !isNaN(i) && confirm('Delete this entire TapeStation run and its lanes from the record?')) { rec.tapestation.splice(i, 1); delete TS_EDIT_OPEN[i]; Store.saveExperiment(rec); renderTapestation(); }
     }));
+    host.querySelectorAll('button[data-ts-edit]').forEach((b) => b.addEventListener('click', () => { const i = +b.dataset.tsEdit; TS_EDIT_OPEN[i] = !TS_EDIT_OPEN[i]; renderTapestation(); }));
+    host.querySelectorAll('.tse-arm').forEach((el) => el.addEventListener('change', () => { const w = rec.tapestation[+el.dataset.run].wells[+el.dataset.w]; w.arm = el.value; const types = (TS_ARMS[w.arm] && TS_ARMS[w.arm].types) || []; if (types.indexOf(w.sampleType) < 0) w.sampleType = ''; w.name = tsLaneName(w); Store.saveExperiment(rec); renderTapestation(); }));
+    host.querySelectorAll('.tse-type').forEach((el) => el.addEventListener('change', () => { const w = rec.tapestation[+el.dataset.run].wells[+el.dataset.w]; w.sampleType = el.value; w.name = tsLaneName(w); Store.saveExperiment(rec); renderTapestation(); }));
+    host.querySelectorAll('.tse-no').forEach((el) => el.addEventListener('change', () => { const w = rec.tapestation[+el.dataset.run].wells[+el.dataset.w]; w.sampleNo = el.value; w.name = tsLaneName(w); Store.saveExperiment(rec); renderTapestation(); }));
+    host.querySelectorAll('.tse-round').forEach((el) => el.addEventListener('change', () => { const w = rec.tapestation[+el.dataset.run].wells[+el.dataset.w]; w.round = el.value; Store.saveExperiment(rec); }));
+    host.querySelectorAll('button[data-tse-del]').forEach((b) => b.addEventListener('click', () => { const p = b.dataset.tseDel.split('|'); const ri = +p[0], wi = +p[1]; if (confirm('Delete this trace from the record?')) { rec.tapestation[ri].wells.splice(wi, 1); Store.saveExperiment(rec); renderTapestation(); } }));
+    host.querySelectorAll('.ts-zoom').forEach((img) => img.addEventListener('click', () => openImageLightbox(img.src, img.getAttribute('data-caption') || '')));
   }
   // Rebuild rec.tapestation from the durable lane-tags sheets in Drive - so tags +
   // notes survive any record reset / site update (Drive is the source of truth).
@@ -642,7 +667,7 @@
         if (!res || !res.ok) throw new Error('no response');
         const runs = res.runs || [];
         if (!runs.length) { if (stEl) stEl.textContent = ' No lane-tags sheets found in Drive for this experiment.'; return; }
-        rec.tapestation = runs.map((r) => ({ runName: r.runName, notes: r.notes || '', folder: r.folder,
+        rec.tapestation = runs.map((r) => ({ runName: r.runName, notes: r.notes || '', savedAt: r.savedAt || '', folder: r.folder,
           wells: (r.wells || []).map((w) => ({ well: w.well, arm: w.arm || '', sampleType: w.sampleType || '', sampleNo: w.sampleNo || '', round: w.round || 1, name: w.name || tsLaneName(w), description: w.description || '', conc: w.conc || '', dilution: w.dilution || '', note: w.note || '', peaks: w.peaks || [], imgFileId: w.imgFileId || '', imgKey: tsImgKey(rec.id, r.runName, w.well) })) }));
         Store.saveExperiment(rec);
         if (stEl) stEl.textContent = ' Loaded ' + runs.length + ' run(s) from Drive.';
@@ -1274,14 +1299,16 @@
     const sections = libStatusLibs(rec);
     if (!sections.length) { host.innerHTML = '<h2>Library status</h2><p class="empty">Build a plan (and/or upload TapeStation) so libraries can be listed here.</p>'; return; }
     // TapeStation index by arm|type|laneNo
+    const normLib = (s) => String(s || '').toUpperCase().replace('/CSP', '').replace(/\s+/g, '');
+    // TapeStation indexed by the derived library id (prefix+lane+'-'+type) + round.
     const tsIdx = {};
-    (rec.tapestation || []).forEach((run) => (run.wells || []).forEach((w) => { const rd = w.round || 1; const k = (w.arm || '') + '|' + (w.sampleType || '') + '|' + (w.sampleNo || '') + '|' + rd; if (!tsIdx[k]) tsIdx[k] = { concs: [], imgs: [] }; if (w.conc) tsIdx[k].concs.push(w.conc); if (w.imgFileId || w.imgKey || w.img) tsIdx[k].imgs.push(w); }));
+    (rec.tapestation || []).forEach((run) => (run.wells || []).forEach((w) => { const pfx = LIB_PREFIX[w.arm] || ''; const derived = normLib(pfx + (w.sampleNo || '') + '-' + (w.sampleType || '')); const rd = Number(w.round) || 1; const k = derived + '|' + rd; if (!tsIdx[k]) tsIdx[k] = { concs: [], imgs: [] }; if (w.conc) tsIdx[k].concs.push(w.conc); if (w.imgFileId || w.imgKey || w.img) tsIdx[k].imgs.push(Object.assign({}, w, { _run: run.runName, _date: run.savedAt })); }));
     // Qubit index: base tube (minus -N suffix) + round (from suffix or the Prep round column)
     const qt = (rec.worksheets && rec.worksheets.library && rec.worksheets.library.qubit) || {};
     const qAll = []; if (qt && !Array.isArray(qt)) QUBIT_TABLES.forEach((t) => (qt[t.key] || []).forEach((r) => { if (r && r[0]) { const tube = String(r[0]); const m = tube.match(/-(\d+)\s*$/); const round = m ? Number(m[1]) : (parseInt(r[3], 10) || 1); const base = tube.replace(/-\d+\s*$/, ''); qAll.push({ tube: tube, base: base, round: round, conc: r[2] || '', stage: t.title }); } }));
-    const qubitForRound = (lib, round) => qAll.filter((q) => q.base.toUpperCase() === lib.id.toUpperCase() && q.round === round);
-    const roundsForLib = (lib) => { const rs = new Set([1]); qAll.forEach((q) => { if (q.base.toUpperCase() === lib.id.toUpperCase()) rs.add(q.round); }); Object.keys(tsIdx).forEach((k) => { const p = k.split('|'); if (p[0] === lib.arm && p[1] === lib.type && String(p[2]) === String(lib.laneNo)) rs.add(Number(p[3])); }); const st = rec.libStatus[lib.id] || {}; Object.keys(st.rounds || {}).forEach((r) => rs.add(Number(r))); return Array.prototype.slice.call(rs).sort((a, b) => a - b); };
-    const tsForRound = (lib, round) => tsIdx[lib.arm + '|' + lib.type + '|' + lib.laneNo + '|' + round] || { concs: [], imgs: [] };
+    const qubitForRound = (lib, round) => qAll.filter((q) => normLib(q.base) === normLib(lib.id) && q.round === round);
+    const roundsForLib = (lib) => { const rs = new Set([1]); const nid = normLib(lib.id); qAll.forEach((q) => { if (normLib(q.base) === nid) rs.add(q.round); }); Object.keys(tsIdx).forEach((k) => { const p = k.split('|'); if (p[0] === nid) rs.add(Number(p[1])); }); const st = rec.libStatus[lib.id] || {}; Object.keys(st.rounds || {}).forEach((r) => rs.add(Number(r))); return Array.prototype.slice.call(rs).sort((a, b) => a - b); };
+    const tsForRound = (lib, round) => tsIdx[normLib(lib.id) + '|' + round] || { concs: [], imgs: [] };
     // cDNA input Qubit for a lane (from the 5' cDNA table, tube containing prefix+laneNo)
     const cdnaQubitFor = (pfx, laneNo) => { const tag = (pfx + laneNo).toUpperCase(); const hit = (qt.cdna5 || []).filter((r) => r && r[0] && String(r[0]).toUpperCase().indexOf(tag) >= 0)[0]; return hit ? (hit[2] || '') : ''; };
     const statusOf = (id) => (rec.libStatus[id] && rec.libStatus[id].status) || 'In progress';
@@ -1327,13 +1354,11 @@
       body += '<div class="row-actions" style="margin:4px 0"><input class="lib-flag-note" data-arm="' + escAttr(sec.arm) + '" placeholder="flag note (e.g. CSP needs re-prep)" style="width:280px"> <button class="btn ghost tiny" data-flag-add="' + escAttr(sec.arm) + '">+ Add flag</button></div>';
       sec.groups.forEach((g) => {
         const gkey = g.arm + '|' + g.type; const open = !!LIBSTATUS_OPEN[gkey];
-        const counts = {}; g.libs.forEach((l) => { const st = statusOf(l.id); counts[st] = (counts[st] || 0) + 1; });
-        const summ = Object.keys(counts).map((c) => counts[c] + ' ' + c).join(' \u00b7 ');
         const isCdna = g.type === 'cDNA';
         const showCdnaIn = (g.arm !== 'ASAP') && !isCdna;
-        body += '<div class="lib-group' + (isCdna ? ' lib-group-cdna' : '') + '"><div class="lib-group-head"><span class="lib-grp-title" data-lib-grp="' + escAttr(gkey) + '"><span class="lib-caret">' + (open ? '\u25be' : '\u25b8') + '</span> ' + (isCdna ? '<em>cDNA (input)</em>' : '<strong>' + esc(g.type) + '</strong>') + ' <span class="who">(' + g.libs.length + ' \u00b7 ' + summ + ')</span></span></div>';
+        body += '<div class="lib-group' + (isCdna ? ' lib-group-cdna' : '') + '"><div class="lib-group-head"><span class="lib-grp-title" data-lib-grp="' + escAttr(gkey) + '"><span class="lib-caret">' + (open ? '\u25be' : '\u25b8') + '</span> ' + (isCdna ? '<em>cDNA (input)</em>' : '<strong>' + esc(g.type) + '</strong>') + ' <span class="who">(' + g.libs.length + ' librar' + (g.libs.length === 1 ? 'y' : 'ies') + ')</span></span></div>';
         if (open) {
-          body += '<div style="overflow:auto"><table class="cost-table"><thead><tr><th>Library</th><th>Status</th><th class="num">Cycles</th>' + (showCdnaIn ? '<th class="num">Input cDNA qubit conc (ng/µL)</th>' : '') + '<th>Library qubit conc (ng/µL)</th><th class="num">TapeStation</th><th>Trace</th><th>Preps</th><th>Note</th></tr></thead><tbody>';
+          body += '<div style="overflow:auto"><table class="cost-table"><thead><tr><th>Library</th><th class="num">Cycles</th>' + (showCdnaIn ? '<th class="num">Input cDNA qubit conc (ng/µL)</th>' : '') + '<th>Library qubit conc (ng/µL)</th><th class="num">TapeStation</th><th>Trace</th><th>Preps</th><th>Note</th></tr></thead><tbody>';
           const roundInp = (f, id, rd, val, wd) => editable ? ('<input class="lib-rf" data-k="' + escAttr(id) + '" data-round="' + rd + '" data-f="' + f + '" value="' + escAttr(val || '') + '" style="width:' + wd + 'px">') : esc(val || '\u2014');
           g.libs.forEach((l) => {
             const st = rec.libStatus[l.id] = rec.libStatus[l.id] || {}; st.rounds = st.rounds || {};
@@ -1341,10 +1366,9 @@
             const cdIn = isCdna ? '' : cdnaQubitFor(sec.pfx, l.laneNo);
             const qbC = qubitForRound(l, chosen).map((q) => esc(q.conc)).filter((x) => x).join('<br>');
             const tsC = tsForRound(l, chosen);
-            const traceC = tsC.imgs.length ? tsC.imgs.map((w, ti) => '<img src="' + tsGetImgSrc(w) + '" class="ts-zoom lib-thumb" data-caption="' + escAttr(l.id + (chosen > 1 ? '-' + chosen : '')) + '" loading="lazy">').join(' ') : '\u2014';
+            const traceC = tsC.imgs.length ? tsC.imgs.map((w, ti) => '<img src="' + tsGetImgSrc(w) + '" class="ts-zoom lib-thumb" data-caption="' + escAttr(l.id + (chosen > 1 ? '-' + chosen : '') + (w._run ? ' \u2014 ' + w._run : '') + (w._date ? ' (' + w._date + ')' : '')) + '" loading="lazy">').join(' ') : '\u2014';
             const prepBtn = '<button class="btn tiny" data-lib-att="' + escAttr(l.id) + '">' + rounds.length + ' prep' + (rounds.length === 1 ? '' : 's') + ' \u25be</button>';
             body += '<tr><td><strong>' + esc(l.id) + '</strong>' + (rounds.length > 1 ? ' <span class="who">\u2192 seq prep ' + chosen + '</span>' : '') + '</td>'
-              + '<td>' + statusSel(l.id, st.status) + '</td>'
               + '<td class="num">' + roundInp('cycles', l.id, chosen, cr.cycles, 56) + '</td>'
               + (showCdnaIn ? '<td class="num who">' + (cdIn || '\u2014') + '</td>' : '')
               + '<td class="who">' + (qbC || '\u2014') + '</td>'
@@ -1353,10 +1377,10 @@
               + '<td>' + prepBtn + '</td>'
               + '<td class="who">' + roundInp('note', l.id, chosen, cr.note, 140) + '</td></tr>';
             if (LIBSTATUS_OPEN['A:' + l.id]) {
-              const cspan = showCdnaIn ? 8 : 7;
+              const cspan = showCdnaIn ? 7 : 6;
               body += '<tr class="lib-att-row"><td></td><td colspan="' + cspan + '"><div class="lib-att"><table class="cost-table"><thead><tr><th>Send for seq</th><th>Prep</th><th>Library qubit conc (ng/µL)</th><th class="num">Cycles</th><th class="num">TapeStation</th><th>Traces</th><th>Note</th></tr></thead><tbody>'
                 + rounds.map((rd) => { const rr = st.rounds[rd] || {}; const qbr = qubitForRound(l, rd).map((q) => esc(q.conc)).filter((x) => x).join('<br>'); const tsr = tsForRound(l, rd);
-                    const tr = tsr.imgs.length ? tsr.imgs.map((w, ti) => '<img src="' + tsGetImgSrc(w) + '" class="ts-zoom lib-thumb" data-caption="' + escAttr(l.id + (rd > 1 ? '-' + rd : '') + ' (' + (ti + 1) + ')') + '" loading="lazy">').join(' ') : '\u2014';
+                    const tr = tsr.imgs.length ? tsr.imgs.map((w, ti) => '<img src="' + tsGetImgSrc(w) + '" class="ts-zoom lib-thumb" data-caption="' + escAttr(l.id + (rd > 1 ? '-' + rd : '') + (w._run ? ' \u2014 ' + w._run : '') + (w._date ? ' (' + w._date + ')' : '')) + '" loading="lazy">').join(' ') : '\u2014';
                     return '<tr' + (rd === chosen ? ' class="lib-chosen"' : '') + '><td>' + (editable ? '<input type="radio" name="seq-' + escAttr(l.id) + '" class="lib-choose" data-k="' + escAttr(l.id) + '" data-round="' + rd + '"' + (rd === chosen ? ' checked' : '') + '>' : (rd === chosen ? '\u2713' : '')) + '</td>'
                       + '<td><strong>' + esc(l.id + (rd > 1 ? '-' + rd : '')) + '</strong> <span class="who">prep ' + rd + '</span></td>'
                       + '<td class="who">' + (qbr || '\u2014') + '</td>'

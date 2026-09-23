@@ -1313,8 +1313,9 @@ async function handleDrivePost(request, env) {
         const imgByWell = {}; pngs.forEach((f) => { const m = f.name.match(/(?:trace_|_)([A-H]\d{1,2})(?:_|\.)/); if (m && !imgByWell[m[1]]) imgByWell[m[1]] = f.id; });
         let vals; try { vals = await sheetsBatchGet(token, sheets[0].id, ['Run info', 'Lane tags']); } catch (e) { continue; }
         const info = (vals[0] && vals[0].values) || []; const tags = (vals[1] && vals[1].values) || [];
-        let notes = '', runName = rf.name;
-        info.forEach((r) => { const k = String((r[0] || '')).toLowerCase(); if (k === 'run notes') notes = r[1] || ''; if (k === 'run') runName = r[1] || runName; });
+        
+        let notes = '', runName = rf.name, savedAt = '';
+        info.forEach((r) => { const k = String((r[0] || '')).toLowerCase(); if (k === 'run notes') notes = r[1] || ''; if (k === 'run') runName = r[1] || runName; if (k === 'saved') savedAt = r[1] || ''; });
         const hdr = (tags[0] || []).map((h) => String(h).toLowerCase());
         const col = (n) => hdr.findIndex((h) => h.indexOf(n) === 0);
         const iWell = col('well'), iOrig = col('original'), iSec = col('section'), iType = col('type'), iNo = col('sample #'), iRound = col('round'), iFull = col('full'), iDil = col('dilution'), iConc = col('conc'), iNote = col('notes'), iPk = col('peaks');
@@ -1323,7 +1324,7 @@ async function handleDrivePost(request, env) {
           let peaks = []; try { peaks = JSON.parse(r[iPk] || '[]'); } catch (e) { /* leave empty */ }
           wells.push({ well: r[iWell], description: r[iOrig] || '', arm: r[iSec] || '', sampleType: r[iType] || '', sampleNo: r[iNo] || '', round: (iRound >= 0 ? (r[iRound] || 1) : 1), name: r[iFull] || '', dilution: r[iDil] || '', conc: r[iConc] || '', note: r[iNote] || '', peaks: peaks, imgFileId: imgByWell[r[iWell]] || '' });
         }
-        runs.push({ runName: runName, notes: notes, folder: rf.name, wells: wells });
+        runs.push({ runName: runName, notes: notes, savedAt: savedAt, folder: rf.name, wells: wells });
       }
       return json({ ok: true, runs: runs });
     }
