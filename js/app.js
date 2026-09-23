@@ -1267,6 +1267,23 @@
     return { arms: arms, byArm: byArm };
   }
   const LIB_PREFIX = { "5' unsort": 'U', 'ASAP': 'A', "5' sort": 'S' };
+  const PREFIX_ARM = { U: "5' unsort", A: 'ASAP', S: "5' sort", C: "5' unsort" };
+  // ---- Canonical library identity, used across the whole site ----
+  function normLibId(s) { return String(s || '').toUpperCase().replace('/CSP', '').replace(/\s+/g, ''); }
+  // Parse a library id out of any label ("ASAP A1-ATAC", "5' unsort U1-GEX", "U1-ADT/CSP-2", "A1-ATAC")
+  function parseLibId(s) {
+    const str = String(s || '').replace(/-\d+\s*$/, '');   // drop any prep-round suffix first
+    const m = str.match(/([A-Za-z])\s*(\d+)-([A-Za-z0-9/()]+)\s*$/);
+    if (!m) return null;
+    const prefix = m[1].toUpperCase(), lane = Number(m[2]), type = m[3];
+    return { prefix: prefix, lane: lane, type: type, arm: PREFIX_ARM[prefix] || '', id: prefix + lane + '-' + type };
+  }
+  // The library id for a TapeStation well: prefer its tags, fall back to its Full ID / name.
+  function tsWellLibId(w) {
+    const p = LIB_PREFIX[w.arm];
+    if (p && (w.sampleNo != null && w.sampleNo !== '') && w.sampleType) return p + w.sampleNo + '-' + w.sampleType;
+    const parsed = parseLibId(w.name || w.description || ''); return parsed ? parsed.id : '';
+  }
   // Ordered library-prep steps per library type (from the 10x protocols) for the progress bars.
   const STEP_TRACKS = {
     cDNA: ['GEM generation & barcoding', 'Post-GEM cleanup (Dynabeads)', 'cDNA amplification', 'cDNA cleanup (SPRI)', 'cDNA QC (Qubit / TapeStation)'],
@@ -1293,11 +1310,10 @@
     // seed from the plan (standard types x plan lane count)
     Object.keys(LIB_ARM_TYPES).forEach((arm) => { const n = laneCount(arm); if (n > 0) LIB_ARM_TYPES[arm].forEach((type) => { const s = ensure(arm, type); for (let i = 1; i <= n; i++) s[i] = true; }); });
     // add every lane actually seen in TapeStation (same identity the upload assigned)
-    (rec.tapestation || []).forEach((run) => (run.wells || []).forEach((w) => { if (w.arm && w.sampleType && w.sampleNo) { const type = canonType(w.arm, w.sampleType); ensure(w.arm, type)[Number(w.sampleNo)] = true; } }));
+    (rec.tapestation || []).forEach((run) => (run.wells || []).forEach((w) => { const id = tsWellLibId(w); if (!id) return; const parsed = parseLibId(id); if (!parsed || !parsed.arm) return; ensure(parsed.arm, canonType(parsed.arm, parsed.type))[parsed.lane] = true; }));
     // add every lane seen in the Qubit tables (tube like U1-GEX / U1-ADT/CSP-2)
     const qt = (rec.worksheets && rec.worksheets.library && rec.worksheets.library.qubit) || {};
-    const prefToArm = { U: "5' unsort", A: 'ASAP', S: "5' sort", C: "5' unsort" };
-    if (qt && !Array.isArray(qt)) QUBIT_TABLES.forEach((t) => (qt[t.key] || []).forEach((r) => { if (r && r[0]) { const base = String(r[0]).replace(/-\d+\s*$/, ''); const m = base.match(/^([A-Za-z])\s*(\d+)-(.+)$/); if (m) { const arm = prefToArm[m[1].toUpperCase()]; if (arm) ensure(arm, canonType(arm, m[3])) [Number(m[2])] = true; } } }));
+    if (qt && !Array.isArray(qt)) QUBIT_TABLES.forEach((t) => (qt[t.key] || []).forEach((r) => { if (r && r[0]) { const parsed = parseLibId(r[0]); if (parsed && parsed.arm) ensure(parsed.arm, canonType(parsed.arm, parsed.type))[parsed.lane] = true; } }));
 
     const out = [];
     armOrder.forEach((arm) => {
@@ -1327,7 +1343,7 @@
     const normLib = (s) => String(s || '').toUpperCase().replace('/CSP', '').replace(/\s+/g, '');
     // TapeStation indexed by the derived library id (prefix+lane+'-'+type) + round.
     const tsIdx = {};
-    (rec.tapestation || []).forEach((run) => (run.wells || []).forEach((w) => { const pfx = LIB_PREFIX[w.arm] || ''; const derived = normLib(pfx + (w.sampleNo || '') + '-' + (w.sampleType || '')); const rd = Number(w.round) || 1; const k = derived + '|' + rd; if (!tsIdx[k]) tsIdx[k] = { concs: [], imgs: [] }; if (w.conc) tsIdx[k].concs.push(w.conc); if (w.imgFileId || w.imgKey || w.img) tsIdx[k].imgs.push(Object.assign({}, w, { _run: run.runName, _date: run.savedAt })); }));
+    (rec.tapestation || []).forEach((run) => (run.wells || []).forEach((w) => { const derived = normLibId(tsWellLibId(w)); if (!derived) return; const rd = Number(w.round) || 1; const k = derived + '|' + rd; if (!tsIdx[k]) tsIdx[k] = { concs: [], imgs: [] }; if (w.conc) tsIdx[k].concs.push(w.conc); if (w.imgFileId || w.imgKey || w.img) tsIdx[k].imgs.push(Object.assign({}, w, { _run: run.runName, _date: run.savedAt })); }));
     // Qubit index: base tube (minus -N suffix) + round (from suffix or the Prep round column)
     const qt = (rec.worksheets && rec.worksheets.library && rec.worksheets.library.qubit) || {};
     const qAll = []; if (qt && !Array.isArray(qt)) QUBIT_TABLES.forEach((t) => (qt[t.key] || []).forEach((r) => { if (r && r[0]) { const tube = String(r[0]); const m = tube.match(/-(\d+)\s*$/); const round = m ? Number(m[1]) : (parseInt(r[3], 10) || 1); const base = tube.replace(/-\d+\s*$/, ''); qAll.push({ tube: tube, base: base, round: round, conc: r[2] || '', stage: t.title }); } }));
