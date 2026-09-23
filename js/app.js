@@ -478,6 +478,11 @@
     return { conc: conc, avgBp: conc > 0 ? Math.round(wsize / conc) : null, n: inR.length };
   }
 
+  function tsDefaultRunName(wells) {
+    const date = new Date().toISOString().slice(0, 10);
+    const types = []; (wells || []).forEach((w) => { const t = w.sampleType || w.arm; if (t && types.indexOf(t) < 0) types.push(t); });
+    return (date + (types.length ? ' ' + types.slice(0, 5).join('-') : '')).trim();
+  }
   async function handleTsZip(file) {
     if (!window.JSZip) { alert('Zip reader not loaded \u2014 reload the page and try again.'); return; }
     const buf = await file.arrayBuffer();
@@ -492,7 +497,7 @@
     const wells = sampleCsv ? tsParseSampleTable(sampleCsv) : [];
     const peaks = peakCsv ? tsParsePeaks(peakCsv) : {};
     wells.forEach((w) => { w.img = imgs[w.well] || null; w.peaks = peaks[w.well] || []; const g = tsGuessTags(w.description); w.arm = g.arm; w.sampleType = g.type; w.sampleNo = g.no; w.name = tsLaneName(w); });
-    const runName = file.name.replace(/\.zip$/i, '');
+    const runName = tsDefaultRunName(wells) || file.name.replace(/\.zip$/i, '');
     // the whole zip is stored/uploaded as one file
     TS_PENDING = { fileName: file.name, files: [{ name: file.name, base64: bufToB64(buf), mime: 'application/zip' }], runName: runName, notes: '', wells: wells };
     if (!wells.length) alert('Zip uploaded, but no sampleTable.csv was found \u2014 you can still save it (no per-lane summary).');
@@ -517,7 +522,7 @@
     const wells = sampleCsv ? tsParseSampleTable(sampleCsv) : [];
     const peaks = peakCsv ? tsParsePeaks(peakCsv) : {};
     wells.forEach((w) => { w.img = imgs[w.well] || null; w.peaks = peaks[w.well] || []; const g = tsGuessTags(w.description); w.arm = g.arm; w.sampleType = g.type; w.sampleNo = g.no; w.name = tsLaneName(w); });
-    TS_PENDING = { fileName: files.length === 1 ? files[0].name : (files.length + ' files'), files: stored, runName: runName || 'TapeStation run', notes: '', wells: wells };
+    TS_PENDING = { fileName: files.length === 1 ? files[0].name : (files.length + ' files'), files: stored, runName: tsDefaultRunName(wells) || runName || 'TapeStation run', notes: '', wells: wells };
     if (!wells.length) alert('Files added' + (Object.keys(imgs).length ? '' : ' \u2014 no sampleTable.csv found, so there\u2019s no per-lane summary') + '. You can still tag the part/notes and save (e.g. to archive a PDF).');
     renderTapestation();
   }
@@ -567,7 +572,8 @@
         + '<td><input class="ts-note" data-i="' + i + '" value="' + escAttr(w.note) + '" placeholder="notes" style="width:130px"></td>'
         + '<td>' + (w.img ? '<img src="data:image/png;base64,' + w.img + '" style="height:38px;border:1px solid #e4e9ef;border-radius:4px">' : '') + '</td></tr>').join('');
       editUI = '<h3>This run <span class="who">' + esc(TS_PENDING.fileName) + '</span></h3>'
-        + '<div class="row-actions" style="margin:6px 0"><label>Run notes <input id="tsNotes" style="width:300px" value="' + escAttr(TS_PENDING.notes) + '"></label></div>'
+        + '<div class="row-actions" style="margin:6px 0;flex-wrap:wrap"><label>Upload name <input id="tsRunName" style="width:340px" value="' + escAttr(TS_PENDING.runName || '') + '" placeholder="date \u00b7 libraries \u00b7 initials"></label> <label>Run notes <input id="tsNotes" style="width:260px" value="' + escAttr(TS_PENDING.notes) + '"></label></div>'
+        + '<p class="who small">The upload name becomes the Drive folder \u2014 give each upload a unique name (e.g. <em>2026-09-03 ASAP ATAC-ADT-HTO RM</em>) so runs with the same file name don\u2019t overwrite each other.</p>'
         + '<p class="step-hint">Tag each lane: <strong>experimental section</strong> \u2192 <strong>sample type</strong> \u2192 <strong>sample #</strong> (auto-filled from the descriptions where possible). The full ID (e.g. \u201cASAP A9-ATAC\u201d) is built from those. Enter the dilution used and any notes.</p>'
         + '<div style="overflow:auto"><table class="cost-table"><thead><tr><th>Well</th><th>Original name (from file)</th><th>Section</th><th>Type</th><th>Sample #</th><th title="Prep round (1 = first prep, 2 = re-prep)">Round</th><th>Full ID</th><th class="num">Conc [pg/\u00b5l]</th><th>Dilution</th><th>Notes</th><th>Trace</th></tr></thead><tbody>' + rows + '</tbody></table></div>'
         + '<div class="row-actions" style="margin-top:12px"><button class="btn primary" id="tsSave">Save run + upload to Drive</button> <button class="btn ghost" id="tsCancel">Cancel</button></div>'
@@ -590,6 +596,7 @@
     }
     if (fileInput) fileInput.addEventListener('change', () => onFiles(fileInput.files));
     const notesInp = $('#tsNotes'); if (notesInp) notesInp.addEventListener('input', () => { TS_PENDING.notes = notesInp.value; });
+    const runNameInp = $('#tsRunName'); if (runNameInp) runNameInp.addEventListener('input', () => { TS_PENDING.runName = runNameInp.value; });
     host.querySelectorAll('.ts-arm').forEach((el) => el.addEventListener('change', () => { const w = TS_PENDING.wells[+el.dataset.i]; w.arm = el.value; const types = (TS_ARMS[w.arm] && TS_ARMS[w.arm].types) || []; if (types.indexOf(w.sampleType) < 0) w.sampleType = ''; renderTapestation(); }));
     host.querySelectorAll('.ts-type').forEach((el) => el.addEventListener('change', () => { const w = TS_PENDING.wells[+el.dataset.i]; w.sampleType = el.value; el.closest('tr').querySelector('.who').textContent = tsLaneName(w); }));
     host.querySelectorAll('.ts-no').forEach((el) => el.addEventListener('change', () => { const w = TS_PENDING.wells[+el.dataset.i]; w.sampleNo = el.value; el.closest('tr').querySelector('.who').textContent = tsLaneName(w); }));
@@ -681,6 +688,8 @@
     const files = TS_PENDING.files || [];
     if (!files.length) { stEl.textContent = 'Nothing to upload.'; return; }
     const runFolder = sanitizeName(TS_PENDING.runName).slice(0, 80) || 'TapeStation run';
+    const clash = (rec.tapestation || []).some((r) => (r.folder || sanitizeName(r.runName)) === runFolder);
+    if (clash && !confirm('An upload named \u201c' + runFolder + '\u201d already exists for this experiment \u2014 saving will OVERWRITE its traces and tags in Drive. Give this upload a different name (date \u00b7 libraries \u00b7 initials) to keep both. Continue anyway?')) return;
     if (!confirm('Save ' + files.length + ' file(s) to the experiment\u2019s data/tapestation/\u201c' + runFolder + '\u201d folder? Files with the same name there will be overwritten. The lane tags + traces are stored on the experiment for the Review tab.')) return;
     stEl.textContent = 'Uploading to Drive\u2026';
     const req = rec.driveFolderId
