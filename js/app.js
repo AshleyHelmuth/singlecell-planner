@@ -1269,13 +1269,13 @@
   const LIB_PREFIX = { "5' unsort": 'U', 'ASAP': 'A', "5' sort": 'S' };
   const PREFIX_ARM = { U: "5' unsort", A: 'ASAP', S: "5' sort", C: "5' unsort" };
   // ---- Canonical library identity, used across the whole site ----
-  function normLibId(s) { return String(s || '').toUpperCase().replace('/CSP', '').replace(/\s+/g, ''); }
+  function normLibId(s) { return String(s || '').toUpperCase().replace(/[-/]?CSP/g, '').replace(/\s+/g, ''); }
   // Parse a library id out of any label ("ASAP A1-ATAC", "5' unsort U1-GEX", "U1-ADT/CSP-2", "A1-ATAC")
   function parseLibId(s) {
     const str = String(s || '').replace(/-\d+\s*$/, '');   // drop any prep-round suffix first
-    const m = str.match(/([A-Za-z])\s*(\d+)-([A-Za-z0-9/()]+)\s*$/);
+    const m = str.match(/([A-Za-z])\s*(\d+)-(.+?)\s*$/);   // prefix + lane + type (type may contain / - ( ))
     if (!m) return null;
-    const prefix = m[1].toUpperCase(), lane = Number(m[2]), type = m[3];
+    const prefix = m[1].toUpperCase(), lane = Number(m[2]), type = m[3].trim();
     return { prefix: prefix, lane: lane, type: type, arm: PREFIX_ARM[prefix] || '', id: prefix + lane + '-' + type };
   }
   // The library id for a TapeStation well: prefer its tags, fall back to its Full ID / name.
@@ -1340,7 +1340,7 @@
     const sections = libStatusLibs(rec);
     if (!sections.length) { host.innerHTML = '<h2>Library status</h2><p class="empty">Build a plan (and/or upload TapeStation) so libraries can be listed here.</p>'; return; }
     // TapeStation index by arm|type|laneNo
-    const normLib = (s) => String(s || '').toUpperCase().replace('/CSP', '').replace(/\s+/g, '');
+    const normLib = normLibId;
     // TapeStation indexed by the derived library id (prefix+lane+'-'+type) + round.
     const tsIdx = {};
     (rec.tapestation || []).forEach((run) => (run.wells || []).forEach((w) => { const derived = normLibId(tsWellLibId(w)); if (!derived) return; const rd = Number(w.round) || 1; const k = derived + '|' + rd; if (!tsIdx[k]) tsIdx[k] = { concs: [], imgs: [] }; if (w.conc) tsIdx[k].concs.push(w.conc); if (w.imgFileId || w.imgKey || w.img) tsIdx[k].imgs.push(Object.assign({}, w, { _run: run.runName, _date: run.savedAt })); }));
