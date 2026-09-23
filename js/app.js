@@ -1282,23 +1282,39 @@
   function stepsFor(type) { return STEP_TRACKS[type] || STEP_TRACK_DEFAULT; }
   // Enumerate every individual library (per lane) grouped by modality -> type.
   function libStatusLibs(rec) {
-    const { arms, byArm } = libStatusRows(rec);
     let lanes = { unsort: 0, asap: 0, sort: 0 };
     try { const c = computePooling(); lanes = laneOverridesFromCost(c.samples.length, (c.poolRes && c.poolRes.nPools) || 0, c.samples) || lanes; } catch (e) { /* */ }
     const laneCount = (arm) => arm === 'ASAP' ? (lanes.asap || 0) : (arm === "5' sort" ? (lanes.sort || 0) : (lanes.unsort || 0));
+    const normType = (t) => String(t || '').toUpperCase().replace('/CSP', '').replace(/\s+/g, '');
+    const canonType = (arm, t) => { const nt = normType(t); const std = (LIB_ARM_TYPES[arm] || []).filter((x) => normType(x) === nt)[0]; return std || t; };
+    // arm -> type -> Set(laneNo), seeded from the plan then extended with actual data
+    const armTypeLanes = {}; const armOrder = [];
+    const ensure = (arm, type) => { if (armOrder.indexOf(arm) < 0) armOrder.push(arm); armTypeLanes[arm] = armTypeLanes[arm] || {}; if (!armTypeLanes[arm][type]) armTypeLanes[arm][type] = {}; return armTypeLanes[arm][type]; };
+    // seed from the plan (standard types x plan lane count)
+    Object.keys(LIB_ARM_TYPES).forEach((arm) => { const n = laneCount(arm); if (n > 0) LIB_ARM_TYPES[arm].forEach((type) => { const s = ensure(arm, type); for (let i = 1; i <= n; i++) s[i] = true; }); });
+    // add every lane actually seen in TapeStation (same identity the upload assigned)
+    (rec.tapestation || []).forEach((run) => (run.wells || []).forEach((w) => { if (w.arm && w.sampleType && w.sampleNo) { const type = canonType(w.arm, w.sampleType); ensure(w.arm, type)[Number(w.sampleNo)] = true; } }));
+    // add every lane seen in the Qubit tables (tube like U1-GEX / U1-ADT/CSP-2)
+    const qt = (rec.worksheets && rec.worksheets.library && rec.worksheets.library.qubit) || {};
+    const prefToArm = { U: "5' unsort", A: 'ASAP', S: "5' sort", C: "5' unsort" };
+    if (qt && !Array.isArray(qt)) QUBIT_TABLES.forEach((t) => (qt[t.key] || []).forEach((r) => { if (r && r[0]) { const base = String(r[0]).replace(/-\d+\s*$/, ''); const m = base.match(/^([A-Za-z])\s*(\d+)-(.+)$/); if (m) { const arm = prefToArm[m[1].toUpperCase()]; if (arm) ensure(arm, canonType(arm, m[3])) [Number(m[2])] = true; } } }));
+
     const out = [];
-    arms.forEach((arm) => {
-      const pfx = LIB_PREFIX[arm] || '';
-      const n = laneCount(arm) || 1;
-      const types = (arm === 'ASAP' ? [] : ['cDNA']).concat(byArm[arm]);   // cDNA input only for 5' arms
-      const groups = types.map((type) => {
-        const libs = [];
-        for (let i = 1; i <= n; i++) libs.push({ arm: arm, type: type, laneNo: i, id: pfx + i + '-' + type, name: arm + ' ' + pfx + i + '-' + type });
+    armOrder.forEach((arm) => {
+      const pfx = LIB_PREFIX[arm] || (arm === 'ASAP' ? 'A' : arm === "5' sort" ? 'S' : 'U');
+      // order types: cDNA first (5' only), then standard order, then any extras
+      const present = Object.keys(armTypeLanes[arm]);
+      const ordered = (arm === 'ASAP' ? [] : (present.indexOf('cDNA') >= 0 ? ['cDNA'] : []))
+        .concat((LIB_ARM_TYPES[arm] || []).filter((t) => present.indexOf(t) >= 0))
+        .concat(present.filter((t) => t !== 'cDNA' && (LIB_ARM_TYPES[arm] || []).indexOf(t) < 0));
+      const groups = ordered.map((type) => {
+        const laneNos = Object.keys(armTypeLanes[arm][type]).map(Number).sort((a, b) => a - b);
+        const libs = laneNos.map((i) => ({ arm: arm, type: type, laneNo: i, id: pfx + i + '-' + type, name: arm + ' ' + pfx + i + '-' + type }));
         return { arm: arm, type: type, libs: libs };
-      });
+      }).filter((g) => g.libs.length);
       out.push({ arm: arm, pfx: pfx, groups: groups });
     });
-    return out;   // [{ arm, pfx, groups:[{arm,type,libs:[...]}] }]
+    return out;
   }
   function renderLibStatus(hostId, editable) {
     const host = $('#' + hostId); if (!host) return;
