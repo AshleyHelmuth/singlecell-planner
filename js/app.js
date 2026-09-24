@@ -496,7 +496,7 @@
       + '<p class="step-hint">Sections start collapsed \u2014 click a header to open it. Tick a section\u2019s box when it\u2019s fully entered; when every section is ticked the tab check turns green. Saved to the experiment and to a durable Drive sheet.</p>'
       + '<div class="row-actions" style="margin:6px 0"><label>Experiment ID <input id="wsExpId" style="width:120px" value="' + escAttr(w.expId || '') + '"></label> <label>Operator <input id="wsOperator" style="width:140px" value="' + escAttr(w.operator || '') + '"></label> <label>Date <input id="wsDate" style="width:120px" value="' + escAttr(w.date || '') + '"></label></div>'
       + sectionsHtml
-      + '<div class="row-actions" style="margin-top:12px"><button class="btn primary" id="wsSave">Save worksheet</button><span id="wsStatus" class="muted"></span></div>';
+      + '<div class="row-actions" style="margin-top:12px"><button class="btn primary" id="wsSave">Save worksheet</button>' + (type === 'library' ? ' <button class="btn ghost" id="wsLibRec">Update Library record (Drive)</button>' : '') + '<span id="wsStatus" class="muted"></span></div>';
 
     // ---- wiring ----
     const bind = (id, key) => { const el = $('#' + id); if (el) el.addEventListener('input', () => { w[key] = el.value; }); };
@@ -578,6 +578,7 @@
       attachGridArrows(host, '.bp-pool, .cite-u-hto, .cite-a-hto, .cite-u-cnt, .cite-a-cnt, .cite-lyo, .sort-hto, .sort-cnt');
     }
     const save = $('#wsSave'); if (save) save.addEventListener('click', () => saveWorksheet(rec, type));
+    const libRecBtn = $('#wsLibRec'); if (libRecBtn) libRecBtn.addEventListener('click', () => { const st = $('#wsStatus'); if (st) st.textContent = ' Updating Library record in Drive\u2026'; pushLibraryRecordNow(rec).then((r) => { if (!st) return; if (r && r.id) st.innerHTML = ' Library record updated \u2014 <a href="https://docs.google.com/spreadsheets/d/' + escAttr(r.id) + '/edit" target="_blank" rel="noopener">open in Drive</a>'; else if (r && r.error) st.textContent = ' Update failed: ' + r.error; else st.textContent = ' Could not update the Library record (' + ((r && r.skipped) || 'no Drive access') + ').'; }); });
     const reload = $('#wsReload'); if (reload) reload.addEventListener('click', () => reloadWorksheetFromDrive(rec, type));
   }
   function saveWorksheet(rec, type) {
@@ -5071,18 +5072,25 @@
   }
   // Debounced auto-sync of the Library record Sheet in Drive (upserts by name, so it updates
   // the existing file in place). Only runs once materials have been exported at least once.
-  // Regenerate the Library record and update the existing Drive Sheet in place. Matches the
-  // exact name/folder used by the materials export so driveUpload PATCHes the same file.
+  // Regenerate the Library record and write it to Drive. Updates the versioned materials Sheet
+  // if it exists; otherwise creates/updates a live copy in the experiment's data/ folder. Always
+  // upserts by name, so it never duplicates, and returns the file id so we can link to it.
   function pushLibraryRecordNow(rec) {
     try {
-      if (!rec || !rec.materialVersions || !rec.materialVersions.length) return Promise.resolve({ skipped: 'no-materials' });
-      const cur = rec.materialVersions.filter((v) => v.version === rec.currentVersion)[0] || rec.materialVersions[rec.materialVersions.length - 1];
-      if (!cur || !cur.folderId) return Promise.resolve({ skipped: 'no-folder' });
       const built = buildLibraryRecordWb(); if (!built) return Promise.resolve({ skipped: 'empty' });
       const expId = rec.experimentId || projectLabel(rec.name || 'experiment');
-      const name = expId + '_v' + cur.version + ' Library record';
-      return driveApi({ action: 'upload', name: name, folderId: cur.folderId, base64: wbBase64(built.wb), sourceMime: XLSX_MIME, targetMime: GSHEET_MIME })
-        .then(function (r) { if (r && r.id) { rec.driveFiles = Object.assign(rec.driveFiles || {}, { library: r.id }); } return r; });
+      const cur = (rec.materialVersions || []).filter((v) => v.version === rec.currentVersion)[0] || (rec.materialVersions || [])[(rec.materialVersions || []).length - 1];
+      const store = (r) => { if (r && r.id) { rec.driveFiles = Object.assign(rec.driveFiles || {}, { library: r.id }); Store.saveExperiment(rec); } return r; };
+      if (cur && cur.folderId) {
+        return driveApi({ action: 'upload', name: expId + '_v' + cur.version + ' Library record', folderId: cur.folderId, base64: wbBase64(built.wb), sourceMime: XLSX_MIME, targetMime: GSHEET_MIME }).then(store);
+      }
+      const req = rec.driveFolderId ? { action: 'ensurePath', parentId: rec.driveFolderId, subPath: ['data'] } : { action: 'ensurePath', project: rec.project || CURRENT_PROJECT, experiment: rec.name || 'Experiment', subPath: ['data'] };
+      return driveApi(req).then((path) => {
+        if (path && path.experimentId && rec.driveFolderId !== path.experimentId) { rec.driveFolderId = path.experimentId; }
+        const folderId = (path && path.subId) || (path && path.experimentId) || rec.driveFolderId;
+        if (!folderId) throw new Error('no Drive folder for this experiment');
+        return driveApi({ action: 'upload', name: expId + ' Library record', folderId: folderId, base64: wbBase64(built.wb), sourceMime: XLSX_MIME, targetMime: GSHEET_MIME });
+      }).then(store);
     } catch (e) { return Promise.resolve({ error: String(e) }); }
   }
   let LIBREC_TIMER = null;
