@@ -31,6 +31,9 @@
   let SAMPLE_NO_OVERRIDE = {}; // { sampleId -> explicit sample number } (set on Modify experiment)
   const LIBSTATUS_OPEN = {};   // which library-status attempt logs are expanded
   const WS_QB_COLLAPSED = {};  // which library-worksheet qubit categories are collapsed
+  const WS_SEC_OPEN = {};      // which worksheet sections are expanded (default collapsed)
+  function worksheetSectionIds(type) { return type === 'library' ? ['kits', 'loading'].concat(QUBIT_TABLES.map((qt) => 'qb:' + qt.key)).concat(['notes']) : ['notes']; }
+  function worksheetComplete(rec, type) { const w = rec && rec.worksheets && rec.worksheets[type]; if (!w || !w.sectionDone) return false; const ids = worksheetSectionIds(type); return ids.length > 0 && ids.every((id) => !!w.sectionDone[id]); }
   let PLAN_INPUT = 'grid'; // 'grid' (real samples) | 'counts' (planning: synthesize from counts)
   let SORT_SEL = new Set((window.Pooling && Pooling.SORT_MODEL) ? Pooling.SORT_MODEL.DEFAULT_ON : ['HSC', 'pDC', 'cDC', 'Treg']);
   let CUSTOM_SORT_POPS = [];   // user-added sort populations
@@ -88,6 +91,7 @@
       done.scheduling = !!(rec && rec.scheduledAt);
       done.reagents = !!(rec && rec.snapshot);
     }
+    if (top === 'record') { done['rec-library'] = worksheetComplete(rec, 'library'); done['rec-batchday'] = worksheetComplete(rec, 'batchday'); }
     $$('.side-check').forEach((c) => c.classList.toggle('done', !!done[c.dataset.check]));
   }
   function renderSidebar(top) {
@@ -327,98 +331,93 @@
     if (!rec) { host.innerHTML = '<h2>' + esc(cfg.title) + '</h2><p class="empty">Select a project and experiment in the sidebar first.</p>'; return; }
     const w = getWorksheet(rec, type);
     if (type === 'library') reconcileKits(w);
-    // ---- Batch-day 10X loading tables: one row per 10X lane, per modality ----
+    w.sectionDone = w.sectionDone || {};
+    if (type === 'library') ensureQubitShape(w);
+
+    // ---- collapsible section framework (pre-collapsed, per-section done check) ----
+    const secOpen = (id) => !!WS_SEC_OPEN[type + ':' + id];
+    const secDone = (id) => !!w.sectionDone[id];
+    const section = (id, title, meta, body) => { const open = secOpen(id); return '<div class="ws-sec' + (secDone(id) ? ' is-done' : '') + '"><div class="ws-sec-head" data-ws-sec="' + escAttr(id) + '"><span class="lib-caret">' + (open ? '\u25be' : '\u25b8') + '</span><label class="ws-sec-chk" title="Mark this section complete"><input type="checkbox" class="ws-sec-done" data-sec="' + escAttr(id) + '"' + (secDone(id) ? ' checked' : '') + '></label> <strong>' + esc(title) + '</strong>' + (meta ? ' <span class="who">' + meta + '</span>' : '') + '</div>' + (open ? '<div class="ws-sec-body">' + body + '</div>' : '') + '</div>'; };
+
+    // ---- section bodies ----
+    const kitRows = w.kits.map((k, i) => '<tr><td>' + esc(k.kit) + '</td><td class="who">' + esc(k.pn || '') + '</td><td><input class="ws-lot" data-i="' + i + '" value="' + escAttr(k.lot || '') + '" style="width:120px"></td><td><input class="ws-rxns" data-i="' + i + '" value="' + escAttr(k.rxns || '') + '" style="width:70px"></td><td><input class="ws-knote" data-i="' + i + '" value="' + escAttr(k.notes || '') + '" style="width:150px"></td></tr>').join('');
+    const kitsBody = '<table class="cost-table"><thead><tr><th>10X kit</th><th>PN</th><th>Lot #</th><th>Rxns used</th><th>Notes</th></tr></thead><tbody>' + kitRows + '</tbody></table>';
+
     const LOAD_COLS = ['10X chip', 'Lane', 'Population loaded', 'Tube label', '# cells loaded', 'Notes'];
     const LOAD_ARMS = [['unsort', "Unsort 5'", 'U', 'Unsorted'], ['sort', "Sort 5'", 'S', ''], ['asap', 'ASAP', 'A', 'Unsorted']];
-    let loadHtml = '';
-    if (type === 'batchday') {
+    let loadBody = '';
+    if (type === 'library') {
       let LANES = { unsort: 0, asap: 0, sort: 0 }; let SORTPOPS = [];
       try { const c = computePooling(); LANES = laneOverridesFromCost(c.samples.length, (c.poolRes && c.poolRes.nPools) || 0, c.samples) || LANES; } catch (e) { /* */ }
       try { SORTPOPS = (sortSelList() || []).filter(Boolean); } catch (e) { /* */ }
       w.loading = w.loading || {};
       LOAD_ARMS.forEach((a) => { const key = a[0], pfx = a[2], defPop = a[3] || (SORTPOPS[0] || ''); if (!w.loading[key]) { const n = LANES[key] || 0; const rows = []; for (let i = 1; i <= n; i++) rows.push([String(Math.ceil(i / 8)), String(((i - 1) % 8) + 1), defPop, pfx + i, '', '']); if (!rows.length) rows.push(['', '', defPop, '', '', '']); w.loading[key] = rows; } });
       const popOpts = ['Unsorted'].concat(SORTPOPS).map((p) => '<option value="' + escAttr(p) + '"></option>').join('');
-      loadHtml = '<h3 style="margin-top:18px">10X loading \u2014 lanes &amp; cells</h3><p class="step-hint">One row per 10X lane. Chip / lane / tube label are pre-filled from the experimental layout \u2014 edit as loaded. Population is a dropdown (type your own for anything else). Paste from Excel is supported.</p><datalist id="loadPops">' + popOpts + '</datalist>';
+      loadBody = '<p class="step-hint" style="margin-top:0">One row per 10X lane \u2014 chip / lane / tube label pre-filled from the layout; edit as loaded. Population is a dropdown (type your own for other). Paste from Excel is supported.</p><datalist id="loadPops">' + popOpts + '</datalist>';
       LOAD_ARMS.forEach((a) => { const key = a[0], label = a[1]; const rows = w.loading[key] || [];
         const head = LOAD_COLS.map((c) => '<th>' + esc(c) + '</th>').join('');
-        const body = rows.map((row, ri) => '<tr>' + LOAD_COLS.map((c, ci) => '<td><input class="ws-load" data-arm="' + key + '" data-r="' + ri + '" data-c="' + ci + '"' + (ci === 2 ? ' list="loadPops"' : '') + ' value="' + escAttr(row[ci] || '') + '" style="width:' + (ci === 2 || ci === 5 ? 150 : 78) + 'px"></td>').join('') + '<td><button class="btn tiny" data-load-del="' + key + '|' + ri + '">\u2715</button></td></tr>').join('');
-        loadHtml += '<h4 style="margin:12px 0 4px">' + esc(label) + '</h4><div style="overflow:auto"><table class="cost-table"><thead><tr>' + head + '<th></th></tr></thead><tbody>' + body + '</tbody></table></div><div class="row-actions" style="margin:4px 0"><button class="btn ghost" data-load-add="' + key + '">+ Add lane</button></div>';
+        const body = rows.map((row, ri) => '<tr>' + LOAD_COLS.map((c, ci) => '<td class="qb-cell"><input class="ws-load" data-arm="' + key + '" data-r="' + ri + '" data-c="' + ci + '"' + (ci === 2 ? ' list="loadPops"' : '') + ' value="' + escAttr(row[ci] || '') + '"></td>').join('') + '<td><button class="btn tiny" data-load-del="' + key + '|' + ri + '">\u2715</button></td></tr>').join('');
+        loadBody += '<h4 style="margin:10px 0 3px">' + esc(label) + '</h4><div style="overflow:auto"><table class="cost-table qb-table"><thead><tr>' + head + '<th></th></tr></thead><tbody>' + body + '</tbody></table></div><div class="row-actions" style="margin:3px 0"><button class="btn ghost" data-load-add="' + key + '">+ Add lane</button></div>';
       });
     }
-    const kitRows = w.kits.map((k, i) => '<tr><td>' + esc(k.kit) + '</td><td class="who">' + esc(k.pn || '') + '</td>'
-      + '<td><input class="ws-lot" data-i="' + i + '" value="' + escAttr(k.lot || '') + '" style="width:120px"></td>'
-      + '<td><input class="ws-rxns" data-i="' + i + '" value="' + escAttr(k.rxns || '') + '" style="width:70px"></td>'
-      + '<td><input class="ws-knote" data-i="' + i + '" value="' + escAttr(k.notes || '') + '" style="width:150px"></td></tr>').join('');
-    const cHead = cfg.countCols.map((c) => '<th>' + esc(c) + '</th>').join('');
-    const cRows = w.counts.map((row, ri) => '<tr>' + cfg.countCols.map((c, ci) => '<td><input class="ws-cnt" data-r="' + ri + '" data-c="' + ci + '" value="' + escAttr(row[ci] || '') + '" style="width:90px"></td>').join('') + '<td><button class="btn tiny" data-ws-delrow="' + ri + '">\u2715</button></td></tr>').join('');
-    host.innerHTML = '<h2>' + esc(cfg.title) + ' <span class="who">' + esc(rec.name || '') + '</span></h2>'
+
+    const qubitMeta = (qt) => { const tables = w.qubit[qt.key]; const nLibs = tables.reduce((s, t) => s + t.rows.filter((r) => r[0]).length, 0); return '(' + nLibs + ' librar' + (nLibs === 1 ? 'y' : 'ies') + (tables.length > 1 ? ', ' + tables.length + ' preps' : '') + ')'; };
+    const qubitBody = (qt) => { const tables = w.qubit[qt.key]; const cols = qubitColsFor(qt.key); let sec = '';
+      tables.forEach((tbl, ti) => { const heads = cols.map((ci) => '<th>' + esc(QUBIT_COL_LABELS[ci]) + '</th>').join('');
+        const rowsHtml = tbl.rows.map((row, ri) => '<tr>' + cols.map((ci) => '<td class="qb-cell"><input class="ws-qb" data-qt="' + qt.key + '" data-ti="' + ti + '" data-r="' + ri + '" data-c="' + ci + '" value="' + escAttr(row[ci] || '') + '"><span class="qb-fill" data-qt="' + qt.key + '" data-ti="' + ti + '" data-r="' + ri + '" data-c="' + ci + '" title="Drag down to fill"></span></td>').join('') + '<td><button class="btn tiny" data-qb-rowdel="' + qt.key + '|' + ti + '|' + ri + '" title="Remove row">\u2715</button></td></tr>').join('');
+        sec += '<div class="qb-prep"><div class="qb-prep-head"><label>Prep round <input class="qb-round" type="number" min="1" data-qt="' + qt.key + '" data-ti="' + ti + '" value="' + escAttr(tbl.round) + '" style="width:52px"></label>' + (tables.length > 1 ? ' <button class="btn ghost tiny" data-qb-prepdel="' + qt.key + '|' + ti + '">Remove this prep round</button>' : '') + '</div><div style="overflow:auto"><table class="cost-table qb-table"><thead><tr>' + heads + '<th></th></tr></thead><tbody>' + rowsHtml + '</tbody></table></div><div class="row-actions" style="margin:6px 0"><button class="btn ghost" data-qb-addrow="' + qt.key + '|' + ti + '">+ Add row</button> <button class="btn ghost" data-qb-fill="' + qt.key + '|' + ti + '">Fill expected library IDs</button></div></div>';
+      });
+      sec += '<div class="row-actions" style="margin:2px 0 6px"><button class="btn ghost" data-qb-addprep="' + qt.key + '">+ Add prep round</button></div>';
+      return sec; };
+
+    const notesBody = '<textarea id="wsNotes" style="width:100%;min-height:80px">' + esc(w.notes || '') + '</textarea>';
+
+    // ---- assemble ----
+    let sectionsHtml = '';
+    if (type === 'library') {
+      sectionsHtml += section('kits', '10X kit lots & rxns used', 'all kits for this design', kitsBody);
+      sectionsHtml += section('loading', '10X loading \u2014 lanes & cells', '', loadBody);
+      QUBIT_TABLES.forEach((qt) => { sectionsHtml += section('qb:' + qt.key, qt.title, qubitMeta(qt), qubitBody(qt)); });
+      sectionsHtml += section('notes', 'Notes', '', notesBody);
+    } else {
+      sectionsHtml += section('notes', 'Notes', '', notesBody);
+    }
+    const allDone = worksheetComplete(rec, type);
+    host.innerHTML = '<h2>' + esc(cfg.title) + ' <span class="who">' + esc(rec.name || '') + '</span>' + (allDone ? ' <span class="ws-alldone">\u2713 complete</span>' : '') + '</h2>'
       + '<div class="row-actions" style="margin:0 0 10px"><button class="btn ghost" id="wsReload">Reload from Drive</button><span id="wsReloadStatus" class="muted"></span></div>'
-      + '<p class="step-hint">Enter the values written on the paper worksheet. Saved to the experiment and to a durable <strong>data \u203a worksheets</strong> sheet in Drive, and surfaced in Review.</p>'
+      + '<p class="step-hint">Sections start collapsed \u2014 click a header to open it. Tick a section\u2019s box when it\u2019s fully entered; when every section is ticked the tab check turns green. Saved to the experiment and to a durable Drive sheet.</p>'
       + '<div class="row-actions" style="margin:6px 0"><label>Experiment ID <input id="wsExpId" style="width:120px" value="' + escAttr(w.expId || '') + '"></label> <label>Operator <input id="wsOperator" style="width:140px" value="' + escAttr(w.operator || '') + '"></label> <label>Date <input id="wsDate" style="width:120px" value="' + escAttr(w.date || '') + '"></label></div>'
-      + (type === 'library' ? '<h3>10X kit lots &amp; rxns used <span class="who">all kits for this experiment\u2019s design</span></h3><table class="cost-table"><thead><tr><th>10X kit</th><th>PN</th><th>Lot #</th><th>Rxns used</th><th>Notes</th></tr></thead><tbody>' + kitRows + '</tbody></table>' : '')
-      + '<h3 style="margin-top:18px">Cell counts &amp; dilution</h3><div style="overflow:auto"><table class="cost-table"><thead><tr>' + cHead + '<th></th></tr></thead><tbody>' + cRows + '</tbody></table></div>'
-      + '<div class="row-actions" style="margin:6px 0"><button class="btn ghost" id="wsAddRow">+ Add count row</button></div>'
-      + (type === 'library' ? (function () {
-          ensureQubitShape(w);
-          return QUBIT_TABLES.map((qt) => {
-            const tables = w.qubit[qt.key];
-            const nLibs = tables.reduce((s, t) => s + t.rows.filter((r) => r[0]).length, 0);
-            const collapsed = !!WS_QB_COLLAPSED[qt.key];
-            let sec = '<div class="qb-section"><div class="qb-sec-head" data-qb-sec="' + qt.key + '"><span class="lib-caret">' + (collapsed ? '\u25b8' : '\u25be') + '</span> <strong>' + esc(qt.title) + '</strong> <span class="who">(' + nLibs + ' librar' + (nLibs === 1 ? 'y' : 'ies') + (tables.length > 1 ? ', ' + tables.length + ' preps' : '') + ')</span></div>';
-            if (!collapsed) {
-              const cols = qubitColsFor(qt.key);
-              tables.forEach((tbl, ti) => {
-                const heads = cols.map((ci) => '<th>' + esc(QUBIT_COL_LABELS[ci]) + '</th>').join('');
-                const rowsHtml = tbl.rows.map((row, ri) => '<tr>' + cols.map((ci) => '<td class="qb-cell"><input class="ws-qb" data-qt="' + qt.key + '" data-ti="' + ti + '" data-r="' + ri + '" data-c="' + ci + '" value="' + escAttr(row[ci] || '') + '"><span class="qb-fill" data-qt="' + qt.key + '" data-ti="' + ti + '" data-r="' + ri + '" data-c="' + ci + '" title="Drag down to fill"></span></td>').join('') + '<td><button class="btn tiny" data-qb-rowdel="' + qt.key + '|' + ti + '|' + ri + '" title="Remove row">\u2715</button></td></tr>').join('');
-                sec += '<div class="qb-prep"><div class="qb-prep-head"><label>Prep round <input class="qb-round" type="number" min="1" data-qt="' + qt.key + '" data-ti="' + ti + '" value="' + escAttr(tbl.round) + '" style="width:52px"></label>'
-                  + (tables.length > 1 ? ' <button class="btn ghost tiny" data-qb-prepdel="' + qt.key + '|' + ti + '">Remove this prep round</button>' : '') + '</div>'
-                  + '<div style="overflow:auto"><table class="cost-table qb-table"><thead><tr>' + heads + '<th></th></tr></thead><tbody>' + rowsHtml + '</tbody></table></div>'
-                  + '<div class="row-actions" style="margin:6px 0"><button class="btn ghost" data-qb-addrow="' + qt.key + '|' + ti + '">+ Add row</button> <button class="btn ghost" data-qb-fill="' + qt.key + '|' + ti + '">Fill expected library IDs</button></div></div>';
-              });
-              sec += '<div class="row-actions" style="margin:2px 0 6px"><button class="btn ghost" data-qb-addprep="' + qt.key + '">+ Add prep round</button></div>';
-            }
-            return sec + '</div>';
-          }).join('');
-        })() : '')
-      + (type === 'batchday' ? loadHtml : '')
-      + '<h3 style="margin-top:18px">Notes</h3><textarea id="wsNotes" style="width:100%;min-height:80px">' + esc(w.notes || '') + '</textarea>'
+      + sectionsHtml
       + '<div class="row-actions" style="margin-top:12px"><button class="btn primary" id="wsSave">Save worksheet</button><span id="wsStatus" class="muted"></span></div>';
-    // wiring
+
+    // ---- wiring ----
     const bind = (id, key) => { const el = $('#' + id); if (el) el.addEventListener('input', () => { w[key] = el.value; }); };
     bind('wsExpId', 'expId'); bind('wsOperator', 'operator'); bind('wsDate', 'date'); bind('wsNotes', 'notes');
+    host.querySelectorAll('.ws-sec-head').forEach((el) => el.addEventListener('click', (e) => { if (e.target.closest('.ws-sec-chk')) return; const id = el.dataset.wsSec; WS_SEC_OPEN[type + ':' + id] = !WS_SEC_OPEN[type + ':' + id]; renderWorksheet(type); }));
+    host.querySelectorAll('.ws-sec-done').forEach((el) => el.addEventListener('change', () => { w.sectionDone[el.dataset.sec] = el.checked; Store.saveExperiment(rec); updateStepChecks('record'); renderWorksheet(type); }));
     host.querySelectorAll('.ws-lot').forEach((el) => el.addEventListener('input', () => { w.kits[+el.dataset.i].lot = el.value; }));
     host.querySelectorAll('.ws-rxns').forEach((el) => el.addEventListener('input', () => { w.kits[+el.dataset.i].rxns = el.value; }));
     host.querySelectorAll('.ws-knote').forEach((el) => el.addEventListener('input', () => { w.kits[+el.dataset.i].notes = el.value; }));
-    host.querySelectorAll('.ws-cnt').forEach((el) => el.addEventListener('input', () => { w.counts[+el.dataset.r][+el.dataset.c] = el.value; }));
-    const addRow = $('#wsAddRow'); if (addRow) addRow.addEventListener('click', () => { w.counts.push(cfg.countCols.map(() => '')); renderWorksheet(type); });
-    host.querySelectorAll('button[data-ws-delrow]').forEach((b) => b.addEventListener('click', () => { w.counts.splice(+b.dataset.wsDelrow, 1); if (!w.counts.length) w.counts.push(cfg.countCols.map(() => '')); renderWorksheet(type); }));
-    // ----- clipboard paste (Excel-style) for the grids -----
     const clipGrid = (e) => { const t = (e.clipboardData || window.clipboardData).getData('text'); if (!t) return null; const g = t.replace(/\r/g, '').replace(/\n+$/, '').split('\n').map((l) => l.split('\t')); return (g.length === 1 && g[0].length === 1) ? null : g; };
-    host.querySelectorAll('.ws-cnt').forEach((el) => el.addEventListener('paste', (e) => { const g = clipGrid(e); if (!g) return; e.preventDefault(); const r0 = +el.dataset.r, c0 = +el.dataset.c; g.forEach((line, ri) => { const r = r0 + ri; while (w.counts.length <= r) w.counts.push(cfg.countCols.map(() => '')); line.forEach((val, ci) => { const c = c0 + ci; if (c < cfg.countCols.length) w.counts[r][c] = val; }); }); renderWorksheet(type); }));
-    // ----- 10X loading tables (batch day) -----
+    // 10X loading handlers
     let loadSaveTimer = null; const loadSaveSoon = () => { clearTimeout(loadSaveTimer); loadSaveTimer = setTimeout(() => Store.saveExperiment(rec), 700); };
     host.querySelectorAll('.ws-load').forEach((el) => el.addEventListener('input', () => { const a = el.dataset.arm; if (w.loading && w.loading[a] && w.loading[a][+el.dataset.r]) { w.loading[a][+el.dataset.r][+el.dataset.c] = el.value; loadSaveSoon(); } }));
     host.querySelectorAll('button[data-load-add]').forEach((b) => b.addEventListener('click', () => { const a = b.dataset.loadAdd; w.loading[a] = w.loading[a] || []; w.loading[a].push(['', '', '', '', '', '']); Store.saveExperiment(rec); renderWorksheet(type); }));
     host.querySelectorAll('button[data-load-del]').forEach((b) => b.addEventListener('click', () => { const p = b.dataset.loadDel.split('|'); w.loading[p[0]].splice(+p[1], 1); if (!w.loading[p[0]].length) w.loading[p[0]].push(['', '', '', '', '', '']); Store.saveExperiment(rec); renderWorksheet(type); }));
     host.querySelectorAll('.ws-load').forEach((el) => el.addEventListener('paste', (e) => { const g = clipGrid(e); if (!g) return; e.preventDefault(); const a = el.dataset.arm, r0 = +el.dataset.r, c0 = +el.dataset.c; w.loading[a] = w.loading[a] || []; g.forEach((line, ri) => { const r = r0 + ri; while (w.loading[a].length <= r) w.loading[a].push(['', '', '', '', '', '']); line.forEach((val, ci) => { const c = c0 + ci; if (c < LOAD_COLS.length) w.loading[a][r][c] = val; }); }); Store.saveExperiment(rec); renderWorksheet(type); }));
+    // qubit handlers
     const qbTbl = (k, ti) => (w.qubit[k] && w.qubit[k][ti]) || null;
-    // Push every on-screen input value back into the data model before any re-render,
-    // so an in-progress edit (in any column) is never lost or reverted.
     const commitQubitInputs = () => { host.querySelectorAll('.ws-qb').forEach((el) => { const t = qbTbl(el.dataset.qt, +el.dataset.ti); if (t && t.rows[+el.dataset.r]) t.rows[+el.dataset.r][+el.dataset.c] = el.value; }); };
-    // Auto-save: persist the experiment record (localStorage + Drive) shortly after edits so
-    // the numbers survive a page reload and are retrieved from Drive next time, instead of reseeding.
     let qbSaveTimer = null; const qbSaveSoon = () => { clearTimeout(qbSaveTimer); qbSaveTimer = setTimeout(() => { commitQubitInputs(); Store.saveExperiment(rec); }, 700); };
     host.querySelectorAll('.ws-qb').forEach((el) => el.addEventListener('input', () => { const t = qbTbl(el.dataset.qt, +el.dataset.ti); if (t && t.rows[+el.dataset.r]) t.rows[+el.dataset.r][+el.dataset.c] = el.value; qbSaveSoon(); }));
     host.querySelectorAll('.ws-qb').forEach((el) => el.addEventListener('paste', (e) => { const t = (e.clipboardData || window.clipboardData).getData('text'); if (!t) return; const g = t.replace(/\r/g, '').replace(/\n+$/, '').split('\n').map((l) => l.split('\t')); if (g.length === 1 && g[0].length === 1) return; e.preventDefault(); commitQubitInputs(); const qtk = el.dataset.qt, ti = +el.dataset.ti, tbl = qbTbl(qtk, ti); if (!tbl) return; const cols = qubitColsFor(qtk); const startDisp = cols.indexOf(+el.dataset.c); const r0 = +el.dataset.r; g.forEach((line, ri) => { const r = r0 + ri; while (tbl.rows.length <= r) tbl.rows.push(qbBlank()); line.forEach((val, ci) => { const disp = startDisp + ci; if (disp >= 0 && disp < cols.length) tbl.rows[r][cols[disp]] = val; }); }); Store.saveExperiment(rec); renderWorksheet(type); }));
     host.querySelectorAll('.qb-round').forEach((el) => el.addEventListener('change', () => { commitQubitInputs(); const t = qbTbl(el.dataset.qt, +el.dataset.ti); if (t) { t.round = Number(el.value) || 1; Store.saveExperiment(rec); } }));
-    host.querySelectorAll('.qb-sec-head').forEach((el) => el.addEventListener('click', () => { commitQubitInputs(); Store.saveExperiment(rec); const k = el.dataset.qbSec; WS_QB_COLLAPSED[k] = !WS_QB_COLLAPSED[k]; renderWorksheet(type); }));
     host.querySelectorAll('button[data-qb-addrow]').forEach((b) => b.addEventListener('click', () => { commitQubitInputs(); const p = b.dataset.qbAddrow.split('|'); const t = qbTbl(p[0], +p[1]); if (t) { t.rows.push(qbBlank()); Store.saveExperiment(rec); renderWorksheet(type); } }));
     host.querySelectorAll('button[data-qb-rowdel]').forEach((b) => b.addEventListener('click', () => { commitQubitInputs(); const p = b.dataset.qbRowdel.split('|'); const t = qbTbl(p[0], +p[1]); if (t) { t.rows.splice(+p[2], 1); if (!t.rows.length) t.rows.push(qbBlank()); Store.saveExperiment(rec); renderWorksheet(type); } }));
     host.querySelectorAll('button[data-qb-fill]').forEach((b) => b.addEventListener('click', () => { commitQubitInputs(); const p = b.dataset.qbFill.split('|'); const t = qbTbl(p[0], +p[1]); if (!t) return; const exp = qubitExpectedTubes(p[0]); if (!exp.length) { alert('No expected library IDs \u2014 build the plan first.'); return; }
       const existing = {}; t.rows.forEach((r) => { if (r[0]) existing[r[0]] = r; }); t.rows = exp.map((id) => existing[id] || [id, '', '', '', '', '']); Store.saveExperiment(rec); renderWorksheet(type); }));
     host.querySelectorAll('button[data-qb-addprep]').forEach((b) => b.addEventListener('click', () => { commitQubitInputs(); const k = b.dataset.qbAddprep; const tables = w.qubit[k]; const maxR = tables.reduce((m, t) => Math.max(m, Number(t.round) || 1), 0); const exp = qubitExpectedTubes(k); tables.push({ round: maxR + 1, rows: (exp.length ? exp : ['']).map((id) => [id, '', '', '', '', '']) }); Store.saveExperiment(rec); renderWorksheet(type); }));
     host.querySelectorAll('button[data-qb-prepdel]').forEach((b) => b.addEventListener('click', () => { commitQubitInputs(); const p = b.dataset.qbPrepdel.split('|'); const tables = w.qubit[p[0]]; if (tables && tables.length > 1 && confirm('Remove this entire prep-round table and its values?')) { tables.splice(+p[1], 1); Store.saveExperiment(rec); renderWorksheet(type); } }));
-    // spreadsheet-style keyboard nav: Enter / arrows move between rows (within the same prep table)
     host.querySelectorAll('.ws-qb').forEach((el) => el.addEventListener('keydown', (e) => {
       if (e.key !== 'Enter' && e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
       const qtk = el.dataset.qt, ti = el.dataset.ti, r = +el.dataset.r, c = +el.dataset.c;
@@ -429,9 +428,6 @@
       if (!t) { commitQubitInputs(); const tbl = qbTbl(qtk, +ti); if (tbl) { tbl.rows.push(qbBlank()); Store.saveExperiment(rec); renderWorksheet(type); t = sel(r + 1); } }
       if (t) { t.focus(); t.select && t.select(); }
     }));
-    // drag the fill handle down to copy a value into lower rows of the SAME column.
-    // Updates the data model and the affected inputs in place (no full re-render), so
-    // edits in other columns (e.g. the Library ID column) are never touched or reverted.
     host.querySelectorAll('.qb-fill').forEach((h) => h.addEventListener('mousedown', (e) => {
       e.preventDefault(); const qtk = h.dataset.qt, ti = h.dataset.ti, sr = +h.dataset.r, c = +h.dataset.c; const tbl = qbTbl(qtk, +ti); if (!tbl) return;
       const srcInp = host.querySelector('.ws-qb[data-qt="' + qtk + '"][data-ti="' + ti + '"][data-r="' + sr + '"][data-c="' + c + '"]');
@@ -458,7 +454,7 @@
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([['Experiment ID', w.expId || ''], ['Operator', w.operator || ''], ['Date', w.date || ''], ['Notes', w.notes || '']]), 'Info');
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([['10X kit', 'PN', 'Lot #', 'Rxns used', 'Notes']].concat(w.kits.map((k) => [k.kit, k.pn, k.lot, k.rxns, k.notes]))), 'Kit lots');
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([cfg.countCols].concat(w.counts)), 'Cell counts');
-    if (type === 'batchday' && w.loading) { [['unsort', "Unsort 5'"], ['sort', "Sort 5'"], ['asap', 'ASAP']].forEach((a) => { const rows = (w.loading[a[0]] || []).filter((r) => r.some((c) => String(c || '') !== '')); if (rows.length) XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([['10X chip', 'Lane', 'Population loaded', 'Tube label', '# cells loaded', 'Notes']].concat(rows)), ('Loading ' + a[1]).slice(0, 31)); }); }
+    if (type === 'library' && w.loading) { [['unsort', "Unsort 5'"], ['sort', "Sort 5'"], ['asap', 'ASAP']].forEach((a) => { const rows = (w.loading[a[0]] || []).filter((r) => r.some((c) => String(c || '') !== '')); if (rows.length) XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([['10X chip', 'Lane', 'Population loaded', 'Tube label', '# cells loaded', 'Notes']].concat(rows)), ('Loading ' + a[1]).slice(0, 31)); }); }
     if (type === 'library') { ensureQubitShape(w); QUBIT_TABLES.forEach((qt) => { const flat = qubitFlatten(w.qubit[qt.key]); if (flat.length) { XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([['Library ID', 'Index ID', 'Amp. cycles', 'Qubit dilution', 'Qubit conc (ng/µL)', 'Notes', 'Prep round']].concat(flat)), ('Qubit ' + qt.title).slice(0, 31)); } }); }
     const b64 = XLSX.write(wb, { type: 'base64', bookType: 'xlsx' });
     const expId2 = rec.experimentId || projectLabel(rec.name || 'experiment');
@@ -498,7 +494,7 @@
         ws.qubit = rebuilt;
       }
       rec.worksheets[type] = ws; ensureQubitShape(rec.worksheets[type]);
-      if (type === 'batchday' && !ws.loading && prev.loading) ws.loading = prev.loading;
+      if (type === 'library' && !ws.loading && prev.loading) ws.loading = prev.loading;
       Store.saveExperiment(rec);
       if (stEl) stEl.textContent = ' Loaded from Drive.'; renderWorksheet(type);
     }).catch((e) => { if (stEl) stEl.textContent = ' Reload failed: ' + e; });

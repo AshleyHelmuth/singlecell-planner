@@ -930,8 +930,20 @@ main > .panel { flex: 1 1 auto; min-width: 0; }
 .qb-table th, .qb-table td { border-right: 1px solid var(--line); }
 .qb-table th:last-child, .qb-table td:last-child { border-right: 0; }
 .qb-table .qb-cell { position: relative; }
-.qb-table td.qb-cell input.ws-qb { width: 100%; min-width: 64px; box-sizing: border-box; border: 0; background: transparent; padding: 3px 8px; font-family: var(--mono); font-size: 12.5px; line-height: 1.5; }
-.qb-table td.qb-cell input.ws-qb:focus { outline: 2px solid var(--teal); outline-offset: -2px; background: var(--purple-50); }
+.qb-table td.qb-cell input.ws-qb, .qb-table td.qb-cell input.ws-load { width: 100%; min-width: 64px; box-sizing: border-box; border: 0; background: transparent; padding: 3px 8px; font-family: var(--mono); font-size: 12.5px; line-height: 1.5; }
+.qb-table td.qb-cell input.ws-qb:focus, .qb-table td.qb-cell input.ws-load:focus { outline: 2px solid var(--teal); outline-offset: -2px; background: var(--purple-50); }
+
+/* ===== Collapsible worksheet sections with a per-section done check ===== */
+.ws-sec { border: 1px solid var(--line); border-radius: 8px; margin: 8px 0; overflow: hidden; }
+.ws-sec-head { display: flex; align-items: center; gap: 8px; padding: 8px 12px; background: #eef2f7; cursor: pointer; user-select: none; font-size: 14px; }
+.ws-sec-head:hover { background: #e7edf4; }
+.ws-sec-head .lib-caret { color: var(--muted); }
+.ws-sec-chk { display: inline-flex; align-items: center; cursor: pointer; }
+.ws-sec-chk input { width: 16px; height: 16px; cursor: pointer; }
+.ws-sec.is-done > .ws-sec-head { background: #e7f4ea; }
+.ws-sec.is-done > .ws-sec-head strong::after { content: ' \2713'; color: #3f9d54; }
+.ws-sec-body { padding: 10px 12px 12px; }
+.ws-alldone { color: #3f9d54; font-weight: 700; font-size: 14px; }
 .qb-table td:last-child { padding: 0 4px; text-align: center; }
 .qb-fill { position: absolute; right: 2px; bottom: 2px; width: 7px; height: 7px; background: var(--teal, #1f7a7a); border: 1px solid #fff; border-radius: 2px; cursor: crosshair; opacity: 0; }
 .qb-cell:hover .qb-fill, .qb-cell input:focus + .qb-fill { opacity: 1; }
