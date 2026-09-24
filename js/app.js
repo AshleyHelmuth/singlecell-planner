@@ -32,8 +32,12 @@
   const LIBSTATUS_OPEN = {};   // which library-status attempt logs are expanded
   const WS_QB_COLLAPSED = {};  // which library-worksheet qubit categories are collapsed
   const WS_SEC_OPEN = {};      // which worksheet sections are expanded (default collapsed)
-  function worksheetSectionIds(type) { return type === 'library' ? ['kits', 'loading'].concat(QUBIT_TABLES.map((qt) => 'qb:' + qt.key)).concat(['notes']) : ['notes']; }
-  function worksheetComplete(rec, type) { const w = rec && rec.worksheets && rec.worksheets[type]; if (!w || !w.sectionDone) return false; const ids = worksheetSectionIds(type); return ids.length > 0 && ids.every((id) => !!w.sectionDone[id]); }
+  function worksheetSectionIds(rec, type) {
+    if (type === 'library') return ['kits', 'loading'].concat(QUBIT_TABLES.map((qt) => 'qb:' + qt.key)).concat(['notes']);
+    if (type === 'batchday') { const w = rec && rec.worksheets && rec.worksheets.batchday; const nSort = (w && w.sortStains && w.sortStains.length) || 1; const ids = ['pooling', 'cite']; for (let i = 0; i < nSort; i++) ids.push('sort:' + i); ids.push('notes'); return ids; }
+    return ['notes'];
+  }
+  function worksheetComplete(rec, type) { const w = rec && rec.worksheets && rec.worksheets[type]; if (!w || !w.sectionDone) return false; const ids = worksheetSectionIds(rec, type); return ids.length > 0 && ids.every((id) => !!w.sectionDone[id]); }
   let PLAN_INPUT = 'grid'; // 'grid' (real samples) | 'counts' (planning: synthesize from counts)
   let SORT_SEL = new Set((window.Pooling && Pooling.SORT_MODEL) ? Pooling.SORT_MODEL.DEFAULT_ON : ['HSC', 'pDC', 'cDC', 'Treg']);
   let CUSTOM_SORT_POPS = [];   // user-added sort populations
@@ -325,6 +329,94 @@
     }
     return rec.worksheets[type];
   }
+  // ===== Batch-day worksheet: pooling / CITE-seq staining / sort staining =====
+  function batchCtx() {
+    let pools = [], hasAsap = false, sortPops = [];
+    try {
+      const c = computePooling();
+      if (c && c.poolRes && c.poolRes.pools) {
+        const htoByPool = {}; (c.htoRes.assignments || []).forEach((a) => { htoByPool[a.pool] = a.hto; });
+        pools = c.poolRes.pools.map((pool, i) => ({ idx: i + 1, hto: htoByPool[i] || '', samples: pool.map((s) => '' + s.sampleId) }));
+      }
+      const arms = buildArmInstances(SEL); hasAsap = arms.some((a) => a.chem === 'asap');
+      sortPops = (sortSelList() || []).filter(Boolean);
+    } catch (e) { /* */ }
+    return { pools: pools, hasAsap: hasAsap, sortPops: sortPops };
+  }
+  // Best-effort per-pool Cellaca lookup: match a stored count's tube label to a pool number.
+  function cellacaPoolConc(rec, poolIdx) {
+    const list = (rec && rec.cellacaCountsList) || [];
+    const hit = list.filter((c) => { const t = (c.tubeLabel || '').toLowerCase(); return /pool/.test(t) && new RegExp('\\b' + poolIdx + '\\b').test(t); })[0];
+    return hit ? { live: hit.live, viability: hit.viability } : null;
+  }
+  const bdInp = (cls, attrs, val, wd) => '<input class="' + cls + '" ' + attrs + ' value="' + escAttr(val == null ? '' : val) + '"' + (wd ? ' style="width:' + wd + 'px"' : '') + '>';
+  // transposed HTO table: row1 pool labels, row2 TotalSeqC HTO#, row3 tube ID
+  function bdHtoTable(cls, arr, poolLabels) {
+    let h = '<div style="overflow:auto"><table class="cost-table qb-table"><tbody>';
+    h += '<tr><th>Pool</th>' + poolLabels.map((p) => '<td><strong>' + esc(p) + '</strong></td>').join('') + '</tr>';
+    h += '<tr><th>TotalSeqC HTO#</th>' + poolLabels.map((p, i) => '<td class="qb-cell">' + bdInp(cls, 'data-i="' + i + '" data-f="hto"', (arr[i] && arr[i].hto) || '') + '</td>').join('') + '</tr>';
+    h += '<tr><th>Tube ID</th>' + poolLabels.map((p, i) => '<td class="qb-cell">' + bdInp(cls, 'data-i="' + i + '" data-f="tube"', (arr[i] && arr[i].tube) || '') + '</td>').join('') + '</tr>';
+    return h + '</tbody></table></div>';
+  }
+  // counts table: conc (cells/mL), live%, total (=conc*1000), vol pooled
+  function bdCountsTable(cls, rows, poolLabels) {
+    let h = '<div style="overflow:auto"><table class="cost-table qb-table"><thead><tr><th>Pool</th><th>Cell conc (cells/mL)</th><th>Live %</th><th>Total cells (conc\u00d71000)</th><th>Vol pooled (\u00b5L)</th></tr></thead><tbody>';
+    poolLabels.forEach((p, i) => { const r = rows[i] || {}; const conc = parseFloat(r.conc); const total = isNaN(conc) ? '' : Math.round(conc * 1000).toLocaleString();
+      h += '<tr><td><strong>' + esc(p) + '</strong></td><td class="qb-cell">' + bdInp(cls, 'data-i="' + i + '" data-f="conc"', r.conc) + '</td><td class="qb-cell">' + bdInp(cls, 'data-i="' + i + '" data-f="live"', r.live) + '</td><td class="num">' + (total || '\u2014') + '</td><td class="qb-cell">' + bdInp(cls, 'data-i="' + i + '" data-f="vol"', r.vol) + '</td></tr>';
+    });
+    return h + '</tbody></table></div>';
+  }
+
+  function bdPoolingBody(w, ctx) {
+    w.pooling = w.pooling || {};
+    if (!w.pooling.pools) w.pooling.pools = ctx.pools.map((p) => ({ label: 'Pool ' + p.idx, hto: p.hto, samples: p.samples.join(', ') }));
+    const init = '<h4 style="margin:0 0 4px">Initial pooling scheme (from experimental design)</h4><div style="overflow:auto"><table class="cost-table qb-table"><thead><tr><th>Pool</th><th>HTO</th><th>Samples</th></tr></thead><tbody>'
+      + (ctx.pools.length ? ctx.pools.map((p) => '<tr><td><strong>Pool ' + p.idx + '</strong></td><td>' + esc(p.hto || '\u2014') + '</td><td class="who">' + esc(p.samples.join(', ') || '\u2014') + '</td></tr>').join('') : '<tr><td colspan="3" class="muted">Build the plan to see the designed pools.</td></tr>') + '</tbody></table></div>';
+    const actual = '<h4 style="margin:14px 0 4px">Actual pooling <span class="who">edit to match what was done \u2014 change samples or remove a pool</span></h4><div style="overflow:auto"><table class="cost-table qb-table"><thead><tr><th>Pool</th><th>HTO</th><th>Samples (comma-separated)</th><th></th></tr></thead><tbody>'
+      + w.pooling.pools.map((p, i) => '<tr><td class="qb-cell">' + bdInp('bp-pool', 'data-i="' + i + '" data-f="label"', p.label, 90) + '</td><td class="qb-cell">' + bdInp('bp-pool', 'data-i="' + i + '" data-f="hto"', p.hto, 60) + '</td><td class="qb-cell">' + bdInp('bp-pool', 'data-i="' + i + '" data-f="samples"', p.samples) + '</td><td><button class="btn tiny" data-bp-del="' + i + '">\u2715</button></td></tr>').join('')
+      + '</tbody></table></div><div class="row-actions" style="margin:4px 0"><button class="btn ghost" id="bpAddPool">+ Add pool</button> <button class="btn ghost" id="bpReset">Reset to designed scheme</button></div>';
+    const notes = '<label class="who" style="display:block;margin-top:8px">Notes on pooling changes<textarea class="bp-notes" style="width:100%;min-height:60px;display:block">' + esc(w.pooling.notes || '') + '</textarea></label>';
+    return init + actual + notes;
+  }
+
+  function bdCiteBody(w, ctx, rec) {
+    w.cite = w.cite || {};
+    const uLabels = ctx.pools.map((p) => 'Pool ' + p.idx);
+    const aLabels = ctx.hasAsap ? ctx.pools.map((p) => 'Pool ' + p.idx) : [];
+    w.cite.htoU = w.cite.htoU || ctx.pools.map((p) => ({ hto: p.hto || '', tube: '' }));
+    w.cite.htoA = w.cite.htoA || (ctx.hasAsap ? ctx.pools.map((p) => ({ hto: p.hto || '', tube: '' })) : []);
+    w.cite.cntU = w.cite.cntU || ctx.pools.map((p, i) => { const cc = cellacaPoolConc(rec, i + 1) || {}; return { conc: cc.live != null ? cc.live : '', live: cc.viability != null ? cc.viability : '', vol: '' }; });
+    w.cite.cntA = w.cite.cntA || (ctx.hasAsap ? ctx.pools.map((p, i) => { const cc = cellacaPoolConc(rec, i + 1) || {}; return { conc: cc.live != null ? cc.live : '', live: cc.viability != null ? cc.viability : '', vol: '' }; }) : []);
+    w.cite.lyo = w.cite.lyo || [['', '', '', '']];
+    let h = '<h4 style="margin:0 0 4px">Unsort hashtags</h4>' + bdHtoTable('cite-u-hto', w.cite.htoU, uLabels);
+    if (ctx.hasAsap) h += '<h4 style="margin:12px 0 4px">ASAP hashtags</h4>' + bdHtoTable('cite-a-hto', w.cite.htoA, aLabels);
+    h += '<h4 style="margin:14px 0 4px">Unsort pool cell counts <span class="who">conc &amp; live% pre-filled from Cellaca where matched</span></h4>' + bdCountsTable('cite-u-cnt', w.cite.cntU, uLabels);
+    if (ctx.hasAsap) h += '<h4 style="margin:12px 0 4px">ASAP pool cell counts</h4>' + bdCountsTable('cite-a-cnt', w.cite.cntA, aLabels);
+    h += '<h4 style="margin:14px 0 4px">Lyophilised (lyo) staining</h4><div style="overflow:auto"><table class="cost-table qb-table"><thead><tr><th>Panel</th><th># lyo vials</th><th># cells stained</th><th>Lot #</th><th></th></tr></thead><tbody>'
+      + w.cite.lyo.map((r, i) => '<tr>' + ['panel', 'vials', 'cells', 'lot'].map((f, ci) => '<td class="qb-cell">' + bdInp('cite-lyo', 'data-i="' + i + '" data-c="' + ci + '"', r[ci]) + '</td>').join('') + '<td><button class="btn tiny" data-lyo-del="' + i + '">\u2715</button></td></tr>').join('')
+      + '</tbody></table></div><div class="row-actions" style="margin:4px 0"><button class="btn ghost" id="lyoAdd">+ Add panel</button></div>';
+    h += '<label class="who" style="display:block;margin-top:8px">Notes<textarea class="cite-notes" style="width:100%;min-height:60px;display:block">' + esc(w.cite.notes || '') + '</textarea></label>';
+    return h;
+  }
+
+  function bdSortBody(w, ctx, si) {
+    const st = w.sortStains[si];
+    const labels = ctx.sortPops.length ? ctx.sortPops.slice() : ['Sort pool 1'];
+    st.hto = st.hto || labels.map(() => ({ hto: '', tube: '' }));
+    st.counts = st.counts || labels.map((p) => ({ pool: p, conc: '', vol: '', volPooled: '' }));
+    // transposed HTO table with section index
+    let h = '<div style="overflow:auto"><table class="cost-table qb-table"><tbody>';
+    h += '<tr><th>Sort pool</th>' + labels.map((p) => '<td><strong>' + esc(p) + '</strong></td>').join('') + '</tr>';
+    h += '<tr><th>TotalSeqC HTO#</th>' + labels.map((p, i) => '<td class="qb-cell">' + bdInp('sort-hto', 'data-si="' + si + '" data-i="' + i + '" data-f="hto"', (st.hto[i] && st.hto[i].hto) || '') + '</td>').join('') + '</tr>';
+    h += '<tr><th>Tube ID</th>' + labels.map((p, i) => '<td class="qb-cell">' + bdInp('sort-hto', 'data-si="' + si + '" data-i="' + i + '" data-f="tube"', (st.hto[i] && st.hto[i].tube) || '') + '</td>').join('') + '</tr></tbody></table></div>';
+    h += '<h4 style="margin:14px 0 4px">Sort pool cell counts</h4><div style="overflow:auto"><table class="cost-table qb-table"><thead><tr><th>Sort pool</th><th>Cell conc (cells/mL)</th><th>Vol (mL)</th><th>Total cells (conc\u00d7vol\u00d71000)</th><th>Vol pooled (\u00b5L)</th><th></th></tr></thead><tbody>'
+      + st.counts.map((r, i) => { const conc = parseFloat(r.conc), vol = parseFloat(r.vol); const total = (isNaN(conc) || isNaN(vol)) ? '' : Math.round(conc * vol * 1000).toLocaleString();
+        return '<tr><td class="qb-cell">' + bdInp('sort-cnt', 'data-si="' + si + '" data-i="' + i + '" data-f="pool"', r.pool) + '</td><td class="qb-cell">' + bdInp('sort-cnt', 'data-si="' + si + '" data-i="' + i + '" data-f="conc"', r.conc) + '</td><td class="qb-cell">' + bdInp('sort-cnt', 'data-si="' + si + '" data-i="' + i + '" data-f="vol"', r.vol) + '</td><td class="num">' + (total || '\u2014') + '</td><td class="qb-cell">' + bdInp('sort-cnt', 'data-si="' + si + '" data-i="' + i + '" data-f="volPooled"', r.volPooled) + '</td><td><button class="btn tiny" data-sortcnt-del="' + si + '|' + i + '">\u2715</button></td></tr>'; }).join('')
+      + '</tbody></table></div><div class="row-actions" style="margin:4px 0"><button class="btn ghost" data-sortcnt-add="' + si + '">+ Add sort pool</button></div>';
+    h += '<label class="who" style="display:block;margin-top:8px">Notes<textarea class="sort-notes" data-si="' + si + '" style="width:100%;min-height:60px;display:block">' + esc(st.notes || '') + '</textarea></label>';
+    return h;
+  }
+
   function renderWorksheet(type) {
     const cfg = WORKSHEET_CFG[type]; const host = $('#' + cfg.host); if (!host) return;
     const rec = CURRENT_EXP_ID ? Store.getExperiment(CURRENT_EXP_ID) : null;
@@ -378,6 +470,14 @@
       sectionsHtml += section('kits', '10X kit lots & rxns used', 'all kits for this design', kitsBody);
       sectionsHtml += section('loading', '10X loading \u2014 lanes & cells', '', loadBody);
       QUBIT_TABLES.forEach((qt) => { sectionsHtml += section('qb:' + qt.key, qt.title, qubitMeta(qt), qubitBody(qt)); });
+      sectionsHtml += section('notes', 'Notes', '', notesBody);
+    } else if (type === 'batchday') {
+      const ctx = batchCtx();
+      w.sortStains = w.sortStains || [{}];
+      sectionsHtml += section('pooling', 'Pooling', (ctx.pools.length ? ctx.pools.length + ' pools' : ''), bdPoolingBody(w, ctx));
+      sectionsHtml += section('cite', 'CITE-seq staining', '', bdCiteBody(w, ctx, rec));
+      w.sortStains.forEach((st, si) => { sectionsHtml += section('sort:' + si, 'Sort staining ' + (si + 1), '', bdSortBody(w, ctx, si)); });
+      sectionsHtml += '<div class="row-actions" style="margin:2px 0 8px"><button class="btn ghost" id="bdAddSort">+ Add sort staining</button>' + (w.sortStains.length > 1 ? ' <button class="btn ghost" id="bdDelSort">Remove last sort staining</button>' : '') + '</div>';
       sectionsHtml += section('notes', 'Notes', '', notesBody);
     } else {
       sectionsHtml += section('notes', 'Notes', '', notesBody);
@@ -441,6 +541,32 @@
         rowEls.forEach((el) => { el.style.background = ''; }); Store.saveExperiment(rec); };
       document.addEventListener('mousemove', onMove); document.addEventListener('mouseup', onUp);
     }));
+    if (type === 'batchday') {
+      let bdTimer = null; const bdSave = () => { clearTimeout(bdTimer); bdTimer = setTimeout(() => Store.saveExperiment(rec), 600); };
+      // pooling
+      host.querySelectorAll('.bp-pool').forEach((el) => el.addEventListener('input', () => { const p = w.pooling.pools[+el.dataset.i]; if (p) { p[el.dataset.f] = el.value; bdSave(); } }));
+      host.querySelectorAll('.bp-notes').forEach((el) => el.addEventListener('input', () => { w.pooling.notes = el.value; bdSave(); }));
+      const bpAdd = $('#bpAddPool'); if (bpAdd) bpAdd.addEventListener('click', () => { w.pooling.pools.push({ label: 'Pool ' + (w.pooling.pools.length + 1), hto: '', samples: '' }); Store.saveExperiment(rec); renderWorksheet(type); });
+      const bpReset = $('#bpReset'); if (bpReset) bpReset.addEventListener('click', () => { if (confirm('Reset actual pooling to the designed scheme?')) { const c2 = batchCtx(); w.pooling.pools = c2.pools.map((p) => ({ label: 'Pool ' + p.idx, hto: p.hto, samples: p.samples.join(', ') })); Store.saveExperiment(rec); renderWorksheet(type); } });
+      host.querySelectorAll('button[data-bp-del]').forEach((b) => b.addEventListener('click', () => { w.pooling.pools.splice(+b.dataset.bpDel, 1); Store.saveExperiment(rec); renderWorksheet(type); }));
+      // CITE-seq staining
+      const citeArr = { 'cite-u-hto': function () { return w.cite.htoU; }, 'cite-a-hto': function () { return w.cite.htoA; }, 'cite-u-cnt': function () { return w.cite.cntU; }, 'cite-a-cnt': function () { return w.cite.cntA; } };
+      Object.keys(citeArr).forEach((cls) => host.querySelectorAll('.' + cls).forEach((el) => el.addEventListener('input', () => { const arr = citeArr[cls](); const o = arr[+el.dataset.i]; if (o) { o[el.dataset.f] = el.value; bdSave(); } })));
+      host.querySelectorAll('.cite-u-cnt, .cite-a-cnt').forEach((el) => el.addEventListener('change', () => { if (el.dataset.f === 'conc') renderWorksheet(type); }));
+      host.querySelectorAll('.cite-lyo').forEach((el) => el.addEventListener('input', () => { const r = w.cite.lyo[+el.dataset.i]; if (r) { r[+el.dataset.c] = el.value; bdSave(); } }));
+      const lyoAdd = $('#lyoAdd'); if (lyoAdd) lyoAdd.addEventListener('click', () => { w.cite.lyo.push(['', '', '', '']); Store.saveExperiment(rec); renderWorksheet(type); });
+      host.querySelectorAll('button[data-lyo-del]').forEach((b) => b.addEventListener('click', () => { w.cite.lyo.splice(+b.dataset.lyoDel, 1); if (!w.cite.lyo.length) w.cite.lyo.push(['', '', '', '']); Store.saveExperiment(rec); renderWorksheet(type); }));
+      host.querySelectorAll('.cite-notes').forEach((el) => el.addEventListener('input', () => { w.cite.notes = el.value; bdSave(); }));
+      // sort staining
+      host.querySelectorAll('.sort-hto').forEach((el) => el.addEventListener('input', () => { const st = w.sortStains[+el.dataset.si]; const o = st && st.hto[+el.dataset.i]; if (o) { o[el.dataset.f] = el.value; bdSave(); } }));
+      host.querySelectorAll('.sort-cnt').forEach((el) => el.addEventListener('input', () => { const st = w.sortStains[+el.dataset.si]; const o = st && st.counts[+el.dataset.i]; if (o) { o[el.dataset.f] = el.value; bdSave(); } }));
+      host.querySelectorAll('.sort-cnt').forEach((el) => el.addEventListener('change', () => { if (el.dataset.f === 'conc' || el.dataset.f === 'vol') renderWorksheet(type); }));
+      host.querySelectorAll('.sort-notes').forEach((el) => el.addEventListener('input', () => { const st = w.sortStains[+el.dataset.si]; if (st) { st.notes = el.value; bdSave(); } }));
+      host.querySelectorAll('button[data-sortcnt-add]').forEach((b) => b.addEventListener('click', () => { const si = +b.dataset.sortcntAdd; w.sortStains[si].counts = w.sortStains[si].counts || []; w.sortStains[si].counts.push({ pool: '', conc: '', vol: '', volPooled: '' }); Store.saveExperiment(rec); renderWorksheet(type); }));
+      host.querySelectorAll('button[data-sortcnt-del]').forEach((b) => b.addEventListener('click', () => { const p = b.dataset.sortcntDel.split('|'); w.sortStains[+p[0]].counts.splice(+p[1], 1); Store.saveExperiment(rec); renderWorksheet(type); }));
+      const bdAddSort = $('#bdAddSort'); if (bdAddSort) bdAddSort.addEventListener('click', () => { w.sortStains.push({}); Store.saveExperiment(rec); renderWorksheet(type); });
+      const bdDelSort = $('#bdDelSort'); if (bdDelSort) bdDelSort.addEventListener('click', () => { if (w.sortStains.length > 1) { delete w.sectionDone['sort:' + (w.sortStains.length - 1)]; w.sortStains.pop(); Store.saveExperiment(rec); renderWorksheet(type); } });
+    }
     const save = $('#wsSave'); if (save) save.addEventListener('click', () => saveWorksheet(rec, type));
     const reload = $('#wsReload'); if (reload) reload.addEventListener('click', () => reloadWorksheetFromDrive(rec, type));
   }
@@ -495,6 +621,8 @@
       }
       rec.worksheets[type] = ws; ensureQubitShape(rec.worksheets[type]);
       if (type === 'library' && !ws.loading && prev.loading) ws.loading = prev.loading;
+      if (type === 'batchday') { ws.pooling = ws.pooling || prev.pooling; ws.cite = ws.cite || prev.cite; ws.sortStains = ws.sortStains || prev.sortStains; }
+      ws.sectionDone = ws.sectionDone || prev.sectionDone;
       Store.saveExperiment(rec);
       if (stEl) stEl.textContent = ' Loaded from Drive.'; renderWorksheet(type);
     }).catch((e) => { if (stEl) stEl.textContent = ' Reload failed: ' + e; });
@@ -1378,9 +1506,15 @@
     ['batchday', 'library'].forEach((type) => { const w = ws[type]; if (!w) return;
       (w.kits || []).forEach((k) => { if (k.lot || k.rxns || k.notes) kitRows += '<tr><td>' + esc(WORKSHEET_CFG[type].title) + '</td><td>' + esc(k.kit) + '</td><td class="who">' + esc(k.pn || '') + '</td><td>' + esc(k.lot || '') + '</td><td class="num">' + esc(k.rxns || '') + '</td><td class="who">' + esc(k.notes || '') + '</td></tr>'; });
     });
+    const bd = ws.batchday || {};
+    const htoRO = (title, arr, labelFn) => { if (!arr || !arr.length || !arr.some((x) => x && (x.hto || x.tube))) return ''; return '<h4 style="margin:12px 0 4px">' + esc(title) + '</h4><table class="cost-table"><thead><tr><th>Pool</th><th>TotalSeqC HTO#</th><th>Tube ID</th></tr></thead><tbody>' + arr.map((x, i) => '<tr><td>' + esc(labelFn(i)) + '</td><td>' + esc((x && x.hto) || '') + '</td><td>' + esc((x && x.tube) || '') + '</td></tr>').join('') + '</tbody></table>'; };
+    let htoHtml = '';
+    if (bd.cite) { htoHtml += htoRO('CITE-seq unsort hashtags', bd.cite.htoU, (i) => 'Pool ' + (i + 1)); htoHtml += htoRO('CITE-seq ASAP hashtags', bd.cite.htoA, (i) => 'Pool ' + (i + 1)); }
+    (bd.sortStains || []).forEach((st, si) => { htoHtml += htoRO('Sort staining ' + (si + 1) + ' hashtags', st.hto, (i) => (st.counts && st.counts[i] && st.counts[i].pool) || ('Sort pool ' + (i + 1))); });
     host.innerHTML = '<h2>Kit and supply usage <span class="who">' + esc(rec.name || '') + '</span></h2>'
       + '<h3>Recorded 10X kit lots &amp; rxns used</h3>'
       + (kitRows ? '<table class="cost-table"><thead><tr><th>Worksheet</th><th>10X kit</th><th>PN</th><th>Lot #</th><th class="num">Rxns used</th><th>Notes</th></tr></thead><tbody>' + kitRows + '</tbody></table>' : '<p class="empty">No kit lots recorded yet. Enter them on Record \u2192 Batch Day / Library Worksheets.</p>')
+      + (htoHtml ? '<h3 style="margin-top:16px">Hashtags (TotalSeqC HTO) used</h3>' + htoHtml : '')
       + '<p class="who" style="margin-top:10px">Planned reagent quantities &amp; cost are on Plan \u2192 Reagents &amp; cost.</p>';
   }
   // ===== General notes: rich-text editor (Record) + read-only view (Review) =====
