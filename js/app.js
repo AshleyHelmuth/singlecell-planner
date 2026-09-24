@@ -1339,32 +1339,39 @@
     rec.libStatus = rec.libStatus || {};
     const sections = libStatusLibs(rec);
     if (!sections.length) { host.innerHTML = '<h2>Library status</h2><p class="empty">Build a plan (and/or upload TapeStation) so libraries can be listed here.</p>'; return; }
-    // TapeStation index by arm|type|laneNo
     const normLib = normLibId;
-    // TapeStation indexed by the derived library id (prefix+lane+'-'+type) + round.
-    const tsIdx = {};
-    (rec.tapestation || []).forEach((run) => (run.wells || []).forEach((w) => { const derived = normLibId(tsWellLibId(w)); if (!derived) return; const rd = Number(w.round) || 1; const k = derived + '|' + rd; if (!tsIdx[k]) tsIdx[k] = { concs: [], imgs: [] }; if (w.conc) tsIdx[k].concs.push(w.conc); if (w.imgFileId || w.imgKey || w.img) tsIdx[k].imgs.push(Object.assign({}, w, { _run: run.runName, _date: run.savedAt })); }));
-    // Qubit index: base tube (minus -N suffix) + round (from suffix or the Prep round column)
-    const qt = (rec.worksheets && rec.worksheets.library && rec.worksheets.library.qubit) || {};
-    const qAll = []; if (qt && !Array.isArray(qt)) QUBIT_TABLES.forEach((t) => (qt[t.key] || []).forEach((r) => { if (r && r[0]) { const tube = String(r[0]); const m = tube.match(/-(\d+)\s*$/); const round = m ? Number(m[1]) : (parseInt(r[3], 10) || 1); const base = tube.replace(/-\d+\s*$/, ''); qAll.push({ tube: tube, base: base, round: round, conc: r[2] || '', stage: t.title }); } }));
-    const qubitForRound = (lib, round) => qAll.filter((q) => normLib(q.base) === normLib(lib.id) && q.round === round);
-    const roundsForLib = (lib) => { const rs = new Set([1]); const nid = normLib(lib.id); qAll.forEach((q) => { if (normLib(q.base) === nid) rs.add(q.round); }); Object.keys(tsIdx).forEach((k) => { const p = k.split('|'); if (p[0] === nid) rs.add(Number(p[1])); }); const st = rec.libStatus[lib.id] || {}; Object.keys(st.rounds || {}).forEach((r) => rs.add(Number(r))); return Array.from(rs).sort((a, b) => a - b); };
-    const tsForRound = (lib, round) => tsIdx[normLib(lib.id) + '|' + round] || { concs: [], imgs: [] };
-    // cDNA input Qubit for a lane (from the 5' cDNA table, tube containing prefix+laneNo)
-    const cdnaQubitFor = (pfx, laneNo) => { const tag = (pfx + laneNo).toUpperCase(); const hit = (qt.cdna5 || []).filter((r) => r && r[0] && String(r[0]).toUpperCase().indexOf(tag) >= 0)[0]; return hit ? (hit[2] || '') : ''; };
-    const statusOf = (id) => (rec.libStatus[id] && rec.libStatus[id].status) || 'In progress';
-    const pillClass = (s) => s === 'Good' ? 'ok' : (s === 'Needs re-prep' ? 'bad' : 'wip');
-    // aggregate a group's status: bad if any needs re-prep, good if all good, else wip
-    const groupStatus = (g) => { let anyBad = false, allGood = true; g.libs.forEach((l) => { const s = statusOf(l.id); if (s === 'Needs re-prep') anyBad = true; if (s !== 'Good') allGood = false; }); return anyBad ? 'Needs re-prep' : (allGood ? 'Good' : 'In progress'); };
 
-    // ---- summary status overview (compact matrix) ----
-    // ---- summary: one color-coded milestone bar per modality ----
+    // ---- TapeStation index: normLibId|round -> { wells:[] } (keep the wells so we
+    //      can correct their conc for the recorded dilution at render time) ----
+    const tsIdx = {};
+    (rec.tapestation || []).forEach((run) => (run.wells || []).forEach((w) => {
+      const derived = normLibId(tsWellLibId(w)); if (!derived) return;
+      const rd = Number(w.round) || 1; const k = derived + '|' + rd;
+      (tsIdx[k] || (tsIdx[k] = { wells: [] })).wells.push(Object.assign({}, w, { _run: run.runName, _date: run.savedAt }));
+    }));
+    const tsWellsFor = (lib, round) => (tsIdx[normLib(lib.id) + '|' + round] || { wells: [] }).wells;
+    const tsImgsOf = (wells) => wells.filter((w) => w.imgFileId || w.imgKey || w.img);
+    // TapeStation conc corrected for dilution (trace pg/µL * dilution factor)
+    const tsConcCorrOf = (wells) => wells.filter((w) => w.conc != null && String(w.conc).trim() !== '')
+      .map((w) => { const n = parseFloat(w.conc); return isNaN(n) ? String(w.conc) : (Math.round(n * tsDilFactor(w.dilution) * 10) / 10); });
+
+    // ---- Qubit index (tube, round, conc, dilution) ----
+    const qt = (rec.worksheets && rec.worksheets.library && rec.worksheets.library.qubit) || {};
+    const qAll = []; if (qt && !Array.isArray(qt)) QUBIT_TABLES.forEach((t) => (qt[t.key] || []).forEach((r) => { if (r && r[0]) { const tube = String(r[0]); const m = tube.match(/-(\d+)\s*$/); const round = m ? Number(m[1]) : (parseInt(r[3], 10) || 1); const base = tube.replace(/-\d+\s*$/, ''); qAll.push({ tube: tube, base: base, round: round, conc: r[2] || '', dil: r[1] || '', stage: t.title }); } }));
+    // Qubit conc corrected for its recorded dilution (reading * dilution factor)
+    const corrOne = (conc, dil) => { const n = parseFloat(conc); if (isNaN(n)) return ''; return Math.round(n * tsDilFactor(dil) * 100) / 100; };
+    const qubitCorrForRound = (lib, round) => qAll.filter((q) => normLib(q.base) === normLib(lib.id) && q.round === round).map((q) => corrOne(q.conc, q.dil)).filter((x) => x !== '');
+    const roundsForLib = (lib) => { const rs = new Set([1]); const nid = normLib(lib.id); qAll.forEach((q) => { if (normLib(q.base) === nid) rs.add(q.round); }); Object.keys(tsIdx).forEach((k) => { const p = k.split('|'); if (p[0] === nid) rs.add(Number(p[1])); }); const st = rec.libStatus[lib.id] || {}; Object.keys(st.rounds || {}).forEach((r) => rs.add(Number(r))); return Array.from(rs).sort((a, b) => a - b); };
+    const chosenFor = (lib) => { const st = rec.libStatus[lib.id] || {}; const rounds = roundsForLib(lib); return Number(st.chosen) || rounds[rounds.length - 1] || 1; };
+    // 5' input cDNA qubit for a lane (from the 5' cDNA table), corrected for its dilution
+    const cdnaCorrFor = (pfx, laneNo) => { const tag = (pfx + laneNo).toUpperCase(); const hit = (qt.cdna5 || []).filter((r) => r && r[0] && String(r[0]).toUpperCase().indexOf(tag) >= 0)[0]; return hit ? corrOne(hit[2], hit[1]) : ''; };
+
+    const dash = (v) => (v === '' || v == null || (Array.isArray(v) && !v.length)) ? '\u2014' : (Array.isArray(v) ? v.join(', ') : v);
+    const traceThumbs = (wells, lib, round) => { const imgs = tsImgsOf(wells); return imgs.length ? imgs.map((w) => '<img src="' + tsGetImgSrc(w) + '" class="ts-zoom lib-thumb" data-caption="' + escAttr(lib.id + (round > 1 ? '-' + round : '') + (w._run ? ' \u2014 ' + w._run : '') + (w._date ? ' (' + w._date + ')' : '') + (w.dilution ? ' \u00b7 ' + w.dilution : '')) + '" loading="lazy">').join(' ') : '\u2014'; };
+
+    // ---- milestone summary bars (one per modality) ----
     rec.libMilestones = rec.libMilestones || {};
-    const milestonesFor = (sec) => {
-      const types = sec.groups.map((g) => g.type).filter((t) => t !== 'cDNA');
-      const shared = sec.arm === 'ASAP' ? ['GEM generation'] : ['GEM generation', 'cDNA-pellet', 'cDNA-supernatant'];
-      return shared.concat(types.map((t) => t + ' library'));
-    };
+    const milestonesFor = (sec) => { const types = sec.groups.map((g) => g.type).filter((t) => t !== 'cDNA'); const shared = sec.arm === 'ASAP' ? ['GEM generation'] : ['GEM generation', 'cDNA-pellet', 'cDNA-supernatant']; return shared.concat(types.map((t) => t + ' library')); };
     let summary = '<div class="lib-summary">';
     sections.forEach((sec) => {
       const ms = milestonesFor(sec); const done = rec.libMilestones[sec.arm] || {};
@@ -1374,62 +1381,97 @@
     });
     summary += '</div>';
 
-    const inp = (cls, k, val, w, ph) => editable ? ('<input class="' + cls + '" data-k="' + escAttr(k) + '" value="' + escAttr(val || '') + '" style="width:' + (w || 90) + 'px"' + (ph ? ' placeholder="' + ph + '"' : '') + '>') : esc(val || '\u2014');
-    const statusSel = (k, val) => editable
-      ? '<select class="lib-st" data-k="' + escAttr(k) + '">' + ['In progress', 'Good', 'Needs re-prep'].map((o) => '<option' + (val === o ? ' selected' : '') + '>' + o + '</option>').join('') + '</select>'
-      : '<span class="lib-pill ' + pillClass(val || 'In progress') + '">' + esc(val || 'In progress') + '</span>';
+    // ============================ REVIEW (read-only) ============================
+    // Clean per-type summary with dilution-corrected values and no input boxes.
+    if (!editable) {
+      let body = '';
+      sections.forEach((sec) => {
+        const isAsap = sec.arm === 'ASAP';
+        body += '<div class="lib-section"><h3 style="margin:18px 0 6px">' + esc(sec.arm) + '</h3>';
+        const ms = milestonesFor(sec); const done = rec.libMilestones[sec.arm] || {};
+        body += '<div class="lib-mbar" style="margin-bottom:8px">' + ms.map((m, mi) => '<div class="lib-seg' + (done[m] ? ' done c' + (mi % 8) : '') + '" style="width:' + (100 / ms.length) + '%" title="' + escAttr(m) + '"></div>').join('') + '</div>';
+        const flags = (rec.libFlags || []).filter((f) => f.arm === sec.arm);
+        if (flags.length) body += '<div class="lib-flags">' + flags.map((f) => '<div class="lib-flag">\u2691 ' + esc(f.note || '') + '</div>').join('') + '</div>';
+        const groups = sec.groups.filter((g) => g.type !== 'cDNA');   // cDNA shown as a column, not its own group
+        if (!groups.length) { body += '<p class="who">No libraries yet.</p></div>'; return; }
+        groups.forEach((g) => {
+          const head = isAsap
+            ? ['Library', 'Input vol (\u00b5L)', 'Cycles', 'Qubit (ng/\u00b5L)', 'TapeStation (pg/\u00b5L)', 'Trace']
+            : ['Library', 'cDNA qubit (ng/\u00b5L)', 'Cycles', 'Library qubit (ng/\u00b5L)', 'TapeStation (pg/\u00b5L)', 'Trace'];
+          body += '<h4 class="lib-grp-h">' + esc(g.type) + ' <span class="who">(' + g.libs.length + ' librar' + (g.libs.length === 1 ? 'y' : 'ies') + ')</span></h4>';
+          body += '<div style="overflow:auto"><table class="cost-table libsum"><thead><tr>' + head.map((h) => '<th>' + esc(h) + '</th>').join('') + '</tr></thead><tbody>';
+          g.libs.forEach((l) => {
+            const round = chosenFor(l); const st = rec.libStatus[l.id] || {}; const cr = (st.rounds && st.rounds[round]) || {};
+            const wells = tsWellsFor(l, round);
+            const first = isAsap ? dash(cr.inputVol) : dash(cdnaCorrFor(sec.pfx, l.laneNo));
+            body += '<tr>'
+              + '<td class="lib-id">' + esc(l.id) + '</td>'
+              + '<td>' + first + '</td>'
+              + '<td>' + dash(cr.cycles) + '</td>'
+              + '<td>' + dash(qubitCorrForRound(l, round)) + '</td>'
+              + '<td>' + dash(tsConcCorrOf(wells)) + '</td>'
+              + '<td>' + traceThumbs(wells, l, round) + '</td>'
+              + '</tr>';
+          });
+          body += '</tbody></table></div>';
+        });
+        body += '</div>';
+      });
+      host.innerHTML = '<h2>Library status <span class="who">' + esc(rec.name || '') + '</span></h2>'
+        + '<p class="step-hint">Read-only summary by modality and library type. Concentrations are corrected for their recorded dilution. Edit on Record \u2192 Library status.</p>'
+        + summary + body;
+      host.querySelectorAll('.ts-zoom').forEach((img) => img.addEventListener('click', () => openImageLightbox(img.src, img.getAttribute('data-caption') || '')));
+      return;
+    }
 
+    // ============================ RECORD (editable) ============================
+    const roundInp = (f, id, rd, val, wd) => '<input class="lib-rf" data-k="' + escAttr(id) + '" data-round="' + rd + '" data-f="' + f + '" value="' + escAttr(val || '') + '" style="width:' + wd + 'px">';
     let body = '';
     sections.forEach((sec) => {
+      const isAsap = sec.arm === 'ASAP';
       body += '<div class="lib-section"><h3 style="margin:18px 0 6px">' + esc(sec.arm) + '</h3>';
-      // milestone checkboxes (editable on Record) + color-coded mini bar
       const ms = milestonesFor(sec); const done = rec.libMilestones[sec.arm] || {};
-      const mseg = ms.map((m, mi) => '<div class="lib-seg' + (done[m] ? ' done c' + (mi % 8) : '') + '" style="width:' + (100 / ms.length) + '%" title="' + escAttr(m) + '"></div>').join('');
-      body += '<div class="lib-mbar" style="margin-bottom:6px">' + mseg + '</div>';
-      if (editable) {
-        body += '<div class="lib-ms-checks">' + ms.map((m, mi) => '<label class="lib-ms-chk"><input type="checkbox" class="lib-ms" data-arm="' + escAttr(sec.arm) + '" data-m="' + escAttr(m) + '"' + (done[m] ? ' checked' : '') + '> <span class="lib-swatch c' + (mi % 8) + '"></span>' + esc(m) + '</label>').join('') + '</div>';
-      }
-      // flags for this modality
+      body += '<div class="lib-mbar" style="margin-bottom:6px">' + ms.map((m, mi) => '<div class="lib-seg' + (done[m] ? ' done c' + (mi % 8) : '') + '" style="width:' + (100 / ms.length) + '%" title="' + escAttr(m) + '"></div>').join('') + '</div>';
+      body += '<div class="lib-ms-checks">' + ms.map((m, mi) => '<label class="lib-ms-chk"><input type="checkbox" class="lib-ms" data-arm="' + escAttr(sec.arm) + '" data-m="' + escAttr(m) + '"' + (done[m] ? ' checked' : '') + '> <span class="lib-swatch c' + (mi % 8) + '"></span>' + esc(m) + '</label>').join('') + '</div>';
       const flags = (rec.libFlags || []).map((f, fi) => ({ f: f, fi: fi })).filter((x) => x.f.arm === sec.arm);
       if (flags.length) body += '<div class="lib-flags">' + flags.map((x) => '<div class="lib-flag">\u2691 ' + esc(x.f.note || '') + ' <button class="btn tiny" data-flag-del="' + x.fi + '">\u2715</button></div>').join('') + '</div>';
       body += '<div class="row-actions" style="margin:4px 0"><input class="lib-flag-note" data-arm="' + escAttr(sec.arm) + '" placeholder="flag note (e.g. CSP needs re-prep)" style="width:280px"> <button class="btn ghost tiny" data-flag-add="' + escAttr(sec.arm) + '">+ Add flag</button></div>';
       sec.groups.forEach((g) => {
         const gkey = g.arm + '|' + g.type; const open = !!LIBSTATUS_OPEN[gkey];
         const isCdna = g.type === 'cDNA';
-        const showCdnaIn = (g.arm !== 'ASAP') && !isCdna;
+        const inputHdr = isCdna ? '' : (isAsap ? '<th class="num">Input vol (\u00b5L)</th>' : '<th class="num">Input cDNA qubit (ng/\u00b5L)</th>');
         body += '<div class="lib-group' + (isCdna ? ' lib-group-cdna' : '') + '"><div class="lib-group-head"><span class="lib-grp-title" data-lib-grp="' + escAttr(gkey) + '"><span class="lib-caret">' + (open ? '\u25be' : '\u25b8') + '</span> ' + (isCdna ? '<em>cDNA (input)</em>' : '<strong>' + esc(g.type) + '</strong>') + ' <span class="who">(' + g.libs.length + ' librar' + (g.libs.length === 1 ? 'y' : 'ies') + ')</span></span></div>';
         if (open) {
-          body += '<div style="overflow:auto"><table class="cost-table"><thead><tr><th>Library</th><th class="num">Cycles</th>' + (showCdnaIn ? '<th class="num">Input cDNA qubit conc (ng/µL)</th>' : '') + '<th>Library qubit conc (ng/µL)</th><th class="num">TapeStation</th><th>Trace</th><th>Preps</th><th>Note</th></tr></thead><tbody>';
-          const roundInp = (f, id, rd, val, wd) => editable ? ('<input class="lib-rf" data-k="' + escAttr(id) + '" data-round="' + rd + '" data-f="' + f + '" value="' + escAttr(val || '') + '" style="width:' + wd + 'px">') : esc(val || '\u2014');
+          body += '<div style="overflow:auto"><table class="cost-table"><thead><tr><th>Library</th><th class="num">Cycles</th>' + inputHdr + '<th class="num">Library qubit (ng/\u00b5L)</th><th class="num">TapeStation (pg/\u00b5L)</th><th>Trace</th><th>Preps</th><th>Note</th></tr></thead><tbody>';
           g.libs.forEach((l) => {
             const st = rec.libStatus[l.id] = rec.libStatus[l.id] || {}; st.rounds = st.rounds || {};
             const rounds = roundsForLib(l); const chosen = Number(st.chosen) || rounds[rounds.length - 1]; const cr = st.rounds[chosen] || {};
-            const cdIn = isCdna ? '' : cdnaQubitFor(sec.pfx, l.laneNo);
-            const qbC = qubitForRound(l, chosen).map((q) => esc(q.conc)).filter((x) => x).join('<br>');
-            const tsC = tsForRound(l, chosen);
-            const traceC = tsC.imgs.length ? tsC.imgs.map((w, ti) => '<img src="' + tsGetImgSrc(w) + '" class="ts-zoom lib-thumb" data-caption="' + escAttr(l.id + (chosen > 1 ? '-' + chosen : '') + (w._run ? ' \u2014 ' + w._run : '') + (w._date ? ' (' + w._date + ')' : '')) + '" loading="lazy">').join(' ') : '\u2014';
+            const wells = tsWellsFor(l, chosen);
+            const inputCell = isCdna ? '' : (isAsap
+              ? '<td class="num">' + roundInp('inputVol', l.id, chosen, cr.inputVol, 70) + '</td>'
+              : '<td class="num">' + dash(cdnaCorrFor(sec.pfx, l.laneNo)) + '</td>');
             const prepBtn = '<button class="btn tiny" data-lib-att="' + escAttr(l.id) + '">' + rounds.length + ' prep' + (rounds.length === 1 ? '' : 's') + ' \u25be</button>';
             body += '<tr><td><strong>' + esc(l.id) + '</strong>' + (rounds.length > 1 ? ' <span class="who">\u2192 seq prep ' + chosen + '</span>' : '') + '</td>'
               + '<td class="num">' + roundInp('cycles', l.id, chosen, cr.cycles, 56) + '</td>'
-              + (showCdnaIn ? '<td class="num who">' + (cdIn || '\u2014') + '</td>' : '')
-              + '<td class="who">' + (qbC || '\u2014') + '</td>'
-              + '<td class="num">' + (tsC.concs.length ? esc(tsC.concs.join(', ')) : '\u2014') + '</td>'
-              + '<td>' + traceC + '</td>'
+              + inputCell
+              + '<td class="num">' + dash(qubitCorrForRound(l, chosen)) + '</td>'
+              + '<td class="num">' + dash(tsConcCorrOf(wells)) + '</td>'
+              + '<td>' + traceThumbs(wells, l, chosen) + '</td>'
               + '<td>' + prepBtn + '</td>'
-              + '<td class="who">' + roundInp('note', l.id, chosen, cr.note, 140) + '</td></tr>';
+              + '<td>' + roundInp('note', l.id, chosen, cr.note, 140) + '</td></tr>';
             if (LIBSTATUS_OPEN['A:' + l.id]) {
-              const cspan = showCdnaIn ? 7 : 6;
-              body += '<tr class="lib-att-row"><td></td><td colspan="' + cspan + '"><div class="lib-att"><table class="cost-table"><thead><tr><th>Send for seq</th><th>Prep</th><th>Library qubit conc (ng/µL)</th><th class="num">Cycles</th><th class="num">TapeStation</th><th>Traces</th><th>Note</th></tr></thead><tbody>'
-                + rounds.map((rd) => { const rr = st.rounds[rd] || {}; const qbr = qubitForRound(l, rd).map((q) => esc(q.conc)).filter((x) => x).join('<br>'); const tsr = tsForRound(l, rd);
-                    const tr = tsr.imgs.length ? tsr.imgs.map((w, ti) => '<img src="' + tsGetImgSrc(w) + '" class="ts-zoom lib-thumb" data-caption="' + escAttr(l.id + (rd > 1 ? '-' + rd : '') + (w._run ? ' \u2014 ' + w._run : '') + (w._date ? ' (' + w._date + ')' : '')) + '" loading="lazy">').join(' ') : '\u2014';
-                    return '<tr' + (rd === chosen ? ' class="lib-chosen"' : '') + '><td>' + (editable ? '<input type="radio" name="seq-' + escAttr(l.id) + '" class="lib-choose" data-k="' + escAttr(l.id) + '" data-round="' + rd + '"' + (rd === chosen ? ' checked' : '') + '>' : (rd === chosen ? '\u2713' : '')) + '</td>'
+              const cspan = isCdna ? 6 : 7;
+              body += '<tr class="lib-att-row"><td></td><td colspan="' + cspan + '"><div class="lib-att"><table class="cost-table"><thead><tr><th>Send for seq</th><th>Prep</th><th class="num">Library qubit (ng/\u00b5L)</th><th class="num">Cycles</th>' + (isAsap ? '<th class="num">Input vol (\u00b5L)</th>' : '') + '<th class="num">TapeStation (pg/\u00b5L)</th><th>Traces</th><th>Note</th></tr></thead><tbody>'
+                + rounds.map((rd) => { const rr = st.rounds[rd] || {}; const wr = tsWellsFor(l, rd);
+                    return '<tr' + (rd === chosen ? ' class="lib-chosen"' : '') + '><td><input type="radio" name="seq-' + escAttr(l.id) + '" class="lib-choose" data-k="' + escAttr(l.id) + '" data-round="' + rd + '"' + (rd === chosen ? ' checked' : '') + '></td>'
                       + '<td><strong>' + esc(l.id + (rd > 1 ? '-' + rd : '')) + '</strong> <span class="who">prep ' + rd + '</span></td>'
-                      + '<td class="who">' + (qbr || '\u2014') + '</td>'
+                      + '<td class="num">' + dash(qubitCorrForRound(l, rd)) + '</td>'
                       + '<td class="num">' + roundInp('cycles', l.id, rd, rr.cycles, 50) + '</td>'
-                      + '<td class="num">' + (tsr.concs.length ? esc(tsr.concs.join(', ')) : '\u2014') + '</td>'
-                      + '<td>' + tr + '</td>'
-                      + '<td class="who">' + roundInp('note', l.id, rd, rr.note, 130) + '</td></tr>'; }).join('')
-                + '</tbody></table>' + (editable ? '<div class="row-actions" style="margin-top:6px"><button class="btn ghost tiny" data-prep-add="' + escAttr(l.id) + '">+ Add prep round</button></div>' : '') + '</div></td></tr>';
+                      + (isAsap ? '<td class="num">' + roundInp('inputVol', l.id, rd, rr.inputVol, 60) + '</td>' : '')
+                      + '<td class="num">' + dash(tsConcCorrOf(wr)) + '</td>'
+                      + '<td>' + traceThumbs(wr, l, rd) + '</td>'
+                      + '<td>' + roundInp('note', l.id, rd, rr.note, 130) + '</td></tr>'; }).join('')
+                + '</tbody></table><div class="row-actions" style="margin-top:6px"><button class="btn ghost tiny" data-prep-add="' + escAttr(l.id) + '">+ Add prep round</button></div></div></td></tr>';
             }
           });
           body += '</tbody></table></div>';
@@ -1439,25 +1481,17 @@
       body += '</div>';
     });
     host.innerHTML = '<h2>Library status <span class="who">' + esc(rec.name || '') + '</span></h2>'
-      + '<p class="step-hint">' + (editable ? 'Status of every library through prep, grouped by modality with its input cDNA on top. Click a group to expand; set status/cycles/notes and log repeated preps under <em>Attempts</em>.' : 'Read-only view. Edit on Record \u2192 Library status.') + '</p>'
+      + '<p class="step-hint">Status of every library through prep, grouped by modality with its input cDNA on top. Concentrations are corrected for their recorded dilution. Click a group to expand; set cycles/notes, log repeated preps under the prep expander, and (ASAP) enter the input volume into the reaction.</p>'
       + summary + body;
 
     host.querySelectorAll('[data-lib-grp]').forEach((el) => el.addEventListener('click', () => { const k = el.dataset.libGrp; LIBSTATUS_OPEN[k] = !LIBSTATUS_OPEN[k]; renderLibStatus(hostId, editable); }));
     host.querySelectorAll('.ts-zoom').forEach((img) => img.addEventListener('click', () => openImageLightbox(img.src, img.getAttribute('data-caption') || '')));
     host.querySelectorAll('button[data-lib-att]').forEach((b) => b.addEventListener('click', () => { const k = 'A:' + b.dataset.libAtt; LIBSTATUS_OPEN[k] = !LIBSTATUS_OPEN[k]; renderLibStatus(hostId, editable); }));
-    host.querySelectorAll('button[data-flag-add]').forEach((b) => b.addEventListener('click', () => {
-      const arm = b.dataset.flagAdd; const inpEl = b.parentNode.querySelector('.lib-flag-note'); const note = inpEl ? inpEl.value.trim() : '';
-      if (!note) return; rec.libFlags = rec.libFlags || []; rec.libFlags.push({ arm: arm, note: note, at: new Date().toISOString().slice(0, 10) }); Store.saveExperiment(rec); renderLibStatus(hostId, editable);
-    }));
+    const fAdd = host.querySelectorAll('button[data-flag-add]'); fAdd.forEach((b) => b.addEventListener('click', () => { const arm = b.dataset.flagAdd; const inp = host.querySelector('.lib-flag-note[data-arm="' + arm + '"]'); const note = inp ? inp.value.trim() : '';
+      if (!note) return; rec.libFlags = rec.libFlags || []; rec.libFlags.push({ arm: arm, note: note, at: new Date().toISOString().slice(0, 10) }); Store.saveExperiment(rec); renderLibStatus(hostId, editable); }));
     host.querySelectorAll('button[data-flag-del]').forEach((b) => b.addEventListener('click', () => { const fi = +b.dataset.flagDel; if (rec.libFlags) { rec.libFlags.splice(fi, 1); Store.saveExperiment(rec); renderLibStatus(hostId, editable); } }));
-    if (!editable) return;
     const save = () => Store.saveExperiment(rec);
     host.querySelectorAll('.lib-ms').forEach((el) => el.addEventListener('change', () => { const arm = el.dataset.arm, m = el.dataset.m; rec.libMilestones = rec.libMilestones || {}; rec.libMilestones[arm] = rec.libMilestones[arm] || {}; if (el.checked) rec.libMilestones[arm][m] = true; else delete rec.libMilestones[arm][m]; save(); renderLibStatus(hostId, editable); }));
-    host.querySelectorAll('.lib-step').forEach((el) => el.addEventListener('change', () => { const k = el.dataset.k; rec.libProgress = rec.libProgress || {}; rec.libProgress[k] = rec.libProgress[k] || {}; rec.libProgress[k].step = el.value; save(); renderLibStatus(hostId, editable); }));
-    host.querySelectorAll('.lib-step-note').forEach((el) => el.addEventListener('change', () => { const k = el.dataset.k; rec.libProgress = rec.libProgress || {}; rec.libProgress[k] = rec.libProgress[k] || {}; rec.libProgress[k].note = el.value; save(); renderLibStatus(hostId, editable); }));
-    host.querySelectorAll('.lib-st').forEach((el) => el.addEventListener('change', () => { const k = el.dataset.k; rec.libStatus[k] = rec.libStatus[k] || {}; rec.libStatus[k].status = el.value; save(); renderLibStatus(hostId, editable); }));
-    host.querySelectorAll('.lib-cyc').forEach((el) => el.addEventListener('change', () => { const k = el.dataset.k; rec.libStatus[k] = rec.libStatus[k] || {}; rec.libStatus[k].cycles = el.value; save(); }));
-    host.querySelectorAll('.lib-note').forEach((el) => el.addEventListener('change', () => { const k = el.dataset.k; rec.libStatus[k] = rec.libStatus[k] || {}; rec.libStatus[k].note = el.value; save(); }));
     host.querySelectorAll('.lib-rf').forEach((el) => el.addEventListener('change', () => { const k = el.dataset.k, rd = el.dataset.round, f = el.dataset.f; rec.libStatus[k] = rec.libStatus[k] || {}; rec.libStatus[k].rounds = rec.libStatus[k].rounds || {}; rec.libStatus[k].rounds[rd] = rec.libStatus[k].rounds[rd] || {}; rec.libStatus[k].rounds[rd][f] = el.value; save(); }));
     host.querySelectorAll('.lib-choose').forEach((el) => el.addEventListener('change', () => { const k = el.dataset.k; rec.libStatus[k] = rec.libStatus[k] || {}; rec.libStatus[k].chosen = Number(el.dataset.round); save(); renderLibStatus(hostId, editable); }));
     host.querySelectorAll('button[data-prep-add]').forEach((b) => b.addEventListener('click', () => { const k = b.dataset.prepAdd; rec.libStatus[k] = rec.libStatus[k] || {}; rec.libStatus[k].rounds = rec.libStatus[k].rounds || {}; const rs = Object.keys(rec.libStatus[k].rounds).map(Number); const next = (rs.length ? Math.max.apply(null, rs) : 1) + 1; rec.libStatus[k].rounds[next] = {}; save(); renderLibStatus(hostId, editable); }));
