@@ -605,6 +605,10 @@
       .catch((e) => { if (stEl) stEl.textContent = (String(e).indexOf('__timeout__') >= 0)
         ? ' Saved to the experiment. Drive sync is slow \u2014 still trying in the background.'
         : ' Saved to the experiment. Drive sync failed (your data is still saved locally).'; });
+    // also refresh the Library record Sheet (if materials have been exported)
+    if (type === 'library') {
+      pushLibraryRecordNow(rec).then((r) => { if (stEl && r && r.id) stEl.textContent = ' Saved to the experiment and Drive \u00b7 Library record updated.'; else if (stEl && r && r.skipped === 'no-materials') stEl.textContent = ' Saved. (Run \u201cExport / refresh Drive copies\u201d once to create the Library record Sheet, then it auto-updates.)'; });
+    }
   }
   function reloadWorksheetFromDrive(rec, type) {
     const stEl = $('#wsReloadStatus'); if (stEl) stEl.textContent = ' Reading Drive\u2026';
@@ -5067,20 +5071,22 @@
   }
   // Debounced auto-sync of the Library record Sheet in Drive (upserts by name, so it updates
   // the existing file in place). Only runs once materials have been exported at least once.
-  let LIBREC_TIMER = null;
-  function syncLibraryRecordDrive(rec) {
-    clearTimeout(LIBREC_TIMER);
-    LIBREC_TIMER = setTimeout(function () {
-      try {
-        if (!rec || !rec.materialVersions || !rec.materialVersions.length) return;
-        const cur = rec.materialVersions.filter((v) => v.version === rec.currentVersion)[0] || rec.materialVersions[rec.materialVersions.length - 1];
-        if (!cur || !cur.folderId) return;
-        const built = buildLibraryRecordWb(); if (!built) return;
-        const name = (rec.experimentId || 'experiment') + '_v' + cur.version + ' Library record';
-        driveApi({ action: 'upload', name: name, folderId: cur.folderId, base64: wbBase64(built.wb), sourceMime: XLSX_MIME, targetMime: GSHEET_MIME }).catch(function () { });
-      } catch (e) { /* */ }
-    }, 4000);
+  // Regenerate the Library record and update the existing Drive Sheet in place. Matches the
+  // exact name/folder used by the materials export so driveUpload PATCHes the same file.
+  function pushLibraryRecordNow(rec) {
+    try {
+      if (!rec || !rec.materialVersions || !rec.materialVersions.length) return Promise.resolve({ skipped: 'no-materials' });
+      const cur = rec.materialVersions.filter((v) => v.version === rec.currentVersion)[0] || rec.materialVersions[rec.materialVersions.length - 1];
+      if (!cur || !cur.folderId) return Promise.resolve({ skipped: 'no-folder' });
+      const built = buildLibraryRecordWb(); if (!built) return Promise.resolve({ skipped: 'empty' });
+      const expId = rec.experimentId || projectLabel(rec.name || 'experiment');
+      const name = expId + '_v' + cur.version + ' Library record';
+      return driveApi({ action: 'upload', name: name, folderId: cur.folderId, base64: wbBase64(built.wb), sourceMime: XLSX_MIME, targetMime: GSHEET_MIME })
+        .then(function (r) { if (r && r.id) { rec.driveFiles = Object.assign(rec.driveFiles || {}, { library: r.id }); } return r; });
+    } catch (e) { return Promise.resolve({ error: String(e) }); }
   }
+  let LIBREC_TIMER = null;
+  function syncLibraryRecordDrive(rec) { clearTimeout(LIBREC_TIMER); LIBREC_TIMER = setTimeout(function () { pushLibraryRecordNow(rec); }, 3000); }
   function generateLibraryRecord() {
     const r = buildLibraryRecordWb();
     if (!r) { alert('Add samples and compute a pooling strategy first.'); return; }
