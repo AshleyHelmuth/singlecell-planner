@@ -206,35 +206,40 @@
     else if (qtKey === 'finalasap') { ['ATAC', 'ADT', 'HTO'].forEach((t) => { for (let i = 1; i <= (lanes.asap || 0); i++) out.push('A' + i + '-' + t); }); }
     return out;
   }
-  // New qubit-table columns (prep round is per TABLE, not per row).
-  const QUBIT_COLS = ['Library ID', 'Amp. cycles', 'Qubit dilution', 'Qubit conc (ng/\u00b5L)', 'Notes'];
-  const qbRow = (a) => { a = a || []; return [a[0] || '', a[1] || '', a[2] || '', a[3] || '', a[4] || '']; };
-  // Normalize any stored value for one category into [{ round, rows:[[libId,cycles,dil,conc,notes]] }].
-  // Handles: new nested format (pass-through), old flat rows [tube,dil,conc,round] (grouped by round,
-  // columns remapped), and empty/undefined (seed one prep-1 table with expected library IDs).
+  // Qubit-table columns. Canonical row: [libId, indexId, cycles, dilution, conc, notes].
+  // Prep round is per TABLE (not per row). Index ID is shown on every table except cDNA.
+  const QUBIT_COL_LABELS = ['Library ID', 'Index ID', 'Amp. cycles', 'Qubit dilution', 'Qubit conc (ng/\u00b5L)', 'Notes'];
+  const qubitColsFor = (key) => key === 'cdna5' ? [0, 2, 3, 4, 5] : [0, 1, 2, 3, 4, 5];
+  // Normalize a row to the 6-col canonical shape. A length-5 row is the earlier
+  // [libId,cycles,dil,conc,notes] layout -> insert the (empty) Index slot at position 1.
+  const qbRow = (a) => { a = a || []; if (a.length === 5) return [a[0] || '', '', a[1] || '', a[2] || '', a[3] || '', a[4] || '']; return [a[0] || '', a[1] || '', a[2] || '', a[3] || '', a[4] || '', a[5] || '']; };
+  const qbBlank = () => ['', '', '', '', '', ''];
+  // Normalize any stored value for one category into [{ round, rows:[[libId,index,cycles,dil,conc,notes]] }].
+  // Handles: nested format (pass-through, upgrading 5-col rows), oldest flat rows [tube,dil,conc,round]
+  // (grouped by round, columns remapped), and empty/undefined (seed one prep-1 table with library IDs).
   function normalizeQubitTables(val, key) {
     if (Array.isArray(val) && val.length && val[0] && typeof val[0] === 'object' && !Array.isArray(val[0]) && ('rows' in val[0] || 'round' in val[0])) {
       return val.map((t) => ({ round: Number(t.round) || 1, rows: (t.rows || []).map(qbRow) }));
     }
     if (Array.isArray(val) && val.length && Array.isArray(val[0])) {
-      const byRound = {}; val.forEach((r) => { const rd = Number(r[3]) || 1; (byRound[rd] = byRound[rd] || []).push([r[0] || '', '', r[1] || '', r[2] || '', '']); });
+      const byRound = {}; val.forEach((r) => { const rd = Number(r[3]) || 1; (byRound[rd] = byRound[rd] || []).push([r[0] || '', '', '', r[1] || '', r[2] || '', '']); });
       const rounds = Object.keys(byRound).map(Number).sort((a, b) => a - b);
-      return rounds.length ? rounds.map((rd) => ({ round: rd, rows: byRound[rd] })) : [{ round: 1, rows: [['', '', '', '', '']] }];
+      return rounds.length ? rounds.map((rd) => ({ round: rd, rows: byRound[rd] })) : [{ round: 1, rows: [qbBlank()] }];
     }
     const exp = qubitExpectedTubes(key);
-    return [{ round: 1, rows: (exp.length ? exp : ['']).map((t) => [t, '', '', '', '']) }];
+    return [{ round: 1, rows: (exp.length ? exp : ['']).map((t) => [t, '', '', '', '', '']) }];
   }
-  // Ensure every category on a worksheet is in the nested format (idempotent; never wipes data).
+  // Ensure every category on a worksheet is in the nested 6-col format (idempotent; never wipes data).
   function ensureQubitShape(w) {
     if (!w.qubit || Array.isArray(w.qubit)) { const old = Array.isArray(w.qubit) ? w.qubit : null; w.qubit = {}; if (old) w.qubit.cdna5 = old; }
     QUBIT_TABLES.forEach((qt) => { w.qubit[qt.key] = normalizeQubitTables(w.qubit[qt.key], qt.key); });
     return w.qubit;
   }
-  // Flatten one category's tables to Drive rows: [libId, cycles, dil, conc, notes, round].
-  function qubitFlatten(tables) { const out = []; (tables || []).forEach((t) => (t.rows || []).forEach((r) => { if (r.some((c) => String(c || '') !== '')) out.push([r[0] || '', r[1] || '', r[2] || '', r[3] || '', r[4] || '', t.round]); })); return out; }
+  // Flatten one category's tables to Drive rows: [libId, indexId, cycles, dil, conc, notes, round].
+  function qubitFlatten(tables) { const out = []; (tables || []).forEach((t) => (t.rows || []).forEach((r) => { if (r.some((c) => String(c || '') !== '')) out.push([r[0] || '', r[1] || '', r[2] || '', r[3] || '', r[4] || '', r[5] || '', t.round]); })); return out; }
   // Rebuild nested tables from flat Drive rows (group by the round column).
   function qubitFromFlat(rows) {
-    const byRound = {}; (rows || []).forEach((r) => { const rd = Number(r[5]) || 1; (byRound[rd] = byRound[rd] || []).push([r[0] || '', r[1] || '', r[2] || '', r[3] || '', r[4] || '']); });
+    const byRound = {}; (rows || []).forEach((r) => { const rd = Number(r[6]) || 1; (byRound[rd] = byRound[rd] || []).push([r[0] || '', r[1] || '', r[2] || '', r[3] || '', r[4] || '', r[5] || '']); });
     const rounds = Object.keys(byRound).map(Number).sort((a, b) => a - b);
     return rounds.length ? rounds.map((rd) => ({ round: rd, rows: byRound[rd] })) : null;
   }
@@ -282,9 +287,10 @@
             const collapsed = !!WS_QB_COLLAPSED[qt.key];
             let sec = '<div class="qb-section"><div class="qb-sec-head" data-qb-sec="' + qt.key + '"><span class="lib-caret">' + (collapsed ? '\u25b8' : '\u25be') + '</span> <strong>' + esc(qt.title) + '</strong> <span class="who">(' + nLibs + ' librar' + (nLibs === 1 ? 'y' : 'ies') + (tables.length > 1 ? ', ' + tables.length + ' preps' : '') + ')</span></div>';
             if (!collapsed) {
+              const cols = qubitColsFor(qt.key);
               tables.forEach((tbl, ti) => {
-                const heads = QUBIT_COLS.map((c) => '<th>' + esc(c) + '</th>').join('');
-                const rowsHtml = tbl.rows.map((row, ri) => '<tr>' + QUBIT_COLS.map((c, ci) => '<td class="qb-cell"><input class="ws-qb" data-qt="' + qt.key + '" data-ti="' + ti + '" data-r="' + ri + '" data-c="' + ci + '" value="' + escAttr(row[ci] || '') + '"><span class="qb-fill" data-qt="' + qt.key + '" data-ti="' + ti + '" data-r="' + ri + '" data-c="' + ci + '" title="Drag down to fill"></span></td>').join('') + '<td><button class="btn tiny" data-qb-rowdel="' + qt.key + '|' + ti + '|' + ri + '" title="Remove row">\u2715</button></td></tr>').join('');
+                const heads = cols.map((ci) => '<th>' + esc(QUBIT_COL_LABELS[ci]) + '</th>').join('');
+                const rowsHtml = tbl.rows.map((row, ri) => '<tr>' + cols.map((ci) => '<td class="qb-cell"><input class="ws-qb" data-qt="' + qt.key + '" data-ti="' + ti + '" data-r="' + ri + '" data-c="' + ci + '" value="' + escAttr(row[ci] || '') + '"><span class="qb-fill" data-qt="' + qt.key + '" data-ti="' + ti + '" data-r="' + ri + '" data-c="' + ci + '" title="Drag down to fill"></span></td>').join('') + '<td><button class="btn tiny" data-qb-rowdel="' + qt.key + '|' + ti + '|' + ri + '" title="Remove row">\u2715</button></td></tr>').join('');
                 sec += '<div class="qb-prep"><div class="qb-prep-head"><label>Prep round <input class="qb-round" type="number" min="1" data-qt="' + qt.key + '" data-ti="' + ti + '" value="' + escAttr(tbl.round) + '" style="width:52px"></label>'
                   + (tables.length > 1 ? ' <button class="btn ghost tiny" data-qb-prepdel="' + qt.key + '|' + ti + '">Remove this prep round</button>' : '') + '</div>'
                   + '<div style="overflow:auto"><table class="cost-table qb-table"><thead><tr>' + heads + '<th></th></tr></thead><tbody>' + rowsHtml + '</tbody></table></div>'
@@ -307,15 +313,18 @@
     const addRow = $('#wsAddRow'); if (addRow) addRow.addEventListener('click', () => { w.counts.push(cfg.countCols.map(() => '')); renderWorksheet(type); });
     host.querySelectorAll('button[data-ws-delrow]').forEach((b) => b.addEventListener('click', () => { w.counts.splice(+b.dataset.wsDelrow, 1); if (!w.counts.length) w.counts.push(cfg.countCols.map(() => '')); renderWorksheet(type); }));
     const qbTbl = (k, ti) => (w.qubit[k] && w.qubit[k][ti]) || null;
-    host.querySelectorAll('.ws-qb').forEach((el) => el.addEventListener('input', () => { const t = qbTbl(el.dataset.qt, +el.dataset.ti); if (t) t.rows[+el.dataset.r][+el.dataset.c] = el.value; }));
-    host.querySelectorAll('.qb-round').forEach((el) => el.addEventListener('change', () => { const t = qbTbl(el.dataset.qt, +el.dataset.ti); if (t) { t.round = Number(el.value) || 1; Store.saveExperiment(rec); } }));
-    host.querySelectorAll('.qb-sec-head').forEach((el) => el.addEventListener('click', () => { const k = el.dataset.qbSec; WS_QB_COLLAPSED[k] = !WS_QB_COLLAPSED[k]; renderWorksheet(type); }));
-    host.querySelectorAll('button[data-qb-addrow]').forEach((b) => b.addEventListener('click', () => { const p = b.dataset.qbAddrow.split('|'); const t = qbTbl(p[0], +p[1]); if (t) { t.rows.push(['', '', '', '', '']); renderWorksheet(type); } }));
-    host.querySelectorAll('button[data-qb-rowdel]').forEach((b) => b.addEventListener('click', () => { const p = b.dataset.qbRowdel.split('|'); const t = qbTbl(p[0], +p[1]); if (t) { t.rows.splice(+p[2], 1); if (!t.rows.length) t.rows.push(['', '', '', '', '']); renderWorksheet(type); } }));
-    host.querySelectorAll('button[data-qb-fill]').forEach((b) => b.addEventListener('click', () => { const p = b.dataset.qbFill.split('|'); const t = qbTbl(p[0], +p[1]); if (!t) return; const exp = qubitExpectedTubes(p[0]); if (!exp.length) { alert('No expected library IDs \u2014 build the plan first.'); return; }
-      const existing = {}; t.rows.forEach((r) => { if (r[0]) existing[r[0]] = r; }); t.rows = exp.map((id) => existing[id] || [id, '', '', '', '']); renderWorksheet(type); }));
-    host.querySelectorAll('button[data-qb-addprep]').forEach((b) => b.addEventListener('click', () => { const k = b.dataset.qbAddprep; const tables = w.qubit[k]; const maxR = tables.reduce((m, t) => Math.max(m, Number(t.round) || 1), 0); const exp = qubitExpectedTubes(k); tables.push({ round: maxR + 1, rows: (exp.length ? exp : ['']).map((id) => [id, '', '', '', '']) }); renderWorksheet(type); }));
-    host.querySelectorAll('button[data-qb-prepdel]').forEach((b) => b.addEventListener('click', () => { const p = b.dataset.qbPrepdel.split('|'); const tables = w.qubit[p[0]]; if (tables && tables.length > 1 && confirm('Remove this entire prep-round table and its values?')) { tables.splice(+p[1], 1); renderWorksheet(type); } }));
+    // Push every on-screen input value back into the data model before any re-render,
+    // so an in-progress edit (in any column) is never lost or reverted.
+    const commitQubitInputs = () => { host.querySelectorAll('.ws-qb').forEach((el) => { const t = qbTbl(el.dataset.qt, +el.dataset.ti); if (t && t.rows[+el.dataset.r]) t.rows[+el.dataset.r][+el.dataset.c] = el.value; }); };
+    host.querySelectorAll('.ws-qb').forEach((el) => el.addEventListener('input', () => { const t = qbTbl(el.dataset.qt, +el.dataset.ti); if (t && t.rows[+el.dataset.r]) t.rows[+el.dataset.r][+el.dataset.c] = el.value; }));
+    host.querySelectorAll('.qb-round').forEach((el) => el.addEventListener('change', () => { commitQubitInputs(); const t = qbTbl(el.dataset.qt, +el.dataset.ti); if (t) { t.round = Number(el.value) || 1; Store.saveExperiment(rec); } }));
+    host.querySelectorAll('.qb-sec-head').forEach((el) => el.addEventListener('click', () => { commitQubitInputs(); const k = el.dataset.qbSec; WS_QB_COLLAPSED[k] = !WS_QB_COLLAPSED[k]; renderWorksheet(type); }));
+    host.querySelectorAll('button[data-qb-addrow]').forEach((b) => b.addEventListener('click', () => { commitQubitInputs(); const p = b.dataset.qbAddrow.split('|'); const t = qbTbl(p[0], +p[1]); if (t) { t.rows.push(qbBlank()); renderWorksheet(type); } }));
+    host.querySelectorAll('button[data-qb-rowdel]').forEach((b) => b.addEventListener('click', () => { commitQubitInputs(); const p = b.dataset.qbRowdel.split('|'); const t = qbTbl(p[0], +p[1]); if (t) { t.rows.splice(+p[2], 1); if (!t.rows.length) t.rows.push(qbBlank()); renderWorksheet(type); } }));
+    host.querySelectorAll('button[data-qb-fill]').forEach((b) => b.addEventListener('click', () => { commitQubitInputs(); const p = b.dataset.qbFill.split('|'); const t = qbTbl(p[0], +p[1]); if (!t) return; const exp = qubitExpectedTubes(p[0]); if (!exp.length) { alert('No expected library IDs \u2014 build the plan first.'); return; }
+      const existing = {}; t.rows.forEach((r) => { if (r[0]) existing[r[0]] = r; }); t.rows = exp.map((id) => existing[id] || [id, '', '', '', '', '']); renderWorksheet(type); }));
+    host.querySelectorAll('button[data-qb-addprep]').forEach((b) => b.addEventListener('click', () => { commitQubitInputs(); const k = b.dataset.qbAddprep; const tables = w.qubit[k]; const maxR = tables.reduce((m, t) => Math.max(m, Number(t.round) || 1), 0); const exp = qubitExpectedTubes(k); tables.push({ round: maxR + 1, rows: (exp.length ? exp : ['']).map((id) => [id, '', '', '', '', '']) }); renderWorksheet(type); }));
+    host.querySelectorAll('button[data-qb-prepdel]').forEach((b) => b.addEventListener('click', () => { commitQubitInputs(); const p = b.dataset.qbPrepdel.split('|'); const tables = w.qubit[p[0]]; if (tables && tables.length > 1 && confirm('Remove this entire prep-round table and its values?')) { tables.splice(+p[1], 1); renderWorksheet(type); } }));
     // spreadsheet-style keyboard nav: Enter / arrows move between rows (within the same prep table)
     host.querySelectorAll('.ws-qb').forEach((el) => el.addEventListener('keydown', (e) => {
       if (e.key !== 'Enter' && e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
@@ -324,16 +333,23 @@
       if (e.key === 'ArrowUp') { const t = sel(r - 1); if (t) { e.preventDefault(); t.focus(); t.select && t.select(); } return; }
       e.preventDefault();
       let t = sel(r + 1);
-      if (!t) { const tbl = qbTbl(qtk, +ti); if (tbl) { tbl.rows.push(['', '', '', '', '']); renderWorksheet(type); t = sel(r + 1); } }
+      if (!t) { commitQubitInputs(); const tbl = qbTbl(qtk, +ti); if (tbl) { tbl.rows.push(qbBlank()); renderWorksheet(type); t = sel(r + 1); } }
       if (t) { t.focus(); t.select && t.select(); }
     }));
-    // drag the fill handle down to autopopulate lower rows (within the same prep table)
+    // drag the fill handle down to copy a value into lower rows of the SAME column.
+    // Updates the data model and the affected inputs in place (no full re-render), so
+    // edits in other columns (e.g. the Library ID column) are never touched or reverted.
     host.querySelectorAll('.qb-fill').forEach((h) => h.addEventListener('mousedown', (e) => {
-      e.preventDefault(); const qtk = h.dataset.qt, ti = h.dataset.ti, sr = +h.dataset.r, c = +h.dataset.c; const tbl = qbTbl(qtk, +ti); if (!tbl) return; const val = tbl.rows[sr][c];
+      e.preventDefault(); const qtk = h.dataset.qt, ti = h.dataset.ti, sr = +h.dataset.r, c = +h.dataset.c; const tbl = qbTbl(qtk, +ti); if (!tbl) return;
+      const srcInp = host.querySelector('.ws-qb[data-qt="' + qtk + '"][data-ti="' + ti + '"][data-r="' + sr + '"][data-c="' + c + '"]');
+      const val = srcInp ? srcInp.value : tbl.rows[sr][c];
+      const colInp = (rr) => host.querySelector('.ws-qb[data-qt="' + qtk + '"][data-ti="' + ti + '"][data-r="' + rr + '"][data-c="' + c + '"]');
       const rowEls = Array.prototype.slice.call(host.querySelectorAll('.ws-qb[data-qt="' + qtk + '"][data-ti="' + ti + '"][data-c="' + c + '"]'));
       let lastR = sr;
       const onMove = (ev) => { const under = document.elementFromPoint(ev.clientX, ev.clientY); const cell = under && under.closest && under.closest('.qb-cell'); const inp = cell && cell.querySelector('.ws-qb[data-qt="' + qtk + '"][data-ti="' + ti + '"][data-c="' + c + '"]'); if (inp) { lastR = +inp.dataset.r; rowEls.forEach((el) => { const rr = +el.dataset.r; el.style.background = (rr > sr && rr <= lastR) ? '#eef4fb' : ''; }); } };
-      const onUp = () => { document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseup', onUp); for (let rr = sr + 1; rr <= lastR; rr++) { if (tbl.rows[rr]) tbl.rows[rr][c] = val; } renderWorksheet(type); };
+      const onUp = () => { document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseup', onUp);
+        for (let rr = sr + 1; rr <= lastR; rr++) { if (tbl.rows[rr]) { tbl.rows[rr][c] = val; const inp = colInp(rr); if (inp) inp.value = val; } }
+        rowEls.forEach((el) => { el.style.background = ''; }); Store.saveExperiment(rec); };
       document.addEventListener('mousemove', onMove); document.addEventListener('mouseup', onUp);
     }));
     const save = $('#wsSave'); if (save) save.addEventListener('click', () => saveWorksheet(rec, type));
@@ -348,7 +364,7 @@
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([['Experiment ID', w.expId || ''], ['Operator', w.operator || ''], ['Date', w.date || ''], ['Notes', w.notes || '']]), 'Info');
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([['10X kit', 'PN', 'Lot #', 'Rxns used', 'Notes']].concat(w.kits.map((k) => [k.kit, k.pn, k.lot, k.rxns, k.notes]))), 'Kit lots');
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([cfg.countCols].concat(w.counts)), 'Cell counts');
-    if (type === 'library') { ensureQubitShape(w); QUBIT_TABLES.forEach((qt) => { const flat = qubitFlatten(w.qubit[qt.key]); if (flat.length) { XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([['Library ID', 'Amp. cycles', 'Qubit dilution', 'Qubit conc (ng/µL)', 'Notes', 'Prep round']].concat(flat)), ('Qubit ' + qt.title).slice(0, 31)); } }); }
+    if (type === 'library') { ensureQubitShape(w); QUBIT_TABLES.forEach((qt) => { const flat = qubitFlatten(w.qubit[qt.key]); if (flat.length) { XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([['Library ID', 'Index ID', 'Amp. cycles', 'Qubit dilution', 'Qubit conc (ng/µL)', 'Notes', 'Prep round']].concat(flat)), ('Qubit ' + qt.title).slice(0, 31)); } }); }
     const b64 = XLSX.write(wb, { type: 'base64', bookType: 'xlsx' });
     const expId2 = rec.experimentId || projectLabel(rec.name || 'experiment');
     const req = rec.driveFolderId ? { action: 'ensurePath', parentId: rec.driveFolderId, subPath: ['data', 'worksheets'] } : { action: 'ensurePath', project: rec.project || CURRENT_PROJECT, experiment: rec.name || 'Experiment', subPath: ['data', 'worksheets'] };
@@ -1427,12 +1443,12 @@
     if (qt && !Array.isArray(qt)) QUBIT_TABLES.forEach((t) => {
       const val = qt[t.key]; let tables = [];
       if (Array.isArray(val) && val.length && val[0] && typeof val[0] === 'object' && !Array.isArray(val[0])) {
-        tables = val.map((tb) => ({ round: Number(tb.round) || 1, rows: tb.rows || [] }));
+        tables = val.map((tb) => ({ round: Number(tb.round) || 1, rows: (tb.rows || []).map(qbRow) }));
       } else if (Array.isArray(val) && val.length && Array.isArray(val[0])) {
-        const byRound = {}; val.forEach((r) => { const rd = Number(r[3]) || 1; (byRound[rd] = byRound[rd] || []).push([r[0] || '', '', r[1] || '', r[2] || '', '']); });
+        const byRound = {}; val.forEach((r) => { const rd = Number(r[3]) || 1; (byRound[rd] = byRound[rd] || []).push([r[0] || '', '', '', r[1] || '', r[2] || '', '']); });
         tables = Object.keys(byRound).map(Number).sort((a, b) => a - b).map((rd) => ({ round: rd, rows: byRound[rd] }));
       }
-      tables.forEach((tb) => (tb.rows || []).forEach((r) => { if (r && r[0]) qAll.push({ base: String(r[0]), round: Number(tb.round) || 1, cycles: r[1] || '', dil: r[2] || '', conc: r[3] || '', notes: r[4] || '', stage: t.title }); }));
+      tables.forEach((tb) => (tb.rows || []).forEach((r) => { if (r && r[0]) qAll.push({ base: String(r[0]), round: Number(tb.round) || 1, indexId: r[1] || '', cycles: r[2] || '', dil: r[3] || '', conc: r[4] || '', notes: r[5] || '', stage: t.title }); }));
     });
     // Qubit conc (ng/µL) corrected for its recorded dilution
     const corrOne = (conc, dil) => { const n = parseFloat(conc); if (isNaN(n)) return ''; return Math.round(n * tsDilFactor(dil) * 100) / 100; };
