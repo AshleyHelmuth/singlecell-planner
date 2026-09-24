@@ -923,6 +923,13 @@ main > .panel { flex: 1 1 auto; min-width: 0; }
 .qb-table td:last-child { padding: 0 4px; text-align: center; }
 .qb-fill { position: absolute; right: 2px; bottom: 2px; width: 7px; height: 7px; background: var(--teal, #1f7a7a); border: 1px solid #fff; border-radius: 2px; cursor: crosshair; opacity: 0; }
 .qb-cell:hover .qb-fill, .qb-cell input:focus + .qb-fill { opacity: 1; }
+.qb-section { margin-top: 16px; }
+.qb-sec-head { cursor: pointer; user-select: none; padding: 7px 10px; background: #eef2f7; border: 1px solid var(--line); border-radius: 8px; font-size: 13px; }
+.qb-sec-head:hover { background: #e7edf4; }
+.qb-sec-head .lib-caret { color: var(--muted); margin-right: 2px; }
+.qb-prep { border: 1px solid var(--line); border-top: 0; border-radius: 0 0 8px 8px; padding: 8px 10px 4px; margin: 0 4px 8px; background: #fff; }
+.qb-prep-head { display: flex; align-items: center; gap: 12px; font-size: 12.5px; color: var(--ink); margin-bottom: 6px; }
+.qb-prep-head input.qb-round { padding: 3px 6px; border: 1px solid var(--line); border-radius: 6px; font-family: var(--mono); font-size: 12.5px; margin-left: 4px; }
 
 /* ===== Library prep rounds ===== */
 .lib-chosen { background: #eaf6ef; }
