@@ -410,7 +410,7 @@
 
   function bdSortBody(w, ctx, si) {
     const st = w.sortStains[si];
-    const labels = ctx.sortPops.length ? ctx.sortPops.slice() : ['Sort pool 1'];
+    const labels = ctx.pools.length ? ctx.pools.map((p) => 'Sort ' + p.idx) : ['Sort 1'];
     st.hto = st.hto || labels.map(() => ({ hto: '', tube: '' }));
     st.counts = st.counts || labels.map((p) => ({ pool: p, conc: '', vol: '', volPooled: '' }));
     // HTO table: one row per sort pool (condensed)
