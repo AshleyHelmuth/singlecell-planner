@@ -191,13 +191,18 @@
   const QUBIT_TABLES = [
     { key: 'cdna5', title: "5' cDNA" },
     { key: 'tcrbcr', title: 'TCR/BCR cDNA' },
-    { key: 'final5', title: "Final 5' libraries (GEX, ADT, TCR/BCR)" },
+    { key: 'final5gex', title: "Final 5' GEX libraries" },
+    { key: 'final5adt', title: "Final 5' ADT/CSP libraries" },
+    { key: 'final5vdj', title: "Final 5' TCR/BCR libraries" },
     { key: 'finalasap', title: 'Final ASAP libraries (ATAC, ADT, HTO)' }
   ];
   // Intermediate TCR/BCR cDNA carries a "-c" suffix (e.g. U1-TCR-c). It's a cDNA product,
   // not a library. These helpers give it a friendly label and recognise it as cDNA.
   function typeLabel(t) { const m = { 'TCR-c': 'TCR cDNA', 'BCR-c': 'BCR cDNA' }; return m[t] || t; }
   function isCdnaType(t) { return t === 'cDNA' || /-c$/i.test(String(t || '')); }
+  // Categories to READ from (includes the pre-split "final5" so its data still shows
+  // on Library status / records even before the worksheet has migrated it).
+  function qubitReadKeys() { return QUBIT_TABLES.concat([{ key: 'final5', title: "Final 5' libraries" }]); }
   // Expected tube IDs for a Qubit table, from the plan's lane counts per arm.
   function qubitExpectedTubes(qtKey) {
     let lanes = { unsort: 0, asap: 0, sort: 0 };
@@ -206,7 +211,9 @@
     const add5 = (types) => { [['U', lanes.unsort], ['S', lanes.sort]].forEach((a) => { const pfx = a[0], n = a[1] || 0; types.forEach((t) => { for (let i = 1; i <= n; i++) out.push(pfx + i + '-' + t); }); }); };
     if (qtKey === 'cdna5') add5(['cDNA']);
     else if (qtKey === 'tcrbcr') add5(['TCR-c', 'BCR-c']);
-    else if (qtKey === 'final5') add5(['GEX', 'ADT/CSP', 'TCR', 'BCR']);
+    else if (qtKey === 'final5gex') add5(['GEX']);
+    else if (qtKey === 'final5adt') add5(['ADT/CSP']);
+    else if (qtKey === 'final5vdj') add5(['TCR', 'BCR']);
     else if (qtKey === 'finalasap') { ['ATAC', 'ADT', 'HTO'].forEach((t) => { for (let i = 1; i <= (lanes.asap || 0); i++) out.push('A' + i + '-' + t); }); }
     return out;
   }
@@ -236,6 +243,17 @@
   // Ensure every category on a worksheet is in the nested 6-col format (idempotent; never wipes data).
   function ensureQubitShape(w) {
     if (!w.qubit || Array.isArray(w.qubit)) { const old = Array.isArray(w.qubit) ? w.qubit : null; w.qubit = {}; if (old) w.qubit.cdna5 = old; }
+    // one-time split of the old single "final5" category into GEX / ADT / TCR-BCR subsections
+    if (w.qubit.final5) {
+      const buckets = { final5gex: {}, final5adt: {}, final5vdj: {} };
+      normalizeQubitTables(w.qubit.final5, 'final5').forEach((tb) => (tb.rows || []).forEach((r) => {
+        if (!r[0]) return; const p = parseLibId(r[0]); const t = (p && p.type) || '';
+        const key = /ADT|CSP/i.test(t) ? 'final5adt' : (/TCR|BCR/i.test(t) ? 'final5vdj' : 'final5gex');
+        (buckets[key][tb.round] = buckets[key][tb.round] || []).push(qbRow(r));
+      }));
+      Object.keys(buckets).forEach((k) => { const rounds = Object.keys(buckets[k]).map(Number).sort((a, b) => a - b); if (rounds.length && !w.qubit[k]) w.qubit[k] = rounds.map((rd) => ({ round: rd, rows: buckets[k][rd] })); });
+      delete w.qubit.final5;
+    }
     QUBIT_TABLES.forEach((qt) => { w.qubit[qt.key] = normalizeQubitTables(w.qubit[qt.key], qt.key); });
     return w.qubit;
   }
@@ -364,8 +382,9 @@
   }
   function saveWorksheet(rec, type) {
     const cfg = WORKSHEET_CFG[type]; const w = getWorksheet(rec, type);
-    const stEl = $('#wsStatus'); if (stEl) stEl.textContent = ' Saving\u2026';
-    Store.saveExperiment(rec);   // record-stored (small text, syncs safely)
+    const stEl = $('#wsStatus');
+    Store.saveExperiment(rec);   // synchronous — the record is safely stored right here
+    if (stEl) stEl.textContent = ' Saved to the experiment. Syncing to Drive\u2026';
     // durable Drive companion sheet
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([['Experiment ID', w.expId || ''], ['Operator', w.operator || ''], ['Date', w.date || ''], ['Notes', w.notes || '']]), 'Info');
@@ -375,11 +394,16 @@
     const b64 = XLSX.write(wb, { type: 'base64', bookType: 'xlsx' });
     const expId2 = rec.experimentId || projectLabel(rec.name || 'experiment');
     const req = rec.driveFolderId ? { action: 'ensurePath', parentId: rec.driveFolderId, subPath: ['data', 'worksheets'] } : { action: 'ensurePath', project: rec.project || CURRENT_PROJECT, experiment: rec.name || 'Experiment', subPath: ['data', 'worksheets'] };
-    driveApi(req)
+    const driveWork = driveApi(req)
       .then((path) => { if (path && path.experimentId && rec.driveFolderId !== path.experimentId) { rec.driveFolderId = path.experimentId; }
-        if (!path || !path.subId) throw new Error('could not reach data/worksheets'); return driveApi({ action: 'upload', name: sanitizeName(expId2 + ' ' + type + ' worksheet'), folderId: path.subId, base64: b64, sourceMime: XLSX_MIME, targetMime: GSHEET_MIME }); })
+        if (!path || !path.subId) throw new Error('could not reach data/worksheets'); return driveApi({ action: 'upload', name: sanitizeName(expId2 + ' ' + type + ' worksheet'), folderId: path.subId, base64: b64, sourceMime: XLSX_MIME, targetMime: GSHEET_MIME }); });
+    // never let the indicator hang on "Syncing" if Drive is slow/unreachable
+    const timeout = new Promise((_, rej) => setTimeout(() => rej(new Error('__timeout__')), 25000));
+    Promise.race([driveWork, timeout])
       .then(() => { if (stEl) stEl.textContent = ' Saved to the experiment and Drive.'; })
-      .catch((e) => { if (stEl) stEl.textContent = ' Saved to the experiment. Drive save failed: ' + e; });
+      .catch((e) => { if (stEl) stEl.textContent = (String(e).indexOf('__timeout__') >= 0)
+        ? ' Saved to the experiment. Drive sync is slow \u2014 still trying in the background.'
+        : ' Saved to the experiment. Drive sync failed (your data is still saved locally).'; });
   }
   function reloadWorksheetFromDrive(rec, type) {
     const stEl = $('#wsReloadStatus'); if (stEl) stEl.textContent = ' Reading Drive\u2026';
@@ -1291,34 +1315,64 @@
       + '<p class="who" style="margin-top:10px">Planned reagent quantities &amp; cost are on Plan \u2192 Reagents &amp; cost.</p>';
   }
   // ===== General notes: rich-text editor (Record) + read-only view (Review) =====
-  const NOTES_CMDS = [
-    { cmd: 'bold', label: 'B', style: 'font-weight:700' },
-    { cmd: 'italic', label: 'I', style: 'font-style:italic' },
-    { cmd: 'underline', label: 'U', style: 'text-decoration:underline' },
-    { cmd: 'insertUnorderedList', label: '\u2022 List' },
-    { cmd: 'insertOrderedList', label: '1. List' }
-  ];
   function renderNotes() {
     const host = $('#recNotesContent'); if (!host) return;
     const rec = CURRENT_EXP_ID ? Store.getExperiment(CURRENT_EXP_ID) : null;
     if (!rec) { host.innerHTML = '<h2>General notes</h2><p class="empty">Select a project and experiment in the sidebar first.</p>'; return; }
-    const toolbar = NOTES_CMDS.map((c) => '<button type="button" class="nt-btn" data-cmd="' + c.cmd + '"' + (c.style ? ' style="' + c.style + '"' : '') + '>' + esc(c.label) + '</button>').join('')
-      + '<select class="nt-size" title="Font size"><option value="">Size</option><option value="2">Small</option><option value="3">Normal</option><option value="5">Large</option><option value="6">X-Large</option></select>'
-      + '<button type="button" class="nt-btn" data-cmd="formatBlock" data-val="h3">H</button>'
-      + '<button type="button" class="nt-btn" data-cmd="removeFormat">Clear</button>';
+    const b = (cmd, label, style, title) => '<button type="button" class="nt-btn" data-cmd="' + cmd + '"' + (style ? ' style="' + style + '"' : '') + ' title="' + escAttr(title || '') + '">' + label + '</button>';
+    const toolbar =
+        '<select class="nt-block" title="Paragraph style"><option value="P">Normal text</option><option value="H1">Heading 1</option><option value="H2">Heading 2</option><option value="H3">Heading 3</option></select>'
+      + '<span class="nt-sep"></span>'
+      + b('bold', 'B', 'font-weight:700', 'Bold (Ctrl+B)')
+      + b('italic', '<em>I</em>', '', 'Italic (Ctrl+I)')
+      + b('underline', '<u>U</u>', '', 'Underline (Ctrl+U)')
+      + b('strikeThrough', '<s>S</s>', '', 'Strikethrough')
+      + '<span class="nt-sep"></span>'
+      + '<label class="nt-swatch" title="Text color"><span class="nt-swatch-a">A</span><input type="color" class="nt-fore" value="#1e1533"></label>'
+      + '<label class="nt-swatch nt-swatch-hl" title="Highlight color"><span>A</span><input type="color" class="nt-back" value="#fff3a3"></label>'
+      + '<span class="nt-sep"></span>'
+      + b('insertUnorderedList', '\u2022 List', '', 'Bulleted list')
+      + b('insertOrderedList', '1. List', '', 'Numbered list')
+      + b('outdent', '\u2b0d', '', 'Decrease list level (Shift+Tab)')
+      + b('indent', '\u2b0e', '', 'Increase list level (Tab)')
+      + '<span class="nt-sep"></span>'
+      + b('justifyLeft', '\u2591\u2261', 'letter-spacing:-2px', 'Align left')
+      + b('justifyCenter', '\u2261\u2591', 'letter-spacing:-2px', 'Align center')
+      + '<span class="nt-sep"></span>'
+      + '<button type="button" class="nt-btn" id="ntLink" title="Insert / edit link">\uD83D\uDD17</button>'
+      + b('removeFormat', 'Clear', '', 'Clear formatting');
     host.innerHTML = '<h2>General notes <span class="who">' + esc(rec.name || '') + '</span></h2>'
-      + '<p class="step-hint">Free-form notes for this experiment. Formatting (bold, lists, size\u2026) is saved with the experiment and shown on Review \u2192 General notes.</p>'
+      + '<p class="step-hint">Rich-text notes for this experiment \u2014 headings, lists (Tab / Shift+Tab to change level), text colors and highlights. Changes save automatically and show on Review \u2192 General notes.</p>'
       + '<div class="nt-toolbar">' + toolbar + '</div>'
-      + '<div id="ntEditor" class="nt-editor" contenteditable="true"></div>'
-      + '<div class="row-actions" style="margin-top:8px"><button class="btn primary" id="ntSave">Save notes</button><span id="ntStatus" class="muted"></span></div>';
-    const ed = $('#ntEditor'); if (ed) ed.innerHTML = rec.notesHtml || '';
-    host.querySelectorAll('.nt-btn').forEach((b) => b.addEventListener('mousedown', (e) => { e.preventDefault(); ed.focus(); document.execCommand(b.dataset.cmd, false, b.dataset.val || null); }));
-    const sizeSel = host.querySelector('.nt-size');
-    if (sizeSel) sizeSel.addEventListener('change', () => { if (!sizeSel.value) return; ed.focus(); document.execCommand('fontSize', false, sizeSel.value); sizeSel.value = ''; });
-    const save = $('#ntSave'); if (save) save.addEventListener('click', () => {
-      rec.notesHtml = ed.innerHTML; rec.notesUpdated = new Date().toISOString().slice(0, 16).replace('T', ' ');
-      Store.saveExperiment(rec); const st = $('#ntStatus'); if (st) st.textContent = ' Saved.';
-    });
+      + '<div id="ntEditor" class="nt-editor" contenteditable="true" spellcheck="true"></div>'
+      + '<div class="row-actions" style="margin-top:8px"><button class="btn primary" id="ntSave">Save notes</button> <span id="ntStatus" class="muted"></span></div>';
+    const ed = $('#ntEditor'); if (!ed) return; ed.innerHTML = rec.notesHtml || '';
+    try { document.execCommand('styleWithCSS', false, true); } catch (e) { /* older browsers */ }
+
+    // Track the last selection inside the editor so colours/links still apply after a
+    // toolbar control (e.g. the native colour picker) briefly takes focus away.
+    let savedRange = null;
+    const saveSel = () => { const s = window.getSelection(); if (s && s.rangeCount && ed.contains(s.anchorNode)) savedRange = s.getRangeAt(0).cloneRange(); };
+    const restoreSel = () => { if (savedRange) { const s = window.getSelection(); s.removeAllRanges(); s.addRange(savedRange); } };
+    ['keyup', 'mouseup', 'blur'].forEach((ev) => ed.addEventListener(ev, saveSel));
+
+    const setStatus = (t) => { const st = $('#ntStatus'); if (st) st.textContent = t; };
+    const persist = () => { rec.notesHtml = ed.innerHTML; rec.notesUpdated = new Date().toISOString().slice(0, 16).replace('T', ' '); Store.saveExperiment(rec); };
+    let saveTimer = null; const saveSoon = () => { clearTimeout(saveTimer); saveTimer = setTimeout(() => { persist(); setStatus(' Saved.'); }, 800); };
+    const exec = (cmd, val) => { ed.focus(); restoreSel(); try { document.execCommand(cmd, false, val || null); } catch (e) { /* */ } saveSoon(); };
+
+    host.querySelectorAll('.nt-btn').forEach((btn) => btn.addEventListener('mousedown', (e) => { e.preventDefault(); exec(btn.dataset.cmd); }));
+    const blockSel = host.querySelector('.nt-block');
+    if (blockSel) blockSel.addEventListener('change', () => { exec('formatBlock', '<' + blockSel.value + '>'); blockSel.selectedIndex = 0; });
+    const fore = host.querySelector('.nt-fore'); if (fore) fore.addEventListener('input', () => { ed.focus(); restoreSel(); document.execCommand('foreColor', false, fore.value); saveSoon(); });
+    const back = host.querySelector('.nt-back'); if (back) back.addEventListener('input', () => { ed.focus(); restoreSel(); if (!document.execCommand('hiliteColor', false, back.value)) document.execCommand('backColor', false, back.value); saveSoon(); });
+    const link = $('#ntLink'); if (link) link.addEventListener('mousedown', (e) => { e.preventDefault(); ed.focus(); restoreSel(); const url = prompt('Link URL:', 'https://'); if (url) document.execCommand('createLink', false, url); saveSoon(); });
+
+    // Tab / Shift+Tab changes the list (or block) level instead of leaving the editor.
+    ed.addEventListener('keydown', (e) => { if (e.key === 'Tab') { e.preventDefault(); document.execCommand(e.shiftKey ? 'outdent' : 'indent'); saveSoon(); } });
+    ed.addEventListener('input', () => { setStatus(' Editing\u2026'); saveSoon(); });
+    ed.addEventListener('blur', persist);
+    const save = $('#ntSave'); if (save) save.addEventListener('click', () => { persist(); setStatus(' Saved.'); });
   }
   function renderNotesReview() {
     const host = $('#revNotesContent'); if (!host) return;
@@ -1399,7 +1453,7 @@
     (rec.tapestation || []).forEach((run) => (run.wells || []).forEach((w) => { const id = tsWellLibId(w); if (!id) return; const parsed = parseLibId(id); if (!parsed || !parsed.arm) return; ensure(parsed.arm, canonType(parsed.arm, parsed.type))[parsed.lane] = true; }));
     // add every lane seen in the Qubit tables (tube like U1-GEX / U1-ADT/CSP-2)
     const qt = (rec.worksheets && rec.worksheets.library && rec.worksheets.library.qubit) || {};
-    if (qt && !Array.isArray(qt)) QUBIT_TABLES.forEach((t) => {
+    if (qt && !Array.isArray(qt)) qubitReadKeys().forEach((t) => {
       const val = qt[t.key]; let rows = [];
       if (Array.isArray(val) && val.length && val[0] && typeof val[0] === 'object' && !Array.isArray(val[0])) { val.forEach((tb) => (tb.rows || []).forEach((r) => rows.push(r))); }
       else if (Array.isArray(val)) rows = val;
@@ -1453,7 +1507,7 @@
     // ---- Qubit index (read the per-prep-round tables; tolerate the old flat format) ----
     const qt = (rec.worksheets && rec.worksheets.library && rec.worksheets.library.qubit) || {};
     const qAll = [];
-    if (qt && !Array.isArray(qt)) QUBIT_TABLES.forEach((t) => {
+    if (qt && !Array.isArray(qt)) qubitReadKeys().forEach((t) => {
       const val = qt[t.key]; let tables = [];
       if (Array.isArray(val) && val.length && val[0] && typeof val[0] === 'object' && !Array.isArray(val[0])) {
         tables = val.map((tb) => ({ round: Number(tb.round) || 1, rows: (tb.rows || []).map(qbRow) }));
@@ -4783,7 +4837,7 @@
     (rec.tapestation || []).forEach((run) => (run.wells || []).forEach((wl) => { const id = tsWellLibId(wl); if (!id) return; const n = parseFloat(wl.conc); if (isNaN(n)) return; const ng = Math.round((n * tsDilFactor(wl.dilution) / 1000) * 100) / 100; const k = normLibId(id) + '|' + (Number(wl.round) || 1); (tsByKey[k] = tsByKey[k] || []).push(ng); }));
     const corr = (conc, dil) => { const n = parseFloat(conc); return isNaN(n) ? '' : Math.round(n * tsDilFactor(dil) * 100) / 100; };
     const rows = [];
-    QUBIT_TABLES.forEach((t) => {
+    qubitReadKeys().forEach((t) => {
       const tables = normalizeQubitTables(qt[t.key], t.key);
       tables.forEach((tb) => (tb.rows || []).forEach((r) => {
         if (!r[0]) return;
