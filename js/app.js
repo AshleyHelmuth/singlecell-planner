@@ -581,6 +581,8 @@
     const libRecBtn = $('#wsLibRec'); if (libRecBtn) libRecBtn.addEventListener('click', () => { const st = $('#wsStatus'); if (st) st.textContent = ' Updating Library record in Drive\u2026'; pushLibraryRecordNow(rec).then((r) => { if (!st) return; if (r && r.id) st.innerHTML = ' Library record updated \u2014 <a href="https://docs.google.com/spreadsheets/d/' + escAttr(r.id) + '/edit" target="_blank" rel="noopener">open in Drive</a>'; else if (r && r.error) st.textContent = ' Update failed: ' + r.error; else st.textContent = ' Could not update the Library record (' + ((r && r.skipped) || 'no Drive access') + ').'; }); });
     const reload = $('#wsReload'); if (reload) reload.addEventListener('click', () => reloadWorksheetFromDrive(rec, type));
   }
+  // Excel/Google Sheets tab names: no \ / ? * [ ] : and can't start/end with an apostrophe.
+  function sheetSafeName(name) { let s = String(name).replace(/[\\/?*\[\]:]/g, ' ').replace(/\s+/g, ' ').replace(/^['\s]+|['\s]+$/g, ''); return (s || 'Sheet').slice(0, 31); }
   function saveWorksheet(rec, type) {
     const cfg = WORKSHEET_CFG[type]; const w = getWorksheet(rec, type);
     const stEl = $('#wsStatus');
@@ -591,8 +593,8 @@
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([['Experiment ID', w.expId || ''], ['Operator', w.operator || ''], ['Date', w.date || ''], ['Notes', w.notes || '']]), 'Info');
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([['10X kit', 'PN', 'Lot #', 'Rxns used', 'Notes']].concat(w.kits.map((k) => [k.kit, k.pn, k.lot, k.rxns, k.notes]))), 'Kit lots');
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([cfg.countCols].concat(w.counts)), 'Cell counts');
-    if (type === 'library' && w.loading) { [['unsort', "Unsort 5'"], ['sort', "Sort 5'"], ['asap', 'ASAP']].forEach((a) => { const rows = (w.loading[a[0]] || []).filter((r) => r.some((c) => String(c || '') !== '')); if (rows.length) XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([['10X chip', 'Lane', 'Population loaded', 'Tube label', '# cells loaded', 'Notes']].concat(rows)), ('Loading ' + a[1]).slice(0, 31)); }); }
-    if (type === 'library') { ensureQubitShape(w); QUBIT_TABLES.forEach((qt) => { const flat = qubitFlatten(w.qubit[qt.key]); if (flat.length) { XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([['Library ID', 'Index ID', 'Amp. cycles', 'Qubit dilution', 'Qubit conc (ng/µL)', 'Notes', 'Prep round']].concat(flat)), ('Qubit ' + qt.title).slice(0, 31)); } }); }
+    if (type === 'library' && w.loading) { [['unsort', "Unsort 5'"], ['sort', "Sort 5'"], ['asap', 'ASAP']].forEach((a) => { const rows = (w.loading[a[0]] || []).filter((r) => r.some((c) => String(c || '') !== '')); if (rows.length) XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([['10X chip', 'Lane', 'Population loaded', 'Tube label', '# cells loaded', 'Notes']].concat(rows)), sheetSafeName('Loading ' + a[1])); }); }
+    if (type === 'library') { ensureQubitShape(w); QUBIT_TABLES.forEach((qt) => { const flat = qubitFlatten(w.qubit[qt.key]); if (flat.length) { XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([['Library ID', 'Index ID', 'Amp. cycles', 'Qubit dilution', 'Qubit conc (ng/µL)', 'Notes', 'Prep round']].concat(flat)), sheetSafeName('Qubit ' + qt.title)); } }); }
     const b64 = XLSX.write(wb, { type: 'base64', bookType: 'xlsx' });
     const expId2 = rec.experimentId || projectLabel(rec.name || 'experiment');
     const req = rec.driveFolderId ? { action: 'ensurePath', parentId: rec.driveFolderId, subPath: ['data', 'worksheets'] } : { action: 'ensurePath', project: rec.project || CURRENT_PROJECT, experiment: rec.name || 'Experiment', subPath: ['data', 'worksheets'] };
@@ -626,8 +628,8 @@
         const sheets = res.qubitSheets || [];
         const rebuilt = {};
         QUBIT_TABLES.forEach((qt) => {
-          const wantName = ('Qubit ' + qt.title).slice(0, 31);
-          const sh = sheets.filter((s) => s.title === wantName || (s.title || '').indexOf(('Qubit ' + qt.title).slice(0, 20)) === 0)[0];
+          const wantName = sheetSafeName('Qubit ' + qt.title);
+          const sh = sheets.filter((s) => s.title === wantName || (s.title || '').indexOf(sheetSafeName('Qubit ' + qt.title).slice(0, 20)) === 0)[0];
           let tables = null;
           if (sh && sh.rows && sh.rows.length > 1) { tables = qubitFromFlat(sh.rows.slice(1)); }   // drop header row
           rebuilt[qt.key] = tables || (prev.qubit && prev.qubit[qt.key]) || null;
@@ -5060,11 +5062,13 @@
     const libByMod = {}; const cdna = [];
     rows.forEach((d) => { if (d.cdna) cdna.push(d); else { const m = d.modality || 'Other'; (libByMod[m] = libByMod[m] || []).push(d); } });
     const wb = XLSX.utils.book_new();
+    const sheetSafe = (name) => { let s = String(name).replace(/[\\/?*\[\]:]/g, ' ').replace(/^['\s]+|['\s]+$/g, ''); return (s || 'Sheet').slice(0, 31); };
+    const modSheetName = (m) => sheetSafe(m === "5'" ? "5' libraries" : (m === 'ASAP' ? 'ASAP libraries' : m + ' libraries'));
     const modOrder = ["5'", 'ASAP', 'FLEX', 'Bulk', 'Other'];
     Object.keys(libByMod).sort((a, b) => ((modOrder.indexOf(a) + 1) || 99) - ((modOrder.indexOf(b) + 1) || 99)).forEach((m) => {
       const ws = XLSX.utils.aoa_to_sheet([LIB_HDR].concat(libByMod[m].sort(bySort).map(libRow)));
       ws['!cols'] = LIB_HDR.map((h) => ({ wch: Math.max(11, h.length + 1) }));
-      XLSX.utils.book_append_sheet(wb, ws, (m.replace(/[\\/?*\[\]:]/g, '') || 'Libraries').slice(0, 31));
+      XLSX.utils.book_append_sheet(wb, ws, modSheetName(m));
     });
     if (cdna.length) { const ws = XLSX.utils.aoa_to_sheet([CDNA_HDR].concat(cdna.sort(bySort).map(cdnaRow))); ws['!cols'] = CDNA_HDR.map((h) => ({ wch: Math.max(11, h.length + 1) })); XLSX.utils.book_append_sheet(wb, ws, 'cDNA'); }
     if (!wb.SheetNames.length) { const ws = XLSX.utils.aoa_to_sheet([LIB_HDR]); XLSX.utils.book_append_sheet(wb, ws, 'Libraries'); }
