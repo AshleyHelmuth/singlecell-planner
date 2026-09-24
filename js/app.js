@@ -271,12 +271,46 @@
   }
   const WORKSHEET_CFG = {
     batchday: { title: 'Batch Day Worksheet', host: 'recBatchdayContent',
-      kits: [['Chromium Next GEM Single Cell ATAC Library Kit v2', ''], ['Chromium Next GEM Single Cell ATAC Gel Bead Kit v2', ''], ['Chromium Next GEM Chip H Single Cell Kit', ''], ['Single Index Kit N Set A, 96 rxns', 'PN-1000212']],
+      kits: [],
       countCols: ['Tube / population', 'Total vol (µL)', 'Count', 'Total cell # (count×vol)', 'Dilution', 'Final conc (nuclei/µL)'] },
     library: { title: 'Library Worksheets', host: 'recLibraryContent',
       kits: [["Single Cell 5' GEM Kit v3", ''], ['Library Construction Kit C', ''], ["Single Cell 5' Gel Bead Kit v3", ''], ["GEM-X 5' Feature Barcode Kit v3, 16 rxns", 'PN-1000703'], ["GEM-X 5' Chip Kit v3, 4 chips", 'PN-1000698'], ['Dual Index Kit TT Set A, 96 rxns', 'PN-1000215'], ['Dual Index Kit TN Set A, 96 rxns', 'PN-1000250'], ['Single Cell Human TCR Amplification, 16 rxns', 'PN-1000252'], ['Single Cell Human BCR Amplification, 16 rxns', 'PN-1000253']],
       countCols: ['Population', 'Tube label', 'Total vol (µL)', 'Total count', 'Viability', 'Live count', 'Total live cell #', 'Dilution', 'Final conc (cells/µL)'] }
   };
+  // All 10X kits needed across the experiment, from the current design (arms + VDJ).
+  function kitsForExperiment() {
+    let has5 = false, hasAsap = false, vdj = false;
+    try {
+      const arms = buildArmInstances(SEL);
+      has5 = arms.some((a) => a.chem === 'cite5');
+      hasAsap = arms.some((a) => a.chem === 'asap');
+      vdj = !!(SEL.unsorted && SEL.unsorted.vdj) || !!(SEL.sorted && SEL.sorted.vdj);
+    } catch (e) { has5 = true; }
+    if (!has5 && !hasAsap) has5 = true;   // fallback so the table is never empty
+    const kits = [];
+    if (has5) {
+      kits.push(["Single Cell 5' GEM Kit v3", ''], ["Single Cell 5' Gel Bead Kit v3", ''],
+        ["GEM-X 5' Chip Kit v3, 4 chips", 'PN-1000698'], ['Library Construction Kit C', ''],
+        ["GEM-X 5' Feature Barcode Kit v3, 16 rxns", 'PN-1000703'],
+        ['Dual Index Kit TT Set A, 96 rxns', 'PN-1000215'], ['Dual Index Kit TN Set A, 96 rxns', 'PN-1000250']);
+    }
+    if (vdj) kits.push(['Single Cell Human TCR Amplification, 16 rxns', 'PN-1000252'], ['Single Cell Human BCR Amplification, 16 rxns', 'PN-1000253']);
+    if (hasAsap) {
+      if (!has5) kits.push(["GEM-X 5' Feature Barcode Kit v3, 16 rxns", 'PN-1000703']);   // ASAP ADT/HTO
+      kits.push(['Chromium Next GEM Single Cell ATAC Library Kit v2', ''], ['Chromium Next GEM Single Cell ATAC Gel Bead Kit v2', ''],
+        ['Chromium Next GEM Chip H Single Cell Kit', ''], ['Single Index Kit N Set A, 96 rxns', 'PN-1000212']);
+    }
+    return kits;
+  }
+  // Reconcile a worksheet's kit rows with the design list, preserving entered lot/rxns/notes.
+  function reconcileKits(w) {
+    const design = kitsForExperiment();
+    const existing = {}; (w.kits || []).forEach((k) => { existing[k.kit] = k; });
+    const out = design.map((dk) => { const e = existing[dk[0]]; return e ? { kit: e.kit, pn: e.pn || dk[1], lot: e.lot || '', rxns: e.rxns || '', notes: e.notes || '' } : { kit: dk[0], pn: dk[1], lot: '', rxns: '', notes: '' }; });
+    const names = {}; design.forEach((dk) => { names[dk[0]] = true; });
+    (w.kits || []).forEach((k) => { if (!names[k.kit] && (k.lot || k.rxns || k.notes)) out.push(k); });   // keep any extra kit the user already filled in
+    w.kits = out;
+  }
   function getWorksheet(rec, type) {
     rec.worksheets = rec.worksheets || {};
     if (!rec.worksheets[type]) {
@@ -292,6 +326,7 @@
     const rec = CURRENT_EXP_ID ? Store.getExperiment(CURRENT_EXP_ID) : null;
     if (!rec) { host.innerHTML = '<h2>' + esc(cfg.title) + '</h2><p class="empty">Select a project and experiment in the sidebar first.</p>'; return; }
     const w = getWorksheet(rec, type);
+    if (type === 'library') reconcileKits(w);
     // ---- Batch-day 10X loading tables: one row per 10X lane, per modality ----
     const LOAD_COLS = ['10X chip', 'Lane', 'Population loaded', 'Tube label', '# cells loaded', 'Notes'];
     const LOAD_ARMS = [['unsort', "Unsort 5'", 'U', 'Unsorted'], ['sort', "Sort 5'", 'S', ''], ['asap', 'ASAP', 'A', 'Unsorted']];
@@ -320,7 +355,7 @@
       + '<div class="row-actions" style="margin:0 0 10px"><button class="btn ghost" id="wsReload">Reload from Drive</button><span id="wsReloadStatus" class="muted"></span></div>'
       + '<p class="step-hint">Enter the values written on the paper worksheet. Saved to the experiment and to a durable <strong>data \u203a worksheets</strong> sheet in Drive, and surfaced in Review.</p>'
       + '<div class="row-actions" style="margin:6px 0"><label>Experiment ID <input id="wsExpId" style="width:120px" value="' + escAttr(w.expId || '') + '"></label> <label>Operator <input id="wsOperator" style="width:140px" value="' + escAttr(w.operator || '') + '"></label> <label>Date <input id="wsDate" style="width:120px" value="' + escAttr(w.date || '') + '"></label></div>'
-      + '<h3>10X kit lots &amp; rxns used</h3><table class="cost-table"><thead><tr><th>10X kit</th><th>PN</th><th>Lot #</th><th>Rxns used</th><th>Notes</th></tr></thead><tbody>' + kitRows + '</tbody></table>'
+      + (type === 'library' ? '<h3>10X kit lots &amp; rxns used <span class="who">all kits for this experiment\u2019s design</span></h3><table class="cost-table"><thead><tr><th>10X kit</th><th>PN</th><th>Lot #</th><th>Rxns used</th><th>Notes</th></tr></thead><tbody>' + kitRows + '</tbody></table>' : '')
       + '<h3 style="margin-top:18px">Cell counts &amp; dilution</h3><div style="overflow:auto"><table class="cost-table"><thead><tr>' + cHead + '<th></th></tr></thead><tbody>' + cRows + '</tbody></table></div>'
       + '<div class="row-actions" style="margin:6px 0"><button class="btn ghost" id="wsAddRow">+ Add count row</button></div>'
       + (type === 'library' ? (function () {
@@ -4777,6 +4812,7 @@
     // ASAP
     grp('GEM-RT strip', 'ASAP', 'GEM RT output', rangeN(lanes.asap).map((i) => baseName('A', i, 8, lanes.asap) + '-GEM'));
     grp('cDNA strip', 'ASAP', 'ASAP transposed', rangeN(lanes.asap).map((i) => baseName('A', i, 8, lanes.asap)));
+    grp('cDNA strip', 'ASAP', 'ADT intermediate (3.3n)', rangeN(lanes.asap).map((i) => baseName('A', i, 8, lanes.asap) + '-3.3n'));
     grp('Library', 'ASAP', 'ATAC library', rangeN(lanes.asap).map((i) => baseName('A', i, 8, lanes.asap) + '-ATAC'));
     grp('Library', 'ASAP', 'ADT library', rangeN(lanes.asap).map((i) => baseName('A', i, 8, lanes.asap) + '-ADT'));
     grp('Library', 'ASAP', 'HTO library', rangeN(lanes.asap).map((i) => baseName('A', i, 8, lanes.asap) + '-HTO'));
