@@ -930,8 +930,11 @@ main > .panel { flex: 1 1 auto; min-width: 0; }
 .qb-table th, .qb-table td { border-right: 1px solid var(--line); }
 .qb-table th:last-child, .qb-table td:last-child { border-right: 0; }
 .qb-table .qb-cell { position: relative; }
-.qb-table td.qb-cell input.ws-qb, .qb-table td.qb-cell input.ws-load { width: 100%; min-width: 64px; box-sizing: border-box; border: 0; background: transparent; padding: 3px 8px; font-family: var(--mono); font-size: 12.5px; line-height: 1.5; }
-.qb-table td.qb-cell input.ws-qb:focus, .qb-table td.qb-cell input.ws-load:focus { outline: 2px solid var(--teal); outline-offset: -2px; background: var(--purple-50); }
+.qb-table td.qb-cell input { width: 100%; min-width: 60px; box-sizing: border-box; border: 0; background: transparent; padding: 3px 8px; font-family: var(--mono); font-size: 12.5px; line-height: 1.5; }
+.qb-table td.qb-cell input:focus { outline: 2px solid var(--teal); outline-offset: -2px; background: var(--purple-50); }
+.qb-table.qb-narrow { width: auto; }
+.qb-table.qb-narrow th, .qb-table.qb-narrow td { padding-left: 8px; padding-right: 8px; }
+.qb-table.qb-narrow td.qb-cell input { min-width: 72px; }
 
 /* ===== Collapsible worksheet sections with a per-section done check ===== */
 .ws-sec { border: 1px solid var(--line); border-radius: 8px; margin: 8px 0; overflow: hidden; }

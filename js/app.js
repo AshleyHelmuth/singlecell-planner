@@ -350,39 +350,48 @@
     return hit ? { live: hit.live, viability: hit.viability } : null;
   }
   const bdInp = (cls, attrs, val, wd) => '<input class="' + cls + '" ' + attrs + ' value="' + escAttr(val == null ? '' : val) + '"' + (wd ? ' style="width:' + wd + 'px"' : '') + '>';
-  // transposed HTO table: row1 pool labels, row2 TotalSeqC HTO#, row3 tube ID
+  // HTO table: one row per pool; columns = Pool, TotalSeqC HTO#, Tube ID (condensed grid)
   function bdHtoTable(cls, arr, poolLabels) {
-    let h = '<div style="overflow:auto"><table class="cost-table qb-table"><tbody>';
-    h += '<tr><th>Pool</th>' + poolLabels.map((p) => '<td><strong>' + esc(p) + '</strong></td>').join('') + '</tr>';
-    h += '<tr><th>TotalSeqC HTO#</th>' + poolLabels.map((p, i) => '<td class="qb-cell">' + bdInp(cls, 'data-i="' + i + '" data-f="hto"', (arr[i] && arr[i].hto) || '') + '</td>').join('') + '</tr>';
-    h += '<tr><th>Tube ID</th>' + poolLabels.map((p, i) => '<td class="qb-cell">' + bdInp(cls, 'data-i="' + i + '" data-f="tube"', (arr[i] && arr[i].tube) || '') + '</td>').join('') + '</tr>';
-    return h + '</tbody></table></div>';
+    let h = '<table class="cost-table qb-table qb-narrow"><thead><tr><th>Pool</th><th>TotalSeqC HTO#</th><th>Tube ID</th></tr></thead><tbody>';
+    poolLabels.forEach((p, i) => { h += '<tr><td><strong>' + esc(p) + '</strong></td><td class="qb-cell">' + bdInp(cls, 'data-i="' + i + '" data-f="hto"', (arr[i] && arr[i].hto) || '') + '</td><td class="qb-cell">' + bdInp(cls, 'data-i="' + i + '" data-f="tube"', (arr[i] && arr[i].tube) || '') + '</td></tr>'; });
+    return h + '</tbody></table>';
   }
-  // counts table: conc (cells/mL), live%, total (=conc*1000), vol pooled
+  // counts table: one row per pool; conc (cells/mL), live%, total (=conc*1000), vol pooled
   function bdCountsTable(cls, rows, poolLabels) {
-    let h = '<div style="overflow:auto"><table class="cost-table qb-table"><thead><tr><th>Pool</th><th>Cell conc (cells/mL)</th><th>Live %</th><th>Total cells (conc\u00d71000)</th><th>Vol pooled (\u00b5L)</th></tr></thead><tbody>';
+    let h = '<table class="cost-table qb-table qb-narrow"><thead><tr><th>Pool</th><th>Cell conc (cells/mL)</th><th>Live %</th><th>Total cells (conc\u00d71000)</th><th>Vol pooled (\u00b5L)</th></tr></thead><tbody>';
     poolLabels.forEach((p, i) => { const r = rows[i] || {}; const conc = parseFloat(r.conc); const total = isNaN(conc) ? '' : Math.round(conc * 1000).toLocaleString();
       h += '<tr><td><strong>' + esc(p) + '</strong></td><td class="qb-cell">' + bdInp(cls, 'data-i="' + i + '" data-f="conc"', r.conc) + '</td><td class="qb-cell">' + bdInp(cls, 'data-i="' + i + '" data-f="live"', r.live) + '</td><td class="num">' + (total || '\u2014') + '</td><td class="qb-cell">' + bdInp(cls, 'data-i="' + i + '" data-f="vol"', r.vol) + '</td></tr>';
     });
-    return h + '</tbody></table></div>';
+    return h + '</tbody></table>';
   }
 
-  function bdPoolingBody(w, ctx) {
-    w.pooling = w.pooling || {};
-    if (!w.pooling.pools) w.pooling.pools = ctx.pools.map((p) => ({ label: 'Pool ' + p.idx, hto: p.hto, samples: p.samples.join(', ') }));
-    const init = '<h4 style="margin:0 0 4px">Initial pooling scheme (from experimental design)</h4><div style="overflow:auto"><table class="cost-table qb-table"><thead><tr><th>Pool</th><th>HTO</th><th>Samples</th></tr></thead><tbody>'
-      + (ctx.pools.length ? ctx.pools.map((p) => '<tr><td><strong>Pool ' + p.idx + '</strong></td><td>' + esc(p.hto || '\u2014') + '</td><td class="who">' + esc(p.samples.join(', ') || '\u2014') + '</td></tr>').join('') : '<tr><td colspan="3" class="muted">Build the plan to see the designed pools.</td></tr>') + '</tbody></table></div>';
-    const actual = '<h4 style="margin:14px 0 4px">Actual pooling <span class="who">edit to match what was done \u2014 change samples or remove a pool</span></h4><div style="overflow:auto"><table class="cost-table qb-table"><thead><tr><th>Pool</th><th>HTO</th><th>Samples (comma-separated)</th><th></th></tr></thead><tbody>'
-      + w.pooling.pools.map((p, i) => '<tr><td class="qb-cell">' + bdInp('bp-pool', 'data-i="' + i + '" data-f="label"', p.label, 90) + '</td><td class="qb-cell">' + bdInp('bp-pool', 'data-i="' + i + '" data-f="hto"', p.hto, 60) + '</td><td class="qb-cell">' + bdInp('bp-pool', 'data-i="' + i + '" data-f="samples"', p.samples) + '</td><td><button class="btn tiny" data-bp-del="' + i + '">\u2715</button></td></tr>').join('')
-      + '</tbody></table></div><div class="row-actions" style="margin:4px 0"><button class="btn ghost" id="bpAddPool">+ Add pool</button> <button class="btn ghost" id="bpReset">Reset to designed scheme</button></div>';
+  // Spreadsheet-style up/down/Enter navigation between rows of a condensed table (DOM-based,
+  // so it works for any of the batch-day / loading grids regardless of their data attributes).
+  function attachGridArrows(host, sel) {
+    host.querySelectorAll(sel).forEach((el) => el.addEventListener('keydown', (e) => {
+      if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown' && e.key !== 'Enter') return;
+      const td = el.closest('td'); const tr = el.closest('tr'); if (!td || !tr) return;
+      const ci = td.cellIndex; const target = (e.key === 'ArrowUp') ? tr.previousElementSibling : tr.nextElementSibling;
+      const cell = target && target.cells && target.cells[ci]; const inp = cell && cell.querySelector('input, textarea, select');
+      if (inp) { e.preventDefault(); inp.focus(); if (inp.select) inp.select(); }
+    }));
+  }
+  function bdPoolingBody(w, ctx) {    w.pooling = w.pooling || {};
+    if (!w.pooling.pools) w.pooling.pools = ctx.pools.map((p) => ({ label: 'Pool ' + p.idx, samples: p.samples.join(', ') }));
+    w.pooling.pools.forEach((p) => { if (p.hto != null) delete p.hto; });
+    const init = '<h4 style="margin:0 0 4px">Initial pooling scheme (from experimental design)</h4><table class="cost-table qb-table qb-narrow"><thead><tr><th>Pool</th><th>Samples</th></tr></thead><tbody>'
+      + (ctx.pools.length ? ctx.pools.map((p) => '<tr><td><strong>Pool ' + p.idx + '</strong></td><td class="who">' + esc(p.samples.join(', ') || '\u2014') + '</td></tr>').join('') : '<tr><td colspan="2" class="muted">Build the plan to see the designed pools.</td></tr>') + '</tbody></table>';
+    const actual = '<h4 style="margin:14px 0 4px">Actual pooling <span class="who">edit to match what was done \u2014 change samples or remove a pool</span></h4><table class="cost-table qb-table qb-narrow"><thead><tr><th>Pool</th><th>Samples (comma-separated)</th><th></th></tr></thead><tbody>'
+      + w.pooling.pools.map((p, i) => '<tr><td class="qb-cell">' + bdInp('bp-pool', 'data-i="' + i + '" data-f="label"', p.label, 100) + '</td><td class="qb-cell">' + bdInp('bp-pool', 'data-i="' + i + '" data-f="samples"', p.samples) + '</td><td><button class="btn tiny" data-bp-del="' + i + '">\u2715</button></td></tr>').join('')
+      + '</tbody></table><div class="row-actions" style="margin:4px 0"><button class="btn ghost" id="bpAddPool">+ Add pool</button> <button class="btn ghost" id="bpReset">Reset to designed scheme</button></div>';
     const notes = '<label class="who" style="display:block;margin-top:8px">Notes on pooling changes<textarea class="bp-notes" style="width:100%;min-height:60px;display:block">' + esc(w.pooling.notes || '') + '</textarea></label>';
     return init + actual + notes;
   }
 
   function bdCiteBody(w, ctx, rec) {
     w.cite = w.cite || {};
-    const uLabels = ctx.pools.map((p) => 'Pool ' + p.idx);
-    const aLabels = ctx.hasAsap ? ctx.pools.map((p) => 'Pool ' + p.idx) : [];
+    const uLabels = ctx.pools.map((p) => 'Unsort ' + p.idx);
+    const aLabels = ctx.hasAsap ? ctx.pools.map((p) => 'ASAP ' + p.idx) : [];
     w.cite.htoU = w.cite.htoU || ctx.pools.map((p) => ({ hto: p.hto || '', tube: '' }));
     w.cite.htoA = w.cite.htoA || (ctx.hasAsap ? ctx.pools.map((p) => ({ hto: p.hto || '', tube: '' })) : []);
     w.cite.cntU = w.cite.cntU || ctx.pools.map((p, i) => { const cc = cellacaPoolConc(rec, i + 1) || {}; return { conc: cc.live != null ? cc.live : '', live: cc.viability != null ? cc.viability : '', vol: '' }; });
@@ -404,12 +413,11 @@
     const labels = ctx.sortPops.length ? ctx.sortPops.slice() : ['Sort pool 1'];
     st.hto = st.hto || labels.map(() => ({ hto: '', tube: '' }));
     st.counts = st.counts || labels.map((p) => ({ pool: p, conc: '', vol: '', volPooled: '' }));
-    // transposed HTO table with section index
-    let h = '<div style="overflow:auto"><table class="cost-table qb-table"><tbody>';
-    h += '<tr><th>Sort pool</th>' + labels.map((p) => '<td><strong>' + esc(p) + '</strong></td>').join('') + '</tr>';
-    h += '<tr><th>TotalSeqC HTO#</th>' + labels.map((p, i) => '<td class="qb-cell">' + bdInp('sort-hto', 'data-si="' + si + '" data-i="' + i + '" data-f="hto"', (st.hto[i] && st.hto[i].hto) || '') + '</td>').join('') + '</tr>';
-    h += '<tr><th>Tube ID</th>' + labels.map((p, i) => '<td class="qb-cell">' + bdInp('sort-hto', 'data-si="' + si + '" data-i="' + i + '" data-f="tube"', (st.hto[i] && st.hto[i].tube) || '') + '</td>').join('') + '</tr></tbody></table></div>';
-    h += '<h4 style="margin:14px 0 4px">Sort pool cell counts</h4><div style="overflow:auto"><table class="cost-table qb-table"><thead><tr><th>Sort pool</th><th>Cell conc (cells/mL)</th><th>Vol (mL)</th><th>Total cells (conc\u00d7vol\u00d71000)</th><th>Vol pooled (\u00b5L)</th><th></th></tr></thead><tbody>'
+    // HTO table: one row per sort pool (condensed)
+    let h = '<table class="cost-table qb-table qb-narrow"><thead><tr><th>Sort pool</th><th>TotalSeqC HTO#</th><th>Tube ID</th></tr></thead><tbody>';
+    labels.forEach((p, i) => { h += '<tr><td><strong>' + esc(p) + '</strong></td><td class="qb-cell">' + bdInp('sort-hto', 'data-si="' + si + '" data-i="' + i + '" data-f="hto"', (st.hto[i] && st.hto[i].hto) || '') + '</td><td class="qb-cell">' + bdInp('sort-hto', 'data-si="' + si + '" data-i="' + i + '" data-f="tube"', (st.hto[i] && st.hto[i].tube) || '') + '</td></tr>'; });
+    h += '</tbody></table>';
+    h += '<h4 style="margin:14px 0 4px">Sort pool cell counts</h4><div style="overflow:auto"><table class="cost-table qb-table qb-narrow"><thead><tr><th>Sort pool</th><th>Cell conc (cells/mL)</th><th>Vol (mL)</th><th>Total cells (conc\u00d7vol\u00d71000)</th><th>Vol pooled (\u00b5L)</th><th></th></tr></thead><tbody>'
       + st.counts.map((r, i) => { const conc = parseFloat(r.conc), vol = parseFloat(r.vol); const total = (isNaN(conc) || isNaN(vol)) ? '' : Math.round(conc * vol * 1000).toLocaleString();
         return '<tr><td class="qb-cell">' + bdInp('sort-cnt', 'data-si="' + si + '" data-i="' + i + '" data-f="pool"', r.pool) + '</td><td class="qb-cell">' + bdInp('sort-cnt', 'data-si="' + si + '" data-i="' + i + '" data-f="conc"', r.conc) + '</td><td class="qb-cell">' + bdInp('sort-cnt', 'data-si="' + si + '" data-i="' + i + '" data-f="vol"', r.vol) + '</td><td class="num">' + (total || '\u2014') + '</td><td class="qb-cell">' + bdInp('sort-cnt', 'data-si="' + si + '" data-i="' + i + '" data-f="volPooled"', r.volPooled) + '</td><td><button class="btn tiny" data-sortcnt-del="' + si + '|' + i + '">\u2715</button></td></tr>'; }).join('')
       + '</tbody></table></div><div class="row-actions" style="margin:4px 0"><button class="btn ghost" data-sortcnt-add="' + si + '">+ Add sort pool</button></div>';
@@ -505,10 +513,11 @@
     host.querySelectorAll('button[data-load-add]').forEach((b) => b.addEventListener('click', () => { const a = b.dataset.loadAdd; w.loading[a] = w.loading[a] || []; w.loading[a].push(['', '', '', '', '', '']); Store.saveExperiment(rec); renderWorksheet(type); }));
     host.querySelectorAll('button[data-load-del]').forEach((b) => b.addEventListener('click', () => { const p = b.dataset.loadDel.split('|'); w.loading[p[0]].splice(+p[1], 1); if (!w.loading[p[0]].length) w.loading[p[0]].push(['', '', '', '', '', '']); Store.saveExperiment(rec); renderWorksheet(type); }));
     host.querySelectorAll('.ws-load').forEach((el) => el.addEventListener('paste', (e) => { const g = clipGrid(e); if (!g) return; e.preventDefault(); const a = el.dataset.arm, r0 = +el.dataset.r, c0 = +el.dataset.c; w.loading[a] = w.loading[a] || []; g.forEach((line, ri) => { const r = r0 + ri; while (w.loading[a].length <= r) w.loading[a].push(['', '', '', '', '', '']); line.forEach((val, ci) => { const c = c0 + ci; if (c < LOAD_COLS.length) w.loading[a][r][c] = val; }); }); Store.saveExperiment(rec); renderWorksheet(type); }));
+    attachGridArrows(host, '.ws-load');
     // qubit handlers
     const qbTbl = (k, ti) => (w.qubit[k] && w.qubit[k][ti]) || null;
     const commitQubitInputs = () => { host.querySelectorAll('.ws-qb').forEach((el) => { const t = qbTbl(el.dataset.qt, +el.dataset.ti); if (t && t.rows[+el.dataset.r]) t.rows[+el.dataset.r][+el.dataset.c] = el.value; }); };
-    let qbSaveTimer = null; const qbSaveSoon = () => { clearTimeout(qbSaveTimer); qbSaveTimer = setTimeout(() => { commitQubitInputs(); Store.saveExperiment(rec); }, 700); };
+    let qbSaveTimer = null; const qbSaveSoon = () => { clearTimeout(qbSaveTimer); qbSaveTimer = setTimeout(() => { commitQubitInputs(); Store.saveExperiment(rec); syncLibraryRecordDrive(rec); }, 700); };
     host.querySelectorAll('.ws-qb').forEach((el) => el.addEventListener('input', () => { const t = qbTbl(el.dataset.qt, +el.dataset.ti); if (t && t.rows[+el.dataset.r]) t.rows[+el.dataset.r][+el.dataset.c] = el.value; qbSaveSoon(); }));
     host.querySelectorAll('.ws-qb').forEach((el) => el.addEventListener('paste', (e) => { const t = (e.clipboardData || window.clipboardData).getData('text'); if (!t) return; const g = t.replace(/\r/g, '').replace(/\n+$/, '').split('\n').map((l) => l.split('\t')); if (g.length === 1 && g[0].length === 1) return; e.preventDefault(); commitQubitInputs(); const qtk = el.dataset.qt, ti = +el.dataset.ti, tbl = qbTbl(qtk, ti); if (!tbl) return; const cols = qubitColsFor(qtk); const startDisp = cols.indexOf(+el.dataset.c); const r0 = +el.dataset.r; g.forEach((line, ri) => { const r = r0 + ri; while (tbl.rows.length <= r) tbl.rows.push(qbBlank()); line.forEach((val, ci) => { const disp = startDisp + ci; if (disp >= 0 && disp < cols.length) tbl.rows[r][cols[disp]] = val; }); }); Store.saveExperiment(rec); renderWorksheet(type); }));
     host.querySelectorAll('.qb-round').forEach((el) => el.addEventListener('change', () => { commitQubitInputs(); const t = qbTbl(el.dataset.qt, +el.dataset.ti); if (t) { t.round = Number(el.value) || 1; Store.saveExperiment(rec); } }));
@@ -566,6 +575,7 @@
       host.querySelectorAll('button[data-sortcnt-del]').forEach((b) => b.addEventListener('click', () => { const p = b.dataset.sortcntDel.split('|'); w.sortStains[+p[0]].counts.splice(+p[1], 1); Store.saveExperiment(rec); renderWorksheet(type); }));
       const bdAddSort = $('#bdAddSort'); if (bdAddSort) bdAddSort.addEventListener('click', () => { w.sortStains.push({}); Store.saveExperiment(rec); renderWorksheet(type); });
       const bdDelSort = $('#bdDelSort'); if (bdDelSort) bdDelSort.addEventListener('click', () => { if (w.sortStains.length > 1) { delete w.sectionDone['sort:' + (w.sortStains.length - 1)]; w.sortStains.pop(); Store.saveExperiment(rec); renderWorksheet(type); } });
+      attachGridArrows(host, '.bp-pool, .cite-u-hto, .cite-a-hto, .cite-u-cnt, .cite-a-cnt, .cite-lyo, .sort-hto, .sort-cnt');
     }
     const save = $('#wsSave'); if (save) save.addEventListener('click', () => saveWorksheet(rec, type));
     const reload = $('#wsReload'); if (reload) reload.addEventListener('click', () => reloadWorksheetFromDrive(rec, type));
@@ -919,7 +929,7 @@
     }));
     host.querySelectorAll('button[data-ts-edit]').forEach((b) => b.addEventListener('click', () => { const i = +b.dataset.tsEdit; TS_EDIT_OPEN[i] = !TS_EDIT_OPEN[i]; renderTapestation(); }));
     host.querySelectorAll('.tse-arm').forEach((el) => el.addEventListener('change', () => { const w = rec.tapestation[+el.dataset.run].wells[+el.dataset.w]; w.arm = el.value; const types = (TS_ARMS[w.arm] && TS_ARMS[w.arm].types) || []; if (types.indexOf(w.sampleType) < 0) w.sampleType = ''; w.name = tsLaneName(w); Store.saveExperiment(rec); renderTapestation(); }));
-    host.querySelectorAll('.tse-type').forEach((el) => el.addEventListener('change', () => { const w = rec.tapestation[+el.dataset.run].wells[+el.dataset.w]; w.sampleType = el.value; w.name = tsLaneName(w); Store.saveExperiment(rec); renderTapestation(); }));
+    host.querySelectorAll('.tse-type').forEach((el) => el.addEventListener('change', () => { const w = rec.tapestation[+el.dataset.run].wells[+el.dataset.w]; w.sampleType = el.value; w.name = tsLaneName(w); Store.saveExperiment(rec); syncLibraryRecordDrive(rec); renderTapestation(); }));
     host.querySelectorAll('.tse-no').forEach((el) => el.addEventListener('change', () => { const w = rec.tapestation[+el.dataset.run].wells[+el.dataset.w]; w.sampleNo = el.value; w.name = tsLaneName(w); Store.saveExperiment(rec); renderTapestation(); }));
     host.querySelectorAll('.tse-round').forEach((el) => el.addEventListener('change', () => { const w = rec.tapestation[+el.dataset.run].wells[+el.dataset.w]; w.round = el.value; Store.saveExperiment(rec); }));
     host.querySelectorAll('button[data-tse-del]').forEach((b) => b.addEventListener('click', () => { const p = b.dataset.tseDel.split('|'); const ri = +p[0], wi = +p[1]; if (confirm('Delete this trace from the record?')) { rec.tapestation[ri].wells.splice(wi, 1); Store.saveExperiment(rec); renderTapestation(); } }));
@@ -1031,6 +1041,7 @@
           wells: TS_PENDING.wells.map((w) => { let imgKey = ''; if (w.img) { imgKey = tsImgKey(rec.id, TS_PENDING.runName, w.well); tsSetImg(imgKey, w.img); }
             return { well: w.well, arm: w.arm || '', sampleType: w.sampleType || '', sampleNo: w.sampleNo || '', round: w.round || 1, name: tsLaneName(w), description: w.description, conc: w.conc, dilution: w.dilution, note: w.note, imgKey: imgKey, imgFileId: (TS_PENDING._imgFileByWell && TS_PENDING._imgFileByWell[w.well]) || '', peaks: w.peaks || [] }; }) });
         Store.saveExperiment(rec);
+        syncLibraryRecordDrive(rec);
         TS_PENDING = null; renderTapestation();
       })
       .catch((e) => { stEl.textContent = 'Save failed: ' + e; });
@@ -1509,7 +1520,7 @@
     const bd = ws.batchday || {};
     const htoRO = (title, arr, labelFn) => { if (!arr || !arr.length || !arr.some((x) => x && (x.hto || x.tube))) return ''; return '<h4 style="margin:12px 0 4px">' + esc(title) + '</h4><table class="cost-table"><thead><tr><th>Pool</th><th>TotalSeqC HTO#</th><th>Tube ID</th></tr></thead><tbody>' + arr.map((x, i) => '<tr><td>' + esc(labelFn(i)) + '</td><td>' + esc((x && x.hto) || '') + '</td><td>' + esc((x && x.tube) || '') + '</td></tr>').join('') + '</tbody></table>'; };
     let htoHtml = '';
-    if (bd.cite) { htoHtml += htoRO('CITE-seq unsort hashtags', bd.cite.htoU, (i) => 'Pool ' + (i + 1)); htoHtml += htoRO('CITE-seq ASAP hashtags', bd.cite.htoA, (i) => 'Pool ' + (i + 1)); }
+    if (bd.cite) { htoHtml += htoRO('CITE-seq unsort hashtags', bd.cite.htoU, (i) => 'Unsort ' + (i + 1)); htoHtml += htoRO('CITE-seq ASAP hashtags', bd.cite.htoA, (i) => 'ASAP ' + (i + 1)); }
     (bd.sortStains || []).forEach((st, si) => { htoHtml += htoRO('Sort staining ' + (si + 1) + ' hashtags', st.hto, (i) => (st.counts && st.counts[i] && st.counts[i].pool) || ('Sort pool ' + (i + 1))); });
     host.innerHTML = '<h2>Kit and supply usage <span class="who">' + esc(rec.name || '') + '</span></h2>'
       + '<h3>Recorded 10X kit lots &amp; rxns used</h3>'
@@ -4995,63 +5006,80 @@
 
   // Library Sequencing Record — one row per library type, counts = lanes,
   // matching the shared record's columns (rest left blank to fill in later).
-  function buildLibraryRecordWb() {
-    const calc = computePooling();
-    if (!calc || !calc.samples.length) return null;
-    const curRec = CURRENT_EXP_ID ? Store.getExperiment(CURRENT_EXP_ID) : null;
-    const exp = (curRec && curRec.name) ? curRec.name : 'Experiment';
-    const expId = (curRec && curRec.experimentId) ? curRec.experimentId : '';
-    const project = (curRec && curRec.project) ? curRec.project : '';
-    const arms = buildArmInstances(SEL);
-    const hasUnsort = arms.some((a) => a.population === 'unsorted' && a.chem === 'cite5');
-    const hasAsap = arms.some((a) => a.chem === 'asap');
-    const hasSort = arms.some((a) => a.population === 'sorted' || a.laneMode === 'perSortPop');
-    const vdjOn = (key) => !!(SEL[key] && SEL[key].vdj);
-    const lanes = laneOverridesFromCost(calc.samples.length, calc.poolRes.nPools, calc.samples) || { unsort: 0, asap: 0, sort: 0 };
-
-    const header = ['Project', 'Experiment', 'Experiment_ID', 'Library Type', '# of Libraries', 'Indexing Scheme', 'Storage Location', 'Requested Sequencing Depth', 'Service Provider', 'Sent Date', 'Sequencing Status', 'Flow Cell ID', 'Data Storage Location'];
-    const rows = [header];
-    const add = (libType, n) => { if (n > 0) rows.push([project, exp, expId, libType, n, '', '', '', '', '', '', '', '']); };
-    if (hasUnsort) { add("5' unsort GEX", lanes.unsort); add("5' unsort ADT", lanes.unsort); if (vdjOn('unsorted')) { add("5' unsort TCR", lanes.unsort); add("5' unsort BCR", lanes.unsort); } }
-    if (hasAsap) { add('ASAP ATAC', lanes.asap); add('ASAP ADT', lanes.asap); add('ASAP HTO', lanes.asap); }
-    if (hasSort) { add("5' sort GEX", lanes.sort); add("5' sort ADT", lanes.sort); if (vdjOn('sorted')) add("5' sort TCR", lanes.sort); }
-
-    const ws = XLSX.utils.aoa_to_sheet(rows);
-    ws['!cols'] = header.map((h) => ({ wch: Math.max(12, h.length + 2) }));
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, 'Summary');
-
-    // ---- Tab 2: every library in order of type, with all recorded info ----
-    let detail = []; try { detail = buildLibraryDetailRows(curRec); } catch (e) { detail = []; }
-    const dHeader = ['Library Type', 'Library ID (tube label)', 'Index ID', 'Prep Round', 'Amp. Cycles', 'Qubit Dilution', 'Qubit Conc (ng/\u00b5L)', 'TapeStation (ng/\u00b5L)', 'Notes'];
-    const dRows = [dHeader].concat(detail.map((d) => [typeLabel(d.type), d.libId, d.index, d.round, d.cycles, d.dil, d.conc, d.ts, d.notes]));
-    const ws2 = XLSX.utils.aoa_to_sheet(dRows);
-    ws2['!cols'] = dHeader.map((h) => ({ wch: Math.max(11, h.length + 1) }));
-    XLSX.utils.book_append_sheet(wb, ws2, 'Libraries');
-    return { wb: wb, name: 'library_record_' + (expId || exp).replace(/[^A-Za-z0-9._-]+/g, '_') };
-  }
-  // Every library (from the Qubit worksheet tables + expected IDs), ordered by library type,
-  // with all recorded data joined in: index ID, prep round, cycles, dilution, dilution-corrected
-  // qubit conc, dilution-corrected TapeStation conc, and notes.
-  function buildLibraryDetailRows(rec) {
+  // Enriched per-tube rows for the library record, pulling everything the tool has:
+  // qubit conc + index ID + notes (Library worksheet), dilution-corrected TapeStation conc
+  // and conc-weighted average bp (Tapestation), # cells loaded (Batch-day loading), and the
+  // derived modality / library type / index type.
+  function buildLibraryRecordRows(rec) {
     if (!rec) return [];
     const qt = (rec.worksheets && rec.worksheets.library && rec.worksheets.library.qubit) || {};
-    const tsByKey = {};
-    (rec.tapestation || []).forEach((run) => (run.wells || []).forEach((wl) => { const id = tsWellLibId(wl); if (!id) return; const n = parseFloat(wl.conc); if (isNaN(n)) return; const ng = Math.round((n * tsDilFactor(wl.dilution) / 1000) * 100) / 100; const k = normLibId(id) + '|' + (Number(wl.round) || 1); (tsByKey[k] = tsByKey[k] || []).push(ng); }));
+    let abbrev = rec.project || '';
+    try { const p = Store.allProjects().find((x) => x.name === rec.project); if (p && p.abbreviation) abbrev = p.abbreviation; } catch (e) { /* */ }
+    const expId = rec.experimentId || '';
+    const tsBy = {};
+    (rec.tapestation || []).forEach((run) => (run.wells || []).forEach((wl) => { const id = tsWellLibId(wl); if (!id) return; const k = normLibId(id) + '|' + (Number(wl.round) || 1); const n = parseFloat(wl.conc); const ng = isNaN(n) ? null : Math.round((n * tsDilFactor(wl.dilution) / 1000) * 100) / 100; const reg = tsRegion(wl.peaks, null, null); (tsBy[k] = tsBy[k] || { concs: [], bps: [] }); if (ng != null) tsBy[k].concs.push(ng); if (reg && reg.avgBp) tsBy[k].bps.push(reg.avgBp); }));
+    const loadCells = {};
+    const bd = (rec.worksheets && rec.worksheets.batchday && rec.worksheets.batchday.loading) || {};
+    ['unsort', 'sort', 'asap'].forEach((a) => (bd[a] || []).forEach((r) => { const tube = String(r[3] || '').toUpperCase(); if (tube && r[4]) loadCells[tube] = r[4]; }));
+    let reads = { GEX: '', ATAC: '' };
+    try { reads.GEX = (($('#opt_chem_cite5_readsGEX') || $('#opt_chem_scrna5_readsGEX') || {}).value) || ''; reads.ATAC = (($('#opt_chem_asap_readsATAC') || {}).value) || ''; } catch (e) { /* */ }
     const corr = (conc, dil) => { const n = parseFloat(conc); return isNaN(n) ? '' : Math.round(n * tsDilFactor(dil) * 100) / 100; };
+    const modOf = (arm) => arm === 'ASAP' ? 'ASAP' : (arm && String(arm).indexOf("5'") === 0 ? "5'" : (arm || 'Other'));
+    const idxTypeOf = (type) => { const t = String(type).toUpperCase(); if (/ADT|CSP/.test(t)) return 'Dual Index TN Set A'; if (/ATAC/.test(t)) return 'Single Index N Set A'; if (/GEX|TCR|BCR|HTO/.test(t)) return 'Dual Index TT Set A'; return ''; };
+    const laneOf = (libId) => { const m = String(libId).match(/^([USAC]\d+)/i); return m ? m[1].toUpperCase() : ''; };
     const rows = [];
     qubitReadKeys().forEach((t) => {
-      const tables = normalizeQubitTables(qt[t.key], t.key);
-      tables.forEach((tb) => (tb.rows || []).forEach((r) => {
+      normalizeQubitTables(qt[t.key], t.key).forEach((tb) => (tb.rows || []).forEach((r) => {
         if (!r[0]) return;
-        const parsed = parseLibId(r[0]); const type = (parsed && parsed.type) || t.title;
-        const tsKey = normLibId(r[0]) + '|' + (Number(tb.round) || 1);
-        rows.push({ type: type, libId: r[0], index: r[1] || '', round: tb.round, cycles: r[2] || '', dil: r[3] || '', conc: corr(r[4], r[3]), ts: tsByKey[tsKey] ? tsByKey[tsKey].join(', ') : '', notes: r[5] || '' });
+        const parsed = parseLibId(r[0]); const type = (parsed && parsed.type) || t.title; const arm = (parsed && parsed.arm) || '';
+        const cdna = isCdnaType(type); const key = normLibId(r[0]) + '|' + (Number(tb.round) || 1); const tsd = tsBy[key] || { concs: [], bps: [] };
+        rows.push({ libId: r[0], type: type, cdna: cdna, modality: modOf(arm), abbrev: abbrev, expId: expId,
+          index: r[1] || '', indexType: cdna ? '' : idxTypeOf(type), qubit: corr(r[4], r[3]),
+          ts: tsd.concs.length ? tsd.concs.join(', ') : '', avgBp: tsd.bps.length ? tsd.bps.join(', ') : '',
+          cells: loadCells[laneOf(r[0])] || '', reads: cdna ? '' : (reads[String(type).toUpperCase()] || ''), notes: r[5] || '' });
       }));
     });
-    const order = { 'P': 0, 'S': 0.05, 'cDNA': 0.06, 'TCR-c': 0.1, 'BCR-c': 0.2, 'GEX': 1, 'ADT/CSP': 2, 'ADT': 2, 'CSP': 2, 'TCR': 3, 'BCR': 4, 'ATAC': 5, 'HTO': 6 };
-    rows.sort((a, b) => { const oa = order[a.type] != null ? order[a.type] : 9, ob = order[b.type] != null ? order[b.type] : 9; if (oa !== ob) return oa - ob; if (a.libId !== b.libId) return a.libId < b.libId ? -1 : 1; return (Number(a.round) || 0) - (Number(b.round) || 0); });
     return rows;
+  }
+  function buildLibraryRecordWb() {
+    const rec = CURRENT_EXP_ID ? Store.getExperiment(CURRENT_EXP_ID) : null;
+    if (!rec) return null;
+    const rows = buildLibraryRecordRows(rec);
+    const expId = rec.experimentId || rec.name || 'experiment';
+    const LIB_HDR = ['Tube Inventoried', 'Sample Group', 'Project_Abbreviation', 'Experiment_ID', 'Tube_ID', 'Modality', 'Library_Type', 'Library Volume', '# Cells loaded in lane', 'Desired reads/cell', 'Index_Type', 'Index_ID', 'Index_Sequence_i7', 'Index_Sequence_i5', 'Concentration- Tapestation (ng/uL)', 'Concentration- Qubit (ng/uL)', 'Average bp size', 'RIN Value', 'Pooled into (Library Pool ID)', 'Freezer', 'Box', 'Notes'];
+    const CDNA_HDR = ['Tube Inventoried', 'Sample Group', 'Project_Abbreviation', 'Experiment_ID', 'Tube_ID', 'Modality', 'cDNA_Type', 'Library Volume', '# Cells loaded in lane', 'Concentration- Tapestation (ng/uL)', 'Concentration- Qubit (ng/uL)', 'Average bp size', 'RIN Value', 'Pooled into (Library Pool ID)', 'Freezer', 'Box', 'Notes'];
+    const libRow = (d) => ['', '', d.abbrev, d.expId, d.libId, d.modality, typeLabel(d.type), '', d.cells, d.reads, d.indexType, d.index, '', '', d.ts, d.qubit, d.avgBp, '', '', '', '', d.notes];
+    const cdnaRow = (d) => ['', '', d.abbrev, d.expId, d.libId, d.modality, typeLabel(d.type), '', d.cells, d.ts, d.qubit, d.avgBp, '', '', '', '', d.notes];
+    const tOrd = { 'P': 0, 'S': 0.1, 'TCR-c': 0.2, 'BCR-c': 0.3, 'cDNA': 0.4, 'GEX': 1, 'ADT': 2, 'ADT/CSP': 2, 'CSP': 2, 'TCR': 3, 'BCR': 4, 'ATAC': 5, 'HTO': 6 };
+    const bySort = (a, b) => { const oa = tOrd[a.type] != null ? tOrd[a.type] : 9, ob = tOrd[b.type] != null ? tOrd[b.type] : 9; if (oa !== ob) return oa - ob; return a.libId < b.libId ? -1 : (a.libId > b.libId ? 1 : 0); };
+    const libByMod = {}; const cdna = [];
+    rows.forEach((d) => { if (d.cdna) cdna.push(d); else { const m = d.modality || 'Other'; (libByMod[m] = libByMod[m] || []).push(d); } });
+    const wb = XLSX.utils.book_new();
+    const modOrder = ["5'", 'ASAP', 'FLEX', 'Bulk', 'Other'];
+    Object.keys(libByMod).sort((a, b) => ((modOrder.indexOf(a) + 1) || 99) - ((modOrder.indexOf(b) + 1) || 99)).forEach((m) => {
+      const ws = XLSX.utils.aoa_to_sheet([LIB_HDR].concat(libByMod[m].sort(bySort).map(libRow)));
+      ws['!cols'] = LIB_HDR.map((h) => ({ wch: Math.max(11, h.length + 1) }));
+      XLSX.utils.book_append_sheet(wb, ws, (m.replace(/[\\/?*\[\]:]/g, '') || 'Libraries').slice(0, 31));
+    });
+    if (cdna.length) { const ws = XLSX.utils.aoa_to_sheet([CDNA_HDR].concat(cdna.sort(bySort).map(cdnaRow))); ws['!cols'] = CDNA_HDR.map((h) => ({ wch: Math.max(11, h.length + 1) })); XLSX.utils.book_append_sheet(wb, ws, 'cDNA'); }
+    if (!wb.SheetNames.length) { const ws = XLSX.utils.aoa_to_sheet([LIB_HDR]); XLSX.utils.book_append_sheet(wb, ws, 'Libraries'); }
+    return { wb: wb, name: 'library_record_' + String(expId).replace(/[^A-Za-z0-9._-]+/g, '_') };
+  }
+  // Debounced auto-sync of the Library record Sheet in Drive (upserts by name, so it updates
+  // the existing file in place). Only runs once materials have been exported at least once.
+  let LIBREC_TIMER = null;
+  function syncLibraryRecordDrive(rec) {
+    clearTimeout(LIBREC_TIMER);
+    LIBREC_TIMER = setTimeout(function () {
+      try {
+        if (!rec || !rec.materialVersions || !rec.materialVersions.length) return;
+        const cur = rec.materialVersions.filter((v) => v.version === rec.currentVersion)[0] || rec.materialVersions[rec.materialVersions.length - 1];
+        if (!cur || !cur.folderId) return;
+        const built = buildLibraryRecordWb(); if (!built) return;
+        const name = (rec.experimentId || 'experiment') + '_v' + cur.version + ' Library record';
+        driveApi({ action: 'upload', name: name, folderId: cur.folderId, base64: wbBase64(built.wb), sourceMime: XLSX_MIME, targetMime: GSHEET_MIME }).catch(function () { });
+      } catch (e) { /* */ }
+    }, 4000);
   }
   function generateLibraryRecord() {
     const r = buildLibraryRecordWb();
