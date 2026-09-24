@@ -192,13 +192,13 @@
     { key: 'cdna5', title: "5' cDNA" },
     { key: 'tcrbcr', title: 'TCR/BCR cDNA' },
     { key: 'final5gex', title: "Final 5' GEX libraries" },
-    { key: 'final5adt', title: "Final 5' ADT/CSP libraries" },
+    { key: 'final5adt', title: "Final 5' ADT libraries" },
     { key: 'final5vdj', title: "Final 5' TCR/BCR libraries" },
     { key: 'finalasap', title: 'Final ASAP libraries (ATAC, ADT, HTO)' }
   ];
   // Intermediate TCR/BCR cDNA carries a "-c" suffix (e.g. U1-TCR-c). It's a cDNA product,
   // not a library. These helpers give it a friendly label and recognise it as cDNA.
-  function typeLabel(t) { const m = { 'TCR-c': 'TCR cDNA', 'BCR-c': 'BCR cDNA', 'P': 'cDNA (pellet)', 'S': 'cDNA (supernatant)' }; return m[t] || t; }
+  function typeLabel(t) { const m = { 'TCR-c': 'TCR cDNA', 'BCR-c': 'BCR cDNA', 'P': 'cDNA (pellet)', 'S': 'cDNA (supernatant)', 'ADT/CSP': 'ADT' }; return m[t] || t; }
   function isCdnaType(t) { const s = String(t || ''); return s === 'cDNA' || /-c$/i.test(s) || /^[PS]$/i.test(s); }
   // Categories to READ from (includes the pre-split "final5" so its data still shows
   // on Library status / records even before the worksheet has migrated it).
@@ -212,7 +212,7 @@
     if (qtKey === 'cdna5') add5(['P']);
     else if (qtKey === 'tcrbcr') add5(['TCR-c', 'BCR-c']);
     else if (qtKey === 'final5gex') add5(['GEX']);
-    else if (qtKey === 'final5adt') add5(['ADT/CSP']);
+    else if (qtKey === 'final5adt') add5(['ADT']);
     else if (qtKey === 'final5vdj') add5(['TCR', 'BCR']);
     else if (qtKey === 'finalasap') { ['ATAC', 'ADT', 'HTO'].forEach((t) => { for (let i = 1; i <= (lanes.asap || 0); i++) out.push('A' + i + '-' + t); }); }
     return out;
@@ -257,6 +257,8 @@
     QUBIT_TABLES.forEach((qt) => { w.qubit[qt.key] = normalizeQubitTables(w.qubit[qt.key], qt.key); });
     // migrate legacy 5' cDNA labels (U1-cDNA or bare U1) to the pellet convention U1-P
     (w.qubit.cdna5 || []).forEach((tb) => (tb.rows || []).forEach((r) => { if (!r[0]) return; const m = String(r[0]).match(/^([USAC]\d+)(?:-cDNA)?$/i); if (m) r[0] = m[1].toUpperCase() + '-P'; }));
+    // migrate legacy "-ADT/CSP" library labels to just "-ADT" everywhere
+    Object.keys(w.qubit).forEach((k) => (w.qubit[k] || []).forEach((tb) => (tb.rows || []).forEach((r) => { if (r[0] && /-ADT\/CSP\b/i.test(r[0])) r[0] = String(r[0]).replace(/-ADT\/CSP\b/i, '-ADT'); })));
     return w.qubit;
   }
   // Flatten one category's tables to Drive rows: [libId, indexId, cycles, dil, conc, notes, round].
@@ -290,6 +292,24 @@
     const rec = CURRENT_EXP_ID ? Store.getExperiment(CURRENT_EXP_ID) : null;
     if (!rec) { host.innerHTML = '<h2>' + esc(cfg.title) + '</h2><p class="empty">Select a project and experiment in the sidebar first.</p>'; return; }
     const w = getWorksheet(rec, type);
+    // ---- Batch-day 10X loading tables: one row per 10X lane, per modality ----
+    const LOAD_COLS = ['10X chip', 'Lane', 'Population loaded', 'Tube label', '# cells loaded', 'Notes'];
+    const LOAD_ARMS = [['unsort', "Unsort 5'", 'U', 'Unsorted'], ['sort', "Sort 5'", 'S', ''], ['asap', 'ASAP', 'A', 'Unsorted']];
+    let loadHtml = '';
+    if (type === 'batchday') {
+      let LANES = { unsort: 0, asap: 0, sort: 0 }; let SORTPOPS = [];
+      try { const c = computePooling(); LANES = laneOverridesFromCost(c.samples.length, (c.poolRes && c.poolRes.nPools) || 0, c.samples) || LANES; } catch (e) { /* */ }
+      try { SORTPOPS = (sortSelList() || []).filter(Boolean); } catch (e) { /* */ }
+      w.loading = w.loading || {};
+      LOAD_ARMS.forEach((a) => { const key = a[0], pfx = a[2], defPop = a[3] || (SORTPOPS[0] || ''); if (!w.loading[key]) { const n = LANES[key] || 0; const rows = []; for (let i = 1; i <= n; i++) rows.push([String(Math.ceil(i / 8)), String(((i - 1) % 8) + 1), defPop, pfx + i, '', '']); if (!rows.length) rows.push(['', '', defPop, '', '', '']); w.loading[key] = rows; } });
+      const popOpts = ['Unsorted'].concat(SORTPOPS).map((p) => '<option value="' + escAttr(p) + '"></option>').join('');
+      loadHtml = '<h3 style="margin-top:18px">10X loading \u2014 lanes &amp; cells</h3><p class="step-hint">One row per 10X lane. Chip / lane / tube label are pre-filled from the experimental layout \u2014 edit as loaded. Population is a dropdown (type your own for anything else). Paste from Excel is supported.</p><datalist id="loadPops">' + popOpts + '</datalist>';
+      LOAD_ARMS.forEach((a) => { const key = a[0], label = a[1]; const rows = w.loading[key] || [];
+        const head = LOAD_COLS.map((c) => '<th>' + esc(c) + '</th>').join('');
+        const body = rows.map((row, ri) => '<tr>' + LOAD_COLS.map((c, ci) => '<td><input class="ws-load" data-arm="' + key + '" data-r="' + ri + '" data-c="' + ci + '"' + (ci === 2 ? ' list="loadPops"' : '') + ' value="' + escAttr(row[ci] || '') + '" style="width:' + (ci === 2 || ci === 5 ? 150 : 78) + 'px"></td>').join('') + '<td><button class="btn tiny" data-load-del="' + key + '|' + ri + '">\u2715</button></td></tr>').join('');
+        loadHtml += '<h4 style="margin:12px 0 4px">' + esc(label) + '</h4><div style="overflow:auto"><table class="cost-table"><thead><tr>' + head + '<th></th></tr></thead><tbody>' + body + '</tbody></table></div><div class="row-actions" style="margin:4px 0"><button class="btn ghost" data-load-add="' + key + '">+ Add lane</button></div>';
+      });
+    }
     const kitRows = w.kits.map((k, i) => '<tr><td>' + esc(k.kit) + '</td><td class="who">' + esc(k.pn || '') + '</td>'
       + '<td><input class="ws-lot" data-i="' + i + '" value="' + escAttr(k.lot || '') + '" style="width:120px"></td>'
       + '<td><input class="ws-rxns" data-i="' + i + '" value="' + escAttr(k.rxns || '') + '" style="width:70px"></td>'
@@ -325,6 +345,7 @@
             return sec + '</div>';
           }).join('');
         })() : '')
+      + (type === 'batchday' ? loadHtml : '')
       + '<h3 style="margin-top:18px">Notes</h3><textarea id="wsNotes" style="width:100%;min-height:80px">' + esc(w.notes || '') + '</textarea>'
       + '<div class="row-actions" style="margin-top:12px"><button class="btn primary" id="wsSave">Save worksheet</button><span id="wsStatus" class="muted"></span></div>';
     // wiring
@@ -336,6 +357,15 @@
     host.querySelectorAll('.ws-cnt').forEach((el) => el.addEventListener('input', () => { w.counts[+el.dataset.r][+el.dataset.c] = el.value; }));
     const addRow = $('#wsAddRow'); if (addRow) addRow.addEventListener('click', () => { w.counts.push(cfg.countCols.map(() => '')); renderWorksheet(type); });
     host.querySelectorAll('button[data-ws-delrow]').forEach((b) => b.addEventListener('click', () => { w.counts.splice(+b.dataset.wsDelrow, 1); if (!w.counts.length) w.counts.push(cfg.countCols.map(() => '')); renderWorksheet(type); }));
+    // ----- clipboard paste (Excel-style) for the grids -----
+    const clipGrid = (e) => { const t = (e.clipboardData || window.clipboardData).getData('text'); if (!t) return null; const g = t.replace(/\r/g, '').replace(/\n+$/, '').split('\n').map((l) => l.split('\t')); return (g.length === 1 && g[0].length === 1) ? null : g; };
+    host.querySelectorAll('.ws-cnt').forEach((el) => el.addEventListener('paste', (e) => { const g = clipGrid(e); if (!g) return; e.preventDefault(); const r0 = +el.dataset.r, c0 = +el.dataset.c; g.forEach((line, ri) => { const r = r0 + ri; while (w.counts.length <= r) w.counts.push(cfg.countCols.map(() => '')); line.forEach((val, ci) => { const c = c0 + ci; if (c < cfg.countCols.length) w.counts[r][c] = val; }); }); renderWorksheet(type); }));
+    // ----- 10X loading tables (batch day) -----
+    let loadSaveTimer = null; const loadSaveSoon = () => { clearTimeout(loadSaveTimer); loadSaveTimer = setTimeout(() => Store.saveExperiment(rec), 700); };
+    host.querySelectorAll('.ws-load').forEach((el) => el.addEventListener('input', () => { const a = el.dataset.arm; if (w.loading && w.loading[a] && w.loading[a][+el.dataset.r]) { w.loading[a][+el.dataset.r][+el.dataset.c] = el.value; loadSaveSoon(); } }));
+    host.querySelectorAll('button[data-load-add]').forEach((b) => b.addEventListener('click', () => { const a = b.dataset.loadAdd; w.loading[a] = w.loading[a] || []; w.loading[a].push(['', '', '', '', '', '']); Store.saveExperiment(rec); renderWorksheet(type); }));
+    host.querySelectorAll('button[data-load-del]').forEach((b) => b.addEventListener('click', () => { const p = b.dataset.loadDel.split('|'); w.loading[p[0]].splice(+p[1], 1); if (!w.loading[p[0]].length) w.loading[p[0]].push(['', '', '', '', '', '']); Store.saveExperiment(rec); renderWorksheet(type); }));
+    host.querySelectorAll('.ws-load').forEach((el) => el.addEventListener('paste', (e) => { const g = clipGrid(e); if (!g) return; e.preventDefault(); const a = el.dataset.arm, r0 = +el.dataset.r, c0 = +el.dataset.c; w.loading[a] = w.loading[a] || []; g.forEach((line, ri) => { const r = r0 + ri; while (w.loading[a].length <= r) w.loading[a].push(['', '', '', '', '', '']); line.forEach((val, ci) => { const c = c0 + ci; if (c < LOAD_COLS.length) w.loading[a][r][c] = val; }); }); Store.saveExperiment(rec); renderWorksheet(type); }));
     const qbTbl = (k, ti) => (w.qubit[k] && w.qubit[k][ti]) || null;
     // Push every on-screen input value back into the data model before any re-render,
     // so an in-progress edit (in any column) is never lost or reverted.
@@ -344,6 +374,7 @@
     // the numbers survive a page reload and are retrieved from Drive next time, instead of reseeding.
     let qbSaveTimer = null; const qbSaveSoon = () => { clearTimeout(qbSaveTimer); qbSaveTimer = setTimeout(() => { commitQubitInputs(); Store.saveExperiment(rec); }, 700); };
     host.querySelectorAll('.ws-qb').forEach((el) => el.addEventListener('input', () => { const t = qbTbl(el.dataset.qt, +el.dataset.ti); if (t && t.rows[+el.dataset.r]) t.rows[+el.dataset.r][+el.dataset.c] = el.value; qbSaveSoon(); }));
+    host.querySelectorAll('.ws-qb').forEach((el) => el.addEventListener('paste', (e) => { const t = (e.clipboardData || window.clipboardData).getData('text'); if (!t) return; const g = t.replace(/\r/g, '').replace(/\n+$/, '').split('\n').map((l) => l.split('\t')); if (g.length === 1 && g[0].length === 1) return; e.preventDefault(); commitQubitInputs(); const qtk = el.dataset.qt, ti = +el.dataset.ti, tbl = qbTbl(qtk, ti); if (!tbl) return; const cols = qubitColsFor(qtk); const startDisp = cols.indexOf(+el.dataset.c); const r0 = +el.dataset.r; g.forEach((line, ri) => { const r = r0 + ri; while (tbl.rows.length <= r) tbl.rows.push(qbBlank()); line.forEach((val, ci) => { const disp = startDisp + ci; if (disp >= 0 && disp < cols.length) tbl.rows[r][cols[disp]] = val; }); }); Store.saveExperiment(rec); renderWorksheet(type); }));
     host.querySelectorAll('.qb-round').forEach((el) => el.addEventListener('change', () => { commitQubitInputs(); const t = qbTbl(el.dataset.qt, +el.dataset.ti); if (t) { t.round = Number(el.value) || 1; Store.saveExperiment(rec); } }));
     host.querySelectorAll('.qb-sec-head').forEach((el) => el.addEventListener('click', () => { commitQubitInputs(); Store.saveExperiment(rec); const k = el.dataset.qbSec; WS_QB_COLLAPSED[k] = !WS_QB_COLLAPSED[k]; renderWorksheet(type); }));
     host.querySelectorAll('button[data-qb-addrow]').forEach((b) => b.addEventListener('click', () => { commitQubitInputs(); const p = b.dataset.qbAddrow.split('|'); const t = qbTbl(p[0], +p[1]); if (t) { t.rows.push(qbBlank()); Store.saveExperiment(rec); renderWorksheet(type); } }));
@@ -392,6 +423,7 @@
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([['Experiment ID', w.expId || ''], ['Operator', w.operator || ''], ['Date', w.date || ''], ['Notes', w.notes || '']]), 'Info');
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([['10X kit', 'PN', 'Lot #', 'Rxns used', 'Notes']].concat(w.kits.map((k) => [k.kit, k.pn, k.lot, k.rxns, k.notes]))), 'Kit lots');
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([cfg.countCols].concat(w.counts)), 'Cell counts');
+    if (type === 'batchday' && w.loading) { [['unsort', "Unsort 5'"], ['sort', "Sort 5'"], ['asap', 'ASAP']].forEach((a) => { const rows = (w.loading[a[0]] || []).filter((r) => r.some((c) => String(c || '') !== '')); if (rows.length) XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([['10X chip', 'Lane', 'Population loaded', 'Tube label', '# cells loaded', 'Notes']].concat(rows)), ('Loading ' + a[1]).slice(0, 31)); }); }
     if (type === 'library') { ensureQubitShape(w); QUBIT_TABLES.forEach((qt) => { const flat = qubitFlatten(w.qubit[qt.key]); if (flat.length) { XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([['Library ID', 'Index ID', 'Amp. cycles', 'Qubit dilution', 'Qubit conc (ng/µL)', 'Notes', 'Prep round']].concat(flat)), ('Qubit ' + qt.title).slice(0, 31)); } }); }
     const b64 = XLSX.write(wb, { type: 'base64', bookType: 'xlsx' });
     const expId2 = rec.experimentId || projectLabel(rec.name || 'experiment');
@@ -430,7 +462,9 @@
         });
         ws.qubit = rebuilt;
       }
-      rec.worksheets[type] = ws; ensureQubitShape(rec.worksheets[type]); Store.saveExperiment(rec);
+      rec.worksheets[type] = ws; ensureQubitShape(rec.worksheets[type]);
+      if (type === 'batchday' && !ws.loading && prev.loading) ws.loading = prev.loading;
+      Store.saveExperiment(rec);
       if (stEl) stEl.textContent = ' Loaded from Drive.'; renderWorksheet(type);
     }).catch((e) => { if (stEl) stEl.textContent = ' Reload failed: ' + e; });
   }
@@ -439,8 +473,8 @@
   // edit lane names / dilutions / notes, store to Drive + on the record. =====
   const TS_ARMS = {
     'ASAP': { prefix: 'A', types: ['ATAC', 'ADT', 'HTO'] },
-    "5' unsort": { prefix: 'U', types: ['GEX', 'TCR', 'BCR', 'ADT/CSP', 'HTO', 'P', 'S', 'TCR-c', 'BCR-c'] },
-    "5' sort": { prefix: 'S', types: ['GEX', 'TCR', 'BCR', 'ADT/CSP', 'P', 'S', 'TCR-c', 'BCR-c'] },
+    "5' unsort": { prefix: 'U', types: ['GEX', 'TCR', 'BCR', 'ADT', 'HTO', 'P', 'S', 'TCR-c', 'BCR-c'] },
+    "5' sort": { prefix: 'S', types: ['GEX', 'TCR', 'BCR', 'ADT', 'P', 'S', 'TCR-c', 'BCR-c'] },
     'cDNA': { prefix: 'C', types: ['cDNA'] },
     'Other': { prefix: '', types: ['GEX', 'ATAC', 'HTO', 'ADT', 'TCR', 'BCR', 'cDNA'] }
   };
@@ -486,7 +520,7 @@
     let type = '';
     if (/ATAC/.test(d)) type = 'ATAC';
     else if (/HTO/.test(d)) type = 'HTO';
-    else if (/ADT|CSP/.test(d)) type = (arm === 'ASAP' ? 'ADT' : 'ADT/CSP');
+    else if (/ADT|CSP/.test(d)) type = 'ADT';
     else if (/GEX/.test(d)) type = 'GEX';
     else if (/\bTCR\b/.test(d)) type = 'TCR';
     else if (/\bBCR\b/.test(d)) type = 'BCR';
@@ -1391,9 +1425,9 @@
   // pulling in Qubit + TapeStation conc/traces, with editable status/cycles and a
   // repeatable "attempts" log for libraries prepped more than once. =====
   const LIB_ARM_TYPES = {
-    "5' unsort": ['GEX', 'ADT/CSP', 'TCR', 'BCR'],
+    "5' unsort": ['GEX', 'ADT', 'TCR', 'BCR'],
     'ASAP': ['ATAC', 'ADT', 'HTO'],
-    "5' sort": ['GEX', 'ADT/CSP', 'TCR', 'BCR']
+    "5' sort": ['GEX', 'ADT', 'TCR', 'BCR']
   };
   const LIB_STATUSES = ['In progress', 'Good', 'Needs re-prep'];
   function libStatusRows(rec) {
@@ -1523,10 +1557,10 @@
     });
     // Qubit conc (ng/µL) corrected for its recorded dilution
     const corrOne = (conc, dil) => { const n = parseFloat(conc); if (isNaN(n)) return ''; return Math.round(n * tsDilFactor(dil) * 100) / 100; };
-    const qubitCorrForRound = (lib, round) => qAll.filter((q) => normLib(q.base) === normLib(lib.id) && q.round === round).map((q) => corrOne(q.conc, q.dil)).filter((x) => x !== '');
+    const qubitCorrForRound = (lib, round) => qAll.filter((q) => normLib(q.base) === normLib(lib.id) && Number(q.round) === Number(round)).map((q) => corrOne(q.conc, q.dil)).filter((x) => x !== '');
     // Amplification cycles for a library at a round (from the worksheet tables)
-    const cyclesForRound = (lib, round) => Array.from(new Set(qAll.filter((q) => normLib(q.base) === normLib(lib.id) && q.round === round && String(q.cycles).trim() !== '').map((q) => q.cycles)));
-    const roundsForLib = (lib) => { const rs = new Set([1]); const nid = normLib(lib.id); qAll.forEach((q) => { if (normLib(q.base) === nid) rs.add(q.round); }); Object.keys(tsIdx).forEach((k) => { const p = k.split('|'); if (p[0] === nid) rs.add(Number(p[1])); }); const st = rec.libStatus[lib.id] || {}; Object.keys(st.rounds || {}).forEach((r) => rs.add(Number(r))); return Array.from(rs).sort((a, b) => a - b); };
+    const cyclesForRound = (lib, round) => Array.from(new Set(qAll.filter((q) => normLib(q.base) === normLib(lib.id) && Number(q.round) === Number(round) && String(q.cycles).trim() !== '').map((q) => q.cycles)));
+    const roundsForLib = (lib) => { const rs = new Set([1]); const nid = normLib(lib.id); qAll.forEach((q) => { if (normLib(q.base) === nid) rs.add(Number(q.round) || 1); }); Object.keys(tsIdx).forEach((k) => { const p = k.split('|'); if (p[0] === nid) rs.add(Number(p[1])); }); const st = rec.libStatus[lib.id] || {}; Object.keys(st.rounds || {}).forEach((r) => rs.add(Number(r))); return Array.from(rs).sort((a, b) => a - b); };
     // 5' input cDNA qubit for a lane (from the 5' cDNA table), corrected for its dilution
     const cdnaCorrFor = (pfx, laneNo) => { const cands = [pfx + laneNo + '-P', pfx + laneNo + '-cDNA', pfx + laneNo]; for (let ci = 0; ci < cands.length; ci++) { const want = normLib(cands[ci]); const hits = qAll.filter((q) => q.stage === "5' cDNA" && normLib(q.base) === want); const hit = hits.filter((q) => String(q.conc).trim() !== '')[0] || hits[0]; if (hit) return corrOne(hit.conc, hit.dil); } return ''; };
 
@@ -4738,13 +4772,13 @@
     grp('cDNA strip', "Unsort 5'", 'supernatant \u2192 CSP (ADT)', rangeN(lanes.unsort).map((i) => baseName('U', i, 8, lanes.unsort) + '-S'));
     if (vdjOn('unsorted')) { grp('cDNA strip', "Unsort 5'", 'TCR cDNA (intermediate)', rangeN(lanes.unsort).map((i) => baseName('U', i, 8, lanes.unsort) + '-TCR-c')); grp('cDNA strip', "Unsort 5'", 'BCR cDNA (intermediate)', rangeN(lanes.unsort).map((i) => baseName('U', i, 8, lanes.unsort) + '-BCR-c')); }
     grp('Library', "Unsort 5'", 'GEX library', rangeN(lanes.unsort).map((i) => baseName('U', i, 8, lanes.unsort) + '-GEX'));
-    grp('Library', "Unsort 5'", 'CSP/ADT library', rangeN(lanes.unsort).map((i) => baseName('U', i, 8, lanes.unsort) + '-ADT'));
+    grp('Library', "Unsort 5'", 'ADT library', rangeN(lanes.unsort).map((i) => baseName('U', i, 8, lanes.unsort) + '-ADT'));
     if (vdjOn('unsorted')) { grp('Library', "Unsort 5'", 'TCR library', rangeN(lanes.unsort).map((i) => baseName('U', i, 8, lanes.unsort) + '-TCR')); grp('Library', "Unsort 5'", 'BCR library', rangeN(lanes.unsort).map((i) => baseName('U', i, 8, lanes.unsort) + '-BCR')); }
     // ASAP
     grp('GEM-RT strip', 'ASAP', 'GEM RT output', rangeN(lanes.asap).map((i) => baseName('A', i, 8, lanes.asap) + '-GEM'));
     grp('cDNA strip', 'ASAP', 'ASAP transposed', rangeN(lanes.asap).map((i) => baseName('A', i, 8, lanes.asap)));
     grp('Library', 'ASAP', 'ATAC library', rangeN(lanes.asap).map((i) => baseName('A', i, 8, lanes.asap) + '-ATAC'));
-    grp('Library', 'ASAP', 'CSP/ADT library', rangeN(lanes.asap).map((i) => baseName('A', i, 8, lanes.asap) + '-ADT'));
+    grp('Library', 'ASAP', 'ADT library', rangeN(lanes.asap).map((i) => baseName('A', i, 8, lanes.asap) + '-ADT'));
     grp('Library', 'ASAP', 'HTO library', rangeN(lanes.asap).map((i) => baseName('A', i, 8, lanes.asap) + '-HTO'));
     // sort 5'
     grp('GEM-RT strip', "Sort 5'", 'GEM RT output', rangeN(lanes.sort).map((i) => baseName('S', i, 8, lanes.sort) + '-GEM'));
@@ -4752,7 +4786,7 @@
     grp('cDNA strip', "Sort 5'", 'supernatant \u2192 CSP (ADT)', rangeN(lanes.sort).map((i) => baseName('S', i, 8, lanes.sort) + '-S'));
     if (vdjOn('sorted')) grp('cDNA strip', "Sort 5'", 'TCR cDNA (intermediate)', rangeN(lanes.sort).map((i) => baseName('S', i, 8, lanes.sort) + '-TCR-c'));
     grp('Library', "Sort 5'", 'GEX library', rangeN(lanes.sort).map((i) => baseName('S', i, 8, lanes.sort) + '-GEX'));
-    grp('Library', "Sort 5'", 'CSP/ADT library', rangeN(lanes.sort).map((i) => baseName('S', i, 8, lanes.sort) + '-ADT'));
+    grp('Library', "Sort 5'", 'ADT library', rangeN(lanes.sort).map((i) => baseName('S', i, 8, lanes.sort) + '-ADT'));
     if (vdjOn('sorted')) grp('Library', "Sort 5'", 'TCR library', rangeN(lanes.sort).map((i) => baseName('S', i, 8, lanes.sort) + '-TCR'));
     // Flatten into strips of 8, padding each group with "blank tube" spacers.
     // Split by tube type into separate tabs (printed on different-coloured paper):
@@ -4812,9 +4846,9 @@
     const header = ['Project', 'Experiment', 'Experiment_ID', 'Library Type', '# of Libraries', 'Indexing Scheme', 'Storage Location', 'Requested Sequencing Depth', 'Service Provider', 'Sent Date', 'Sequencing Status', 'Flow Cell ID', 'Data Storage Location'];
     const rows = [header];
     const add = (libType, n) => { if (n > 0) rows.push([project, exp, expId, libType, n, '', '', '', '', '', '', '', '']); };
-    if (hasUnsort) { add("5' unsort GEX", lanes.unsort); add("5' unsort CSP (ADT)", lanes.unsort); if (vdjOn('unsorted')) { add("5' unsort TCR", lanes.unsort); add("5' unsort BCR", lanes.unsort); } }
-    if (hasAsap) { add('ASAP ATAC', lanes.asap); add('ASAP CSP (ADT)', lanes.asap); add('ASAP HTO', lanes.asap); }
-    if (hasSort) { add("5' sort GEX", lanes.sort); add("5' sort CSP (ADT)", lanes.sort); if (vdjOn('sorted')) add("5' sort TCR", lanes.sort); }
+    if (hasUnsort) { add("5' unsort GEX", lanes.unsort); add("5' unsort ADT", lanes.unsort); if (vdjOn('unsorted')) { add("5' unsort TCR", lanes.unsort); add("5' unsort BCR", lanes.unsort); } }
+    if (hasAsap) { add('ASAP ATAC', lanes.asap); add('ASAP ADT', lanes.asap); add('ASAP HTO', lanes.asap); }
+    if (hasSort) { add("5' sort GEX", lanes.sort); add("5' sort ADT", lanes.sort); if (vdjOn('sorted')) add("5' sort TCR", lanes.sort); }
 
     const ws = XLSX.utils.aoa_to_sheet(rows);
     ws['!cols'] = header.map((h) => ({ wch: Math.max(12, h.length + 2) }));
@@ -4875,9 +4909,9 @@
     const lanes = laneOverridesFromCost(calc.samples.length, calc.poolRes.nPools, calc.samples) || { unsort: 0, asap: 0, sort: 0 };
     const rows = [];
     const add = (libType, n) => { if (n > 0) rows.push([project, exp, expId, libType, n, '', '', '', '', '', '', '', '']); };
-    if (hasUnsort) { add("5' unsort GEX", lanes.unsort); add("5' unsort CSP (ADT)", lanes.unsort); if (vdjOn('unsorted')) { add("5' unsort TCR", lanes.unsort); add("5' unsort BCR", lanes.unsort); } }
-    if (hasAsap) { add('ASAP ATAC', lanes.asap); add('ASAP CSP (ADT)', lanes.asap); add('ASAP HTO', lanes.asap); }
-    if (hasSort) { add("5' sort GEX", lanes.sort); add("5' sort CSP (ADT)", lanes.sort); if (vdjOn('sorted')) add("5' sort TCR", lanes.sort); }
+    if (hasUnsort) { add("5' unsort GEX", lanes.unsort); add("5' unsort ADT", lanes.unsort); if (vdjOn('unsorted')) { add("5' unsort TCR", lanes.unsort); add("5' unsort BCR", lanes.unsort); } }
+    if (hasAsap) { add('ASAP ATAC', lanes.asap); add('ASAP ADT', lanes.asap); add('ASAP HTO', lanes.asap); }
+    if (hasSort) { add("5' sort GEX", lanes.sort); add("5' sort ADT", lanes.sort); if (vdjOn('sorted')) add("5' sort TCR", lanes.sort); }
     return { rows: rows, experimentId: expId, exp: exp };
   }
 
@@ -4908,19 +4942,19 @@
     const tabs = { '5 GEX': [], '5 ADT': [], 'ASAP ATAC': [], 'ASAP ADT': [], 'ASAP HTO': [], 'V(D)J': [], 'cDNA': [] };
     if (hasUnsort) {
       for (let i = 0; i < lanes.unsort; i++) tabs['5 GEX'].push(libRow(bn('U', i, 8, lanes.unsort) + '-GEX', 'Unsort', 'GEX', 'gex'));
-      for (let i = 0; i < lanes.unsort; i++) tabs['5 ADT'].push(libRow(bn('U', i, 8, lanes.unsort) + '-ADT', 'Unsort', 'CSP/ADT', 'csp'));
+      for (let i = 0; i < lanes.unsort; i++) tabs['5 ADT'].push(libRow(bn('U', i, 8, lanes.unsort) + '-ADT', 'Unsort', 'ADT', 'csp'));
       if (vdjOn('unsorted')) for (let i = 0; i < lanes.unsort; i++) { tabs['V(D)J'].push(libRow(bn('U', i, 8, lanes.unsort) + '-TCR', 'Unsort', 'TCR', 'vdj')); tabs['V(D)J'].push(libRow(bn('U', i, 8, lanes.unsort) + '-BCR', 'Unsort', 'BCR', 'vdj')); }
       for (let i = 0; i < lanes.unsort; i++) { const b = bn('U', i, 8, lanes.unsort); tabs['cDNA'].push(cdnaRow(b + '-P', 'Unsort', 'pellet \u2192 GEX' + (vdjOn('unsorted') ? '/VDJ' : ''))); tabs['cDNA'].push(cdnaRow(b + '-S', 'Unsort', 'supernatant \u2192 CSP')); if (vdjOn('unsorted')) { tabs['cDNA'].push(cdnaRow(b + '-TCR-c', 'Unsort', 'TCR cDNA (intermediate)')); tabs['cDNA'].push(cdnaRow(b + '-BCR-c', 'Unsort', 'BCR cDNA (intermediate)')); } }
     }
     if (hasAsap) {
       for (let i = 0; i < lanes.asap; i++) tabs['ASAP ATAC'].push(libRow(bn('A', i, 8, lanes.asap) + '-ATAC', 'ASAP', 'ATAC', 'atac'));
-      for (let i = 0; i < lanes.asap; i++) tabs['ASAP ADT'].push(libRow(bn('A', i, 8, lanes.asap) + '-ADT', 'ASAP', 'CSP/ADT', 'asapAdt'));
+      for (let i = 0; i < lanes.asap; i++) tabs['ASAP ADT'].push(libRow(bn('A', i, 8, lanes.asap) + '-ADT', 'ASAP', 'ADT', 'asapAdt'));
       for (let i = 0; i < lanes.asap; i++) tabs['ASAP HTO'].push(libRow(bn('A', i, 8, lanes.asap) + '-HTO', 'ASAP', 'HTO', 'asapHto'));
       for (let i = 0; i < lanes.asap; i++) tabs['cDNA'].push(cdnaRow(bn('A', i, 8, lanes.asap), 'ASAP', 'ASAP transposed'));
     }
     if (hasSort) {
       for (let i = 0; i < lanes.sort; i++) tabs['5 GEX'].push(libRow(bn('S', i, 8, lanes.sort) + '-GEX', 'Sort', 'GEX', 'gex'));
-      for (let i = 0; i < lanes.sort; i++) tabs['5 ADT'].push(libRow(bn('S', i, 8, lanes.sort) + '-ADT', 'Sort', 'CSP/ADT', 'csp'));
+      for (let i = 0; i < lanes.sort; i++) tabs['5 ADT'].push(libRow(bn('S', i, 8, lanes.sort) + '-ADT', 'Sort', 'ADT', 'csp'));
       if (vdjOn('sorted')) for (let i = 0; i < lanes.sort; i++) tabs['V(D)J'].push(libRow(bn('S', i, 8, lanes.sort) + '-TCR', 'Sort', 'TCR', 'vdj'));
       for (let i = 0; i < lanes.sort; i++) { const b = bn('S', i, 8, lanes.sort); tabs['cDNA'].push(cdnaRow(b + '-P', 'Sort', 'pellet \u2192 GEX' + (vdjOn('sorted') ? '/VDJ' : ''))); tabs['cDNA'].push(cdnaRow(b + '-S', 'Sort', 'supernatant \u2192 CSP')); if (vdjOn('sorted')) tabs['cDNA'].push(cdnaRow(b + '-TCR-c', 'Sort', 'TCR cDNA (intermediate)')); }
     }
@@ -5195,9 +5229,9 @@
     const libRows = [['Experiment_ID', 'Experiment', 'Type', 'Modality', 'Count (lanes)']];
     exps.forEach((e) => { const s = e.snapshot; const L = projLanes(s); const v = projArmVdj(s);
       const add = (type, mod, n) => { if (n > 0) libRows.push([e.experimentId || '', e.name, type, mod, n]); };
-      if (L.unsort) { add("5' GEX library", 'Unsort', L.unsort); add('CSP/ADT library', 'Unsort', L.unsort); if (v.unsort) { add('TCR library', 'Unsort', L.unsort); add('BCR library', 'Unsort', L.unsort); } add('cDNA \u2013 pellet', 'Unsort', L.unsort); add('cDNA \u2013 supernatant', 'Unsort', L.unsort); }
+      if (L.unsort) { add("5' GEX library", 'Unsort', L.unsort); add('ADT library', 'Unsort', L.unsort); if (v.unsort) { add('TCR library', 'Unsort', L.unsort); add('BCR library', 'Unsort', L.unsort); } add('cDNA \u2013 pellet', 'Unsort', L.unsort); add('cDNA \u2013 supernatant', 'Unsort', L.unsort); }
       if (L.asap) { add('ATAC library', 'ASAP', L.asap); add('ADT library', 'ASAP', L.asap); add('HTO library', 'ASAP', L.asap); add('cDNA \u2013 transposed', 'ASAP', L.asap); }
-      if (L.sort) { add("5' GEX library", 'Sort', L.sort); add('CSP/ADT library', 'Sort', L.sort); if (v.sort) add('TCR library', 'Sort', L.sort); add('cDNA \u2013 pellet', 'Sort', L.sort); add('cDNA \u2013 supernatant', 'Sort', L.sort); }
+      if (L.sort) { add("5' GEX library", 'Sort', L.sort); add('ADT library', 'Sort', L.sort); if (v.sort) add('TCR library', 'Sort', L.sort); add('cDNA \u2013 pellet', 'Sort', L.sort); add('cDNA \u2013 supernatant', 'Sort', L.sort); }
     });
     addSheet('Libraries & cDNA', libRows, [{ wch: 14 }, { wch: 24 }, { wch: 22 }, { wch: 10 }, { wch: 13 }]);
 
@@ -5223,7 +5257,7 @@
       roll.asap.lanes += L.asap; roll.asap.ATAC += L.asap; roll.asap.ADT += L.asap; roll.asap.HTO += L.asap; roll.asap.cDNA += L.asap;
       roll.sort.lanes += L.sort; roll.sort.GEX += L.sort; roll.sort.ADT += L.sort; if (v.sort) roll.sort.TCR += L.sort; roll.sort.cDNA += L.sort * 2;
     });
-    const rollRows = [['Modality', 'Total lanes', 'GEX libs', 'CSP/ADT libs', 'ATAC libs', 'HTO libs', 'TCR libs', 'BCR libs', 'cDNA tubes'],
+    const rollRows = [['Modality', 'Total lanes', 'GEX libs', 'ADT libs', 'ATAC libs', 'HTO libs', 'TCR libs', 'BCR libs', 'cDNA tubes'],
       ["Unsort 5'", roll.unsort.lanes, roll.unsort.GEX, roll.unsort.ADT, '', '', roll.unsort.TCR, roll.unsort.BCR, roll.unsort.cDNA],
       ['ASAP', roll.asap.lanes, '', roll.asap.ADT, roll.asap.ATAC, roll.asap.HTO, '', '', roll.asap.cDNA],
       ["Sort 5'", roll.sort.lanes, roll.sort.GEX, roll.sort.ADT, '', '', roll.sort.TCR, '', roll.sort.cDNA]];
@@ -5686,15 +5720,15 @@
     const idxRow = (label, modality, libType, key) => li2.push([label, modality, libType, IDX[key].type, IDX[key].cat, idxId(key), '', '']);
     // 5' unsort
     for (let i = 0; i < lanes.unsort; i++) idxRow(bn('U', i, 8, lanes.unsort) + '-GEX', "Unsort 5'", 'GEX', 'gex');
-    for (let i = 0; i < lanes.unsort; i++) idxRow(bn('U', i, 8, lanes.unsort) + '-ADT', "Unsort 5'", 'CSP/ADT', 'csp');
+    for (let i = 0; i < lanes.unsort; i++) idxRow(bn('U', i, 8, lanes.unsort) + '-ADT', "Unsort 5'", 'ADT', 'csp');
     if (armVdj.unsort) for (let i = 0; i < lanes.unsort; i++) { const b = bn('U', i, 8, lanes.unsort); idxRow(b + '-TCR', "Unsort 5'", 'TCR', 'vdj'); idxRow(b + '-BCR', "Unsort 5'", 'BCR', 'vdj'); }
     // ASAP
     for (let i = 0; i < lanes.asap; i++) idxRow(bn('A', i, 8, lanes.asap) + '-ATAC', 'ASAP', 'ATAC', 'atac');
-    for (let i = 0; i < lanes.asap; i++) idxRow(bn('A', i, 8, lanes.asap) + '-ADT', 'ASAP', 'CSP/ADT', 'asapAdt');
+    for (let i = 0; i < lanes.asap; i++) idxRow(bn('A', i, 8, lanes.asap) + '-ADT', 'ASAP', 'ADT', 'asapAdt');
     for (let i = 0; i < lanes.asap; i++) idxRow(bn('A', i, 8, lanes.asap) + '-HTO', 'ASAP', 'HTO', 'asapHto');
     // sort 5'
     for (let i = 0; i < lanes.sort; i++) idxRow(bn('S', i, 8, lanes.sort) + '-GEX', "Sort 5'", 'GEX', 'gex');
-    for (let i = 0; i < lanes.sort; i++) idxRow(bn('S', i, 8, lanes.sort) + '-ADT', "Sort 5'", 'CSP/ADT', 'csp');
+    for (let i = 0; i < lanes.sort; i++) idxRow(bn('S', i, 8, lanes.sort) + '-ADT', "Sort 5'", 'ADT', 'csp');
     if (armVdj.sort) for (let i = 0; i < lanes.sort; i++) idxRow(bn('S', i, 8, lanes.sort) + '-TCR', "Sort 5'", 'TCR', 'vdj');
     // Kits-to-use summary + rxns-used space
     li2.push([]); li2.push(['KITS TO USE \u2014 record how many indexes/rxns you actually used, then update the planning website after the experiment.']);
