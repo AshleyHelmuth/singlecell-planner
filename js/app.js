@@ -198,8 +198,8 @@
   ];
   // Intermediate TCR/BCR cDNA carries a "-c" suffix (e.g. U1-TCR-c). It's a cDNA product,
   // not a library. These helpers give it a friendly label and recognise it as cDNA.
-  function typeLabel(t) { const m = { 'TCR-c': 'TCR cDNA', 'BCR-c': 'BCR cDNA' }; return m[t] || t; }
-  function isCdnaType(t) { return t === 'cDNA' || /-c$/i.test(String(t || '')); }
+  function typeLabel(t) { const m = { 'TCR-c': 'TCR cDNA', 'BCR-c': 'BCR cDNA', 'P': 'cDNA (pellet)', 'S': 'cDNA (supernatant)' }; return m[t] || t; }
+  function isCdnaType(t) { const s = String(t || ''); return s === 'cDNA' || /-c$/i.test(s) || /^[PS]$/i.test(s); }
   // Categories to READ from (includes the pre-split "final5" so its data still shows
   // on Library status / records even before the worksheet has migrated it).
   function qubitReadKeys() { return QUBIT_TABLES.concat([{ key: 'final5', title: "Final 5' libraries" }]); }
@@ -209,7 +209,7 @@
     try { const c = computePooling(); lanes = laneOverridesFromCost(c.samples.length, (c.poolRes && c.poolRes.nPools) || 0, c.samples) || lanes; } catch (e) { /* */ }
     const out = [];
     const add5 = (types) => { [['U', lanes.unsort], ['S', lanes.sort]].forEach((a) => { const pfx = a[0], n = a[1] || 0; types.forEach((t) => { for (let i = 1; i <= n; i++) out.push(pfx + i + '-' + t); }); }); };
-    if (qtKey === 'cdna5') add5(['cDNA']);
+    if (qtKey === 'cdna5') add5(['P']);
     else if (qtKey === 'tcrbcr') add5(['TCR-c', 'BCR-c']);
     else if (qtKey === 'final5gex') add5(['GEX']);
     else if (qtKey === 'final5adt') add5(['ADT/CSP']);
@@ -255,6 +255,8 @@
       delete w.qubit.final5;
     }
     QUBIT_TABLES.forEach((qt) => { w.qubit[qt.key] = normalizeQubitTables(w.qubit[qt.key], qt.key); });
+    // migrate legacy 5' cDNA labels (U1-cDNA or bare U1) to the pellet convention U1-P
+    (w.qubit.cdna5 || []).forEach((tb) => (tb.rows || []).forEach((r) => { if (!r[0]) return; const m = String(r[0]).match(/^([USAC]\d+)(?:-cDNA)?$/i); if (m) r[0] = m[1].toUpperCase() + '-P'; }));
     return w.qubit;
   }
   // Flatten one category's tables to Drive rows: [libId, indexId, cycles, dil, conc, notes, round].
@@ -437,8 +439,8 @@
   // edit lane names / dilutions / notes, store to Drive + on the record. =====
   const TS_ARMS = {
     'ASAP': { prefix: 'A', types: ['ATAC', 'ADT', 'HTO'] },
-    "5' unsort": { prefix: 'U', types: ['GEX', 'TCR', 'BCR', 'ADT/CSP', 'HTO', 'TCR-c', 'BCR-c'] },
-    "5' sort": { prefix: 'S', types: ['GEX', 'TCR', 'BCR', 'ADT/CSP', 'TCR-c', 'BCR-c'] },
+    "5' unsort": { prefix: 'U', types: ['GEX', 'TCR', 'BCR', 'ADT/CSP', 'HTO', 'P', 'S', 'TCR-c', 'BCR-c'] },
+    "5' sort": { prefix: 'S', types: ['GEX', 'TCR', 'BCR', 'ADT/CSP', 'P', 'S', 'TCR-c', 'BCR-c'] },
     'cDNA': { prefix: 'C', types: ['cDNA'] },
     'Other': { prefix: '', types: ['GEX', 'ATAC', 'HTO', 'ADT', 'TCR', 'BCR', 'cDNA'] }
   };
@@ -491,6 +493,8 @@
     else if (/CDNA/.test(d)) type = 'cDNA';
     // a trailing "-c" (or spelled-out cDNA) marks the intermediate TCR/BCR cDNA product
     if ((type === 'TCR' || type === 'BCR') && (/-C\b/.test(d) || /CDNA/.test(d))) type = type + '-c';
+    // a trailing "-P" / "-S" on a lane tube is the pellet / supernatant 5' cDNA
+    if (!type && lane) { if (/-P\b/.test(d)) type = 'P'; else if (/-S\b/.test(d)) type = 'S'; }
     // (generic "VDJ" with no TCR/BCR is left blank so the user picks)
     return { arm: arm, type: type, no: lane ? lane[2] : '' };
   }
@@ -1469,7 +1473,7 @@
       const libTypes = (LIB_ARM_TYPES[arm] || []).filter((t) => present.indexOf(t) >= 0);
       const cdnaTypes = present.filter((t) => isCdnaType(t));
       const extras = present.filter((t) => !isCdnaType(t) && libTypes.indexOf(t) < 0);
-      const cdnaOrder = ['cDNA', 'TCR-c', 'BCR-c'];
+      const cdnaOrder = ['P', 'S', 'cDNA', 'TCR-c', 'BCR-c'];
       cdnaTypes.sort((a, b) => ((cdnaOrder.indexOf(a) + 1) || 99) - ((cdnaOrder.indexOf(b) + 1) || 99));
       const ordered = libTypes.concat(extras).concat(arm === 'ASAP' ? [] : cdnaTypes);
       const groups = ordered.map((type) => {
@@ -1524,7 +1528,7 @@
     const cyclesForRound = (lib, round) => Array.from(new Set(qAll.filter((q) => normLib(q.base) === normLib(lib.id) && q.round === round && String(q.cycles).trim() !== '').map((q) => q.cycles)));
     const roundsForLib = (lib) => { const rs = new Set([1]); const nid = normLib(lib.id); qAll.forEach((q) => { if (normLib(q.base) === nid) rs.add(q.round); }); Object.keys(tsIdx).forEach((k) => { const p = k.split('|'); if (p[0] === nid) rs.add(Number(p[1])); }); const st = rec.libStatus[lib.id] || {}; Object.keys(st.rounds || {}).forEach((r) => rs.add(Number(r))); return Array.from(rs).sort((a, b) => a - b); };
     // 5' input cDNA qubit for a lane (from the 5' cDNA table), corrected for its dilution
-    const cdnaCorrFor = (pfx, laneNo) => { const want = normLib(pfx + laneNo + '-cDNA'); const hits = qAll.filter((q) => q.stage === "5' cDNA" && normLib(q.base) === want); const hit = hits.filter((q) => String(q.conc).trim() !== '')[0] || hits[0]; return hit ? corrOne(hit.conc, hit.dil) : ''; };
+    const cdnaCorrFor = (pfx, laneNo) => { const cands = [pfx + laneNo + '-P', pfx + laneNo + '-cDNA', pfx + laneNo]; for (let ci = 0; ci < cands.length; ci++) { const want = normLib(cands[ci]); const hits = qAll.filter((q) => q.stage === "5' cDNA" && normLib(q.base) === want); const hit = hits.filter((q) => String(q.conc).trim() !== '')[0] || hits[0]; if (hit) return corrOne(hit.conc, hit.dil); } return ''; };
 
     const dash = (v) => (v === '' || v == null || (Array.isArray(v) && !v.length)) ? '\u2014' : (Array.isArray(v) ? v.join(', ') : v);
     const traceThumbs = (wells, lib, round) => { const imgs = tsImgsOf(wells); return imgs.length ? imgs.map((w) => '<img src="' + tsGetImgSrc(w) + '" class="ts-zoom lib-thumb" data-caption="' + escAttr(lib.id + (round > 1 ? '-' + round : '') + (w._run ? ' \u2014 ' + w._run : '') + (w._date ? ' (' + w._date + ')' : '') + (w.dilution ? ' \u00b7 ' + w.dilution : '')) + '" loading="lazy">').join(' ') : '\u2014'; };
@@ -1536,7 +1540,7 @@
 
     // ---- milestone summary bars (one per modality) ----
     rec.libMilestones = rec.libMilestones || {};
-    const milestonesFor = (sec) => { const types = sec.groups.map((g) => g.type).filter((t) => t !== 'cDNA'); const shared = sec.arm === 'ASAP' ? ['GEM generation'] : ['GEM generation', 'cDNA-pellet', 'cDNA-supernatant']; return shared.concat(types.map((t) => t + ' library')); };
+    const milestonesFor = (sec) => { const types = sec.groups.map((g) => g.type).filter((t) => !isCdnaType(t)); const shared = sec.arm === 'ASAP' ? ['GEM generation'] : ['GEM generation', 'cDNA-pellet', 'cDNA-supernatant']; return shared.concat(types.map((t) => t + ' library')); };
     let summary = '<div class="lib-summary">';
     sections.forEach((sec) => {
       const ms = milestonesFor(sec); const done = rec.libMilestones[sec.arm] || {};
@@ -1550,9 +1554,8 @@
     sections.forEach((sec) => {
       const isAsap = sec.arm === 'ASAP';
       body += '<div class="lib-section"><h3 style="margin:18px 0 6px">' + esc(sec.arm) + '</h3>';
-      // milestone mini-bar (+ editable checkboxes)
+      // milestone checkboxes (editable) — the coloured summary bar lives once at the top
       const ms = milestonesFor(sec); const done = rec.libMilestones[sec.arm] || {};
-      body += '<div class="lib-mbar" style="margin-bottom:6px">' + ms.map((m, mi) => '<div class="lib-seg' + (done[m] ? ' done c' + (mi % 8) : '') + '" style="width:' + (100 / ms.length) + '%" title="' + escAttr(m) + '"></div>').join('') + '</div>';
       if (editable) body += '<div class="lib-ms-checks">' + ms.map((m, mi) => '<label class="lib-ms-chk"><input type="checkbox" class="lib-ms" data-arm="' + escAttr(sec.arm) + '" data-m="' + escAttr(m) + '"' + (done[m] ? ' checked' : '') + '> <span class="lib-swatch c' + (mi % 8) + '"></span>' + esc(m) + '</label>').join('') + '</div>';
       // flags (delete only when editable)
       const flags = (rec.libFlags || []).map((f, fi) => ({ f: f, fi: fi })).filter((x) => x.f.arm === sec.arm);
@@ -4846,7 +4849,7 @@
         rows.push({ type: type, libId: r[0], index: r[1] || '', round: tb.round, cycles: r[2] || '', dil: r[3] || '', conc: corr(r[4], r[3]), ts: tsByKey[tsKey] ? tsByKey[tsKey].join(', ') : '', notes: r[5] || '' });
       }));
     });
-    const order = { 'cDNA': 0, 'TCR-c': 0.1, 'BCR-c': 0.2, 'GEX': 1, 'ADT/CSP': 2, 'ADT': 2, 'CSP': 2, 'TCR': 3, 'BCR': 4, 'ATAC': 5, 'HTO': 6 };
+    const order = { 'P': 0, 'S': 0.05, 'cDNA': 0.06, 'TCR-c': 0.1, 'BCR-c': 0.2, 'GEX': 1, 'ADT/CSP': 2, 'ADT': 2, 'CSP': 2, 'TCR': 3, 'BCR': 4, 'ATAC': 5, 'HTO': 6 };
     rows.sort((a, b) => { const oa = order[a.type] != null ? order[a.type] : 9, ob = order[b.type] != null ? order[b.type] : 9; if (oa !== ob) return oa - ob; if (a.libId !== b.libId) return a.libId < b.libId ? -1 : 1; return (Number(a.round) || 0) - (Number(b.round) || 0); });
     return rows;
   }
