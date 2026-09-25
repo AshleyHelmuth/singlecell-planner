@@ -761,11 +761,12 @@
     if (!rows.length) return [];
     const hdr = rows[0].map((h) => h.toLowerCase());
     const iWell = hdr.findIndex((h) => h === 'well'), iConc = hdr.findIndex((h) => h.indexOf('conc') === 0), iDesc = hdr.findIndex((h) => h.indexOf('sample description') === 0);
+    const iSize = hdr.findIndex((h) => h.indexOf('average size') >= 0 || h.indexOf('size [bp]') === 0);
     const wells = [];
     rows.slice(1).forEach((r) => {
       const well = (r[iWell] || '').trim(); const desc = (r[iDesc] || '').trim();
       if (!well || /ladder/i.test(desc)) return;   // skip the ladder well
-      wells.push({ well: well, description: desc, name: desc, conc: iConc >= 0 ? (r[iConc] || '').trim() : '', dilution: '', note: '' });
+      wells.push({ well: well, description: desc, name: desc, conc: iConc >= 0 ? (r[iConc] || '').trim() : '', avgSize: iSize >= 0 ? (r[iSize] || '').trim() : '', dilution: '', note: '' });
     });
     return wells;
   }
@@ -802,14 +803,12 @@
     return { conc: conc, avgBp: conc > 0 ? Math.round(wsize / conc) : null, n: inR.length };
   }
   // Detect the ScreenTape assay/chip from TapeStation file names.
-  const TS_CHIPS = ['D1000', 'HS D1000', 'D5000', 'HS D5000', 'Genomic'];
-  const TS_CHIP_REGION_DEFAULT = { 'D1000': [200, 1000], 'HS D1000': [200, 1000], 'D5000': [200, 1000], 'HS D5000': [200, 1000], 'Genomic': [null, null], '': [null, null] };
+  const TS_CHIPS = ['D1000', 'D5000'];
+  const TS_CHIP_REGION_DEFAULT = { 'D1000': [200, 1000], 'D5000': [200, 1000], '': [null, null] };
   function tsDetectChip(strs) {
     const s = (Array.isArray(strs) ? strs.join(' ') : String(strs || '')).toLowerCase();
-    const hs = /\bhs\b|high[\s-]*sensitivity/.test(s);
-    if (/d5000/.test(s)) return hs ? 'HS D5000' : 'D5000';
-    if (/d1000/.test(s)) return hs ? 'HS D1000' : 'D1000';
-    if (/genomic|\bgdna\b/.test(s)) return 'Genomic';
+    if (/d5000/.test(s)) return 'D5000';
+    if (/d1000/.test(s)) return 'D1000';
     return '';
   }
   function tsChipRegion(rec, chip) {
@@ -871,7 +870,7 @@
     const rec = CURRENT_EXP_ID ? Store.getExperiment(CURRENT_EXP_ID) : null;
     if (!rec) { host.innerHTML = '<h2>Tapestation Output</h2><p class="empty">Select a project and experiment in the sidebar first.</p>'; return; }
     const runs = rec.tapestation || [];
-    { let chipChanged = false; runs.forEach((r) => { if (!r.chip) { const d = tsDetectChip(r.runName); if (d) { r.chip = d; chipChanged = true; } } }); if (chipChanged) Store.saveExperiment(rec); }
+    { let chipChanged = false; runs.forEach((r) => { if (r.chip) { const b = /d5000/i.test(r.chip) ? 'D5000' : (/d1000/i.test(r.chip) ? 'D1000' : ''); if (b !== r.chip) { r.chip = b; chipChanged = true; } } else { const d = tsDetectChip(r.runName); if (d) { r.chip = d; chipChanged = true; } } }); if (chipChanged) Store.saveExperiment(rec); }
     const armOpts2 = (sel) => TS_ARM_NAMES.map((a) => '<option' + (sel === a ? ' selected' : '') + '>' + esc(a) + '</option>').join('');
     const typeOpts2 = (arm, sel) => { const t = (TS_ARMS[arm] && TS_ARMS[arm].types) || []; return '<option value="">\u2014</option>' + t.map((x) => '<option value="' + escAttr(x) + '"' + (sel === x ? ' selected' : '') + '>' + esc(typeLabel(x)) + '</option>').join(''); };
     const runList = runs.length
@@ -1075,7 +1074,7 @@
         rec.tapestation = rec.tapestation || [];
         rec.tapestation.push({ runName: TS_PENDING.runName, notes: TS_PENDING.notes || '', folder: runFolder, fileCount: files.length, savedAt: new Date().toISOString().slice(0, 10), chip: TS_PENDING.chip || '',
           wells: TS_PENDING.wells.map((w) => { let imgKey = ''; if (w.img) { imgKey = tsImgKey(rec.id, TS_PENDING.runName, w.well); tsSetImg(imgKey, w.img); }
-            return { well: w.well, arm: w.arm || '', sampleType: w.sampleType || '', sampleNo: w.sampleNo || '', round: w.round || 1, name: tsLaneName(w), description: w.description, conc: w.conc, dilution: w.dilution, note: w.note, imgKey: imgKey, imgFileId: (TS_PENDING._imgFileByWell && TS_PENDING._imgFileByWell[w.well]) || '', peaks: w.peaks || [] }; }) });
+            return { well: w.well, arm: w.arm || '', sampleType: w.sampleType || '', sampleNo: w.sampleNo || '', round: w.round || 1, name: tsLaneName(w), description: w.description, conc: w.conc, avgSize: w.avgSize || '', dilution: w.dilution, note: w.note, imgKey: imgKey, imgFileId: (TS_PENDING._imgFileByWell && TS_PENDING._imgFileByWell[w.well]) || '', peaks: w.peaks || [] }; }) });
         Store.saveExperiment(rec);
         syncLibraryRecordDrive(rec);
         TS_PENDING = null; renderTapestation();
@@ -5078,11 +5077,12 @@
       const id = tsWellLibId(wl); if (!id) return; const k = normLibId(id) + '|' + (Number(wl.round) || 1);
       const acc = (tsBy[k] = tsBy[k] || { chip: '', concs: [], bps: [], d1c: [], d1b: [], d5c: [], d5b: [] });
       if (!acc.chip && run.chip) acc.chip = run.chip;
+      const asz = parseFloat(wl.avgSize); const fallBp = isNaN(asz) ? null : Math.round(asz);
       const reg = tsRegion(wl.peaks, region[0], region[1]);
       if (reg && reg.conc > 0) { acc.concs.push(ngOf(reg.conc, wl.dilution)); } else { const n = parseFloat(wl.conc); if (!isNaN(n)) acc.concs.push(ngOf(n, wl.dilution)); }
-      if (reg && reg.avgBp) acc.bps.push(reg.avgBp);
-      if (isD1000(run.chip)) { const r1 = tsRegion(wl.peaks, 100, 1000); if (r1 && r1.conc > 0) acc.d1c.push(ngOf(r1.conc, wl.dilution)); if (r1 && r1.avgBp) acc.d1b.push(r1.avgBp); }
-      if (isD5000(run.chip)) { const r5 = tsRegion(wl.peaks, 100, 5000); if (r5 && r5.conc > 0) acc.d5c.push(ngOf(r5.conc, wl.dilution)); if (r5 && r5.avgBp) acc.d5b.push(r5.avgBp); }
+      if (reg && reg.avgBp) acc.bps.push(reg.avgBp); else if (fallBp) acc.bps.push(fallBp);
+      if (isD1000(run.chip)) { const r1 = tsRegion(wl.peaks, 100, 1000); if (r1 && r1.conc > 0) acc.d1c.push(ngOf(r1.conc, wl.dilution)); if (r1 && r1.avgBp) acc.d1b.push(r1.avgBp); else if (fallBp) acc.d1b.push(fallBp); }
+      if (isD5000(run.chip)) { const r5 = tsRegion(wl.peaks, 100, 5000); if (r5 && r5.conc > 0) acc.d5c.push(ngOf(r5.conc, wl.dilution)); if (r5 && r5.avgBp) acc.d5b.push(r5.avgBp); else if (fallBp) acc.d5b.push(fallBp); }
     }); });
     const loadCells = {};
     const bd = (rec.worksheets && rec.worksheets.batchday && rec.worksheets.batchday.loading) || {};
