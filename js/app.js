@@ -1798,6 +1798,24 @@
       summary += '<div class="lib-mbar-row"><div class="lib-prog-name">' + esc(sec.arm) + ' <span class="who">' + nDone + '/' + ms.length + '</span></div><div class="lib-mbar">' + seg + '</div></div>';
     });
     summary += '</div>';
+    // ---- averages by library type & prep round (Qubit, TapeStation, avg bp) ----
+    const avgAcc = {};
+    sections.forEach((sec) => sec.groups.forEach((g) => g.libs.forEach((l) => roundsForLib(l).forEach((round) => {
+      const key = g.type + '|' + round;
+      const acc = (avgAcc[key] = avgAcc[key] || { type: g.type, round: round, q: [], ts: [], bp: [] });
+      qubitCorrForRound(l, round).forEach((v) => { const n = parseFloat(v); if (!isNaN(n)) acc.q.push(n); });
+      tsConcCorrOf(tsWellsFor(l, round)).forEach((v) => { const n = parseFloat(v); if (!isNaN(n)) acc.ts.push(n); });
+      tsWellsFor(l, round).forEach((w) => { const r = tsRegion(w.peaks, null, null); if (r && r.avgBp) acc.bp.push(r.avgBp); else { const az = parseFloat(w.avgSize); if (!isNaN(az)) acc.bp.push(az); } });
+    }))));
+    const avgOf = (arr) => arr.length ? (Math.round((arr.reduce((s, x) => s + x, 0) / arr.length) * 100) / 100) : null;
+    const avgTOrd = { 'P': 0, 'S': 0.1, 'TCR-c': 0.2, 'BCR-c': 0.3, 'cDNA': 0.4, 'GEX': 1, 'ADT': 2, 'ADT/CSP': 2, 'TCR': 3, 'BCR': 4, 'ATAC': 5, 'HTO': 6 };
+    const avgKeys = Object.keys(avgAcc).filter((k) => avgAcc[k].q.length || avgAcc[k].ts.length || avgAcc[k].bp.length)
+      .sort((a, b) => { const A = avgAcc[a], B = avgAcc[b]; const oa = avgTOrd[A.type] != null ? avgTOrd[A.type] : 9, ob = avgTOrd[B.type] != null ? avgTOrd[B.type] : 9; if (oa !== ob) return oa - ob; return A.round - B.round; });
+    if (avgKeys.length) {
+      summary += '<h3 style="margin:14px 0 4px">Averages by library type &amp; prep round</h3><div style="overflow:auto"><table class="cost-table libsum"><thead><tr><th>Library type</th><th>Prep round</th><th>n</th><th>Avg Qubit (ng/\u00b5L)</th><th>Avg TapeStation (ng/\u00b5L)</th><th>Avg bp size</th></tr></thead><tbody>'
+        + avgKeys.map((k) => { const a = avgAcc[k]; const n = Math.max(a.q.length, a.ts.length, a.bp.length); const q = avgOf(a.q), ts = avgOf(a.ts), bp = avgOf(a.bp); return '<tr><td class="lib-id">' + esc(typeLabel(a.type)) + '</td><td>' + a.round + '</td><td>' + n + '</td><td>' + (q != null ? q : '\u2014') + '</td><td>' + (ts != null ? ts : '\u2014') + '</td><td>' + (bp != null ? Math.round(bp) : '\u2014') + '</td></tr>'; }).join('')
+        + '</tbody></table></div>';
+    }
 
     let body = '';
     sections.forEach((sec) => {
