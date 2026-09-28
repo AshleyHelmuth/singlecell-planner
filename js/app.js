@@ -1940,14 +1940,14 @@
         const dil = tsDilFactor(w.dilution); const reg = tsRegion(w.peaks, minBp, maxBp);
         const hasReg = (w.peaks || []).length > 0; const regConc = hasReg ? reg.conc : null;
         const totalLibNg = regConc != null ? (regConc * dil) / 1000 : null;
-        return '<tr><td>' + esc(w.name || w.description || '') + '</td><td>' + esc(w.arm || '') + '</td><td>' + esc(typeLabel(w.sampleType || '')) + '</td><td class="num">' + esc(w.well) + '</td>'
+        return '<tr><td>' + esc(tsLaneName(w)) + '</td><td>' + esc(w.arm || '') + '</td><td>' + esc(typeLabel(w.sampleType || '')) + '</td><td class="num">' + (Number(w.round) || 1) + '</td><td class="num">' + esc(w.well) + '</td>'
           + '<td class="num">' + esc(w.conc) + '</td><td>' + esc(w.dilution || '') + '</td>'
           + '<td class="num">' + (regConc != null ? Math.round(regConc * 10) / 10 : '\u2014') + '</td>'
           + '<td class="num">' + (reg.avgBp != null ? reg.avgBp : '\u2014') + '</td>'
           + '<td class="num"><strong>' + (totalLibNg != null ? Math.round(totalLibNg * 100) / 100 : '\u2014') + '</strong></td>'
           + '<td class="who">' + esc(w.runName || '') + (w.note ? ' \u00b7 ' + esc(w.note) : '') + '</td></tr>';
       }).join('');
-      body = regionUI + '<table class="cost-table"><thead><tr><th>Full ID</th><th>Section</th><th>Type</th><th class="num">Well</th><th class="num">Trace conc [pg/\u00b5l]</th><th>Dilution</th><th class="num">Region conc [pg/\u00b5l]</th><th class="num">Avg bp</th><th class="num">Total library [ng/\u00b5l]</th><th>Run / notes</th></tr></thead><tbody>' + rows + '</tbody></table>';
+      body = regionUI + '<table class="cost-table"><thead><tr><th>Full ID</th><th>Section</th><th>Type</th><th class="num">Round</th><th class="num">Well</th><th class="num">Trace conc [pg/\u00b5l]</th><th>Dilution</th><th class="num">Region conc [pg/\u00b5l]</th><th class="num">Avg bp</th><th class="num">Total library [ng/\u00b5l]</th><th>Run / notes</th></tr></thead><tbody>' + rows + '</tbody></table>';
     } else {
       // Trace images grouped by section + sample type (e.g. "5' unsort GEX"), sorted by well within each.
       const bySec = {}; const secOrder = [];
@@ -1957,7 +1957,7 @@
       secOrder.forEach((s) => bySec[s].sort((a, b) => { const ka = wellKey(a), kb = wellKey(b); return ka[0] < kb[0] ? -1 : (ka[0] > kb[0] ? 1 : ka[1] - kb[1]); }));
       body = secOrder.map((s) => '<h3 style="margin:14px 0 6px">' + esc(s) + '</h3><div class="ts-traces">'
         + bySec[s].map((w) => { const src = tsGetImgSrc(w); if (!src) return '';
-            const fullId = w.name || w.description || w.well;
+            const fullId = tsLaneName(w) || w.name || w.well;
             const cap = fullId + (w.note ? ' \u2014 ' + w.note : '') + (w.dilution ? ' \u00b7 dil ' + w.dilution : '');
             return '<figure class="ts-trace"><img src="' + src + '" class="ts-zoom" tabindex="0" loading="lazy" data-caption="' + escAttr(cap) + '"><figcaption>' + esc(fullId) + (w.dilution ? ' \u00b7 ' + esc(w.dilution) : '') + '</figcaption></figure>'; }).join('')
         + '</div>').join('');
