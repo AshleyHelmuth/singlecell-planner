@@ -1660,6 +1660,9 @@
   const PREFIX_ARM = { U: "5' unsort", A: 'ASAP', S: "5' sort", C: "5' unsort" };
   // ---- Canonical library identity, used across the whole site ----
   function normLibId(s) { return String(s || '').toUpperCase().replace(/[-/]?CSP/g, '').replace(/\s+/g, ''); }
+  // Strip a trailing prep-round suffix (e.g. "U2-ADT-2" -> "U2-ADT"). Library types never end
+  // in "-<digit>", so this only removes a round tag some IDs still carry from the old model.
+  function baseLibId(s) { return String(s || '').replace(/-\d+\s*$/, ''); }
   // Parse a library id out of any label ("ASAP A1-ATAC", "5' unsort U1-GEX", "U1-ADT/CSP-2", "A1-ATAC")
   function parseLibId(s) {
     const str = String(s || '').replace(/-\d+\s*$/, '');   // drop any prep-round suffix first
@@ -1744,7 +1747,7 @@
     //      correct their conc for the recorded dilution + convert to ng/µL at render) ----
     const tsIdx = {};
     (rec.tapestation || []).forEach((run) => (run.wells || []).forEach((w) => {
-      const derived = normLibId(tsWellLibId(w)); if (!derived) return;
+      const derived = normLibId(baseLibId(tsWellLibId(w))); if (!derived) return;
       const rd = Number(w.round) || 1; const k = derived + '|' + rd;
       (tsIdx[k] || (tsIdx[k] = { wells: [] })).wells.push(Object.assign({}, w, { _run: run.runName, _date: run.savedAt }));
     }));
@@ -1765,7 +1768,7 @@
         const byRound = {}; val.forEach((r) => { const rd = Number(r[3]) || 1; (byRound[rd] = byRound[rd] || []).push([r[0] || '', '', '', r[1] || '', r[2] || '', '']); });
         tables = Object.keys(byRound).map(Number).sort((a, b) => a - b).map((rd) => ({ round: rd, rows: byRound[rd] }));
       }
-      tables.forEach((tb) => (tb.rows || []).forEach((r) => { if (r && r[0]) qAll.push({ base: String(r[0]), round: Number(tb.round) || 1, indexId: r[1] || '', cycles: r[2] || '', dil: r[3] || '', conc: r[4] || '', notes: r[5] || '', stage: t.title }); }));
+      tables.forEach((tb) => (tb.rows || []).forEach((r) => { if (r && r[0]) qAll.push({ base: baseLibId(r[0]), round: Number(tb.round) || 1, indexId: r[1] || '', cycles: r[2] || '', dil: r[3] || '', conc: r[4] || '', notes: r[5] || '', stage: t.title }); }));
     });
     // Qubit conc (ng/µL) corrected for its recorded dilution
     const corrOne = (conc, dil) => { const n = parseFloat(conc); if (isNaN(n)) return ''; return Math.round(n * tsDilFactor(dil) * 100) / 100; };
@@ -5075,7 +5078,7 @@
     const ngOf = (pgConc, dil) => Math.round((pgConc * tsDilFactor(dil) / 1000) * 100) / 100;
     const tsBy = {};
     (rec.tapestation || []).forEach((run) => { const region = tsChipRegion(rec, run.chip); (run.wells || []).forEach((wl) => {
-      const id = tsWellLibId(wl); if (!id) return; const k = normLibId(id) + '|' + (Number(wl.round) || 1);
+      const id = tsWellLibId(wl); if (!id) return; const k = normLibId(baseLibId(id)) + '|' + (Number(wl.round) || 1);
       const acc = (tsBy[k] = tsBy[k] || { chip: '', concs: [], bps: [], fxc: [], fxb: [] });
       if (!acc.chip && run.chip) acc.chip = run.chip;
       const asz = parseFloat(wl.avgSize); const fallBp = isNaN(asz) ? null : Math.round(asz);
@@ -5106,11 +5109,11 @@
       normalizeQubitTables(qt[t.key], t.key).forEach((tb) => (tb.rows || []).forEach((r) => {
         if (!r[0]) return;
         const parsed = parseLibId(r[0]); const type = (parsed && parsed.type) || t.title; const arm = (parsed && parsed.arm) || ''; const modality = modOf(arm);
-        const cdna = isCdnaType(type); const key = normLibId(r[0]) + '|' + (Number(tb.round) || 1); const tsd = tsBy[key] || {};
+        const cdna = isCdnaType(type); const key = normLibId(baseLibId(r[0])) + '|' + (Number(tb.round) || 1); const tsd = tsBy[key] || {};
         const info = cdna ? { label: '', kit: '' } : idxInfo(type, modality);
         let i7 = '', i5 = '';
         if (!cdna) { const s = lookupIndexSeq(info.kit, r[1], wf); if (s) { i7 = s.i7; i5 = s.i5; } else if (info.kit === 'RP' || info.kit === 'D7') { i7 = inventoryOligoSeq(r[1]); } }
-        rows.push({ libId: r[0], type: type, cdna: cdna, modality: modality, abbrev: abbrev, expId: expId, round: (Number(tb.round) || 1),
+        rows.push({ libId: baseLibId(r[0]), type: type, cdna: cdna, modality: modality, abbrev: abbrev, expId: expId, round: (Number(tb.round) || 1),
           index: r[1] || '', indexType: info.label, i7: i7, i5: i5, chip: tsd.chip || '', qubit: corr(r[4], r[3]),
           ts: (tsd.concs && tsd.concs.length) ? tsd.concs.join(', ') : '', avgBp: (tsd.bps && tsd.bps.length) ? tsd.bps.join(', ') : '',
           fxc: (tsd.fxc && tsd.fxc.length) ? tsd.fxc.join(', ') : '', fxb: (tsd.fxb && tsd.fxb.length) ? tsd.fxb.join(', ') : '',
