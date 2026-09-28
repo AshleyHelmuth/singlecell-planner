@@ -712,10 +712,11 @@
   function tsLaneName(w) {
     const a = TS_ARMS[w.arm]; const prefix = a ? a.prefix : '';
     const lane = (w.sampleNo != null && w.sampleNo !== '') ? (prefix + w.sampleNo) : '';
+    const rd = Number(w.round) || 1; const sfx = rd > 1 ? '-' + rd : '';
     const parts = [];
     if (w.arm) parts.push(w.arm);
-    if (lane) parts.push(lane + (w.sampleType ? '-' + w.sampleType : ''));
-    else if (w.sampleType) parts.push(w.sampleType);
+    if (lane) parts.push(lane + (w.sampleType ? '-' + w.sampleType : '') + sfx);
+    else if (w.sampleType) parts.push(w.sampleType + sfx);
     return parts.join(' ') || (w.description || w.well);
   }
   let TS_PENDING = null;   // { fileName, base64(zip), runName, part, notes, wells:[{well,description,name,conc,dilution,note,img}] }
@@ -948,7 +949,7 @@
     host.querySelectorAll('.ts-arm').forEach((el) => el.addEventListener('change', () => { const w = TS_PENDING.wells[+el.dataset.i]; w.arm = el.value; const types = (TS_ARMS[w.arm] && TS_ARMS[w.arm].types) || []; if (types.indexOf(w.sampleType) < 0) w.sampleType = ''; renderTapestation(); }));
     host.querySelectorAll('.ts-type').forEach((el) => el.addEventListener('change', () => { const w = TS_PENDING.wells[+el.dataset.i]; w.sampleType = el.value; el.closest('tr').querySelector('.who').textContent = tsLaneName(w); }));
     host.querySelectorAll('.ts-no').forEach((el) => el.addEventListener('change', () => { const w = TS_PENDING.wells[+el.dataset.i]; w.sampleNo = el.value; el.closest('tr').querySelector('.who').textContent = tsLaneName(w); }));
-    host.querySelectorAll('.ts-round').forEach((el) => el.addEventListener('input', () => { TS_PENDING.wells[+el.dataset.i].round = el.value; }));
+    host.querySelectorAll('.ts-round').forEach((el) => el.addEventListener('input', () => { const w = TS_PENDING.wells[+el.dataset.i]; w.round = Number(el.value) || 1; w.name = tsLaneName(w); }));
     host.querySelectorAll('.ts-dil').forEach((el) => el.addEventListener('input', () => { TS_PENDING.wells[+el.dataset.i].dilution = el.value; }));
     host.querySelectorAll('.ts-note').forEach((el) => el.addEventListener('input', () => { TS_PENDING.wells[+el.dataset.i].note = el.value; }));
     const cancel = $('#tsCancel'); if (cancel) cancel.addEventListener('click', () => { TS_PENDING = null; renderTapestation(); });
@@ -962,10 +963,10 @@
     host.querySelectorAll('.ts-chip').forEach((el) => el.addEventListener('change', () => { rec.tapestation[+el.dataset.i].chip = el.value; Store.saveExperiment(rec); syncLibraryRecordDrive(rec); }));
     host.querySelectorAll('.ts-reg').forEach((el) => el.addEventListener('change', () => { const chip = el.dataset.chip; rec.tsChipRegion = rec.tsChipRegion || {}; const cur = (rec.tsChipRegion[chip] || tsChipRegion(rec, chip).slice()); const t = el.value.trim(); cur[+el.dataset.b] = (t === '' ? null : (parseFloat(t) || null)); rec.tsChipRegion[chip] = cur; Store.saveExperiment(rec); syncLibraryRecordDrive(rec); }));
     const wfSel = $('#tsWf'); if (wfSel) wfSel.addEventListener('change', () => { rec.i5Workflow = wfSel.value; Store.saveExperiment(rec); syncLibraryRecordDrive(rec); });
-    host.querySelectorAll('.tse-arm').forEach((el) => el.addEventListener('change', () => { const w = rec.tapestation[+el.dataset.run].wells[+el.dataset.w]; w.arm = el.value; const types = (TS_ARMS[w.arm] && TS_ARMS[w.arm].types) || []; if (types.indexOf(w.sampleType) < 0) w.sampleType = ''; w.name = tsLaneName(w); Store.saveExperiment(rec); renderTapestation(); }));
+    host.querySelectorAll('.tse-arm').forEach((el) => el.addEventListener('change', () => { const w = rec.tapestation[+el.dataset.run].wells[+el.dataset.w]; w.arm = el.value; const types = (TS_ARMS[w.arm] && TS_ARMS[w.arm].types) || []; if (types.indexOf(w.sampleType) < 0) w.sampleType = ''; w.name = tsLaneName(w); Store.saveExperiment(rec); syncLibraryRecordDrive(rec); renderTapestation(); }));
     host.querySelectorAll('.tse-type').forEach((el) => el.addEventListener('change', () => { const w = rec.tapestation[+el.dataset.run].wells[+el.dataset.w]; w.sampleType = el.value; w.name = tsLaneName(w); Store.saveExperiment(rec); syncLibraryRecordDrive(rec); renderTapestation(); }));
-    host.querySelectorAll('.tse-no').forEach((el) => el.addEventListener('change', () => { const w = rec.tapestation[+el.dataset.run].wells[+el.dataset.w]; w.sampleNo = el.value; w.name = tsLaneName(w); Store.saveExperiment(rec); renderTapestation(); }));
-    host.querySelectorAll('.tse-round').forEach((el) => el.addEventListener('change', () => { const w = rec.tapestation[+el.dataset.run].wells[+el.dataset.w]; w.round = el.value; Store.saveExperiment(rec); }));
+    host.querySelectorAll('.tse-no').forEach((el) => el.addEventListener('change', () => { const w = rec.tapestation[+el.dataset.run].wells[+el.dataset.w]; w.sampleNo = el.value; w.name = tsLaneName(w); Store.saveExperiment(rec); syncLibraryRecordDrive(rec); renderTapestation(); }));
+    host.querySelectorAll('.tse-round').forEach((el) => el.addEventListener('change', () => { const w = rec.tapestation[+el.dataset.run].wells[+el.dataset.w]; w.round = Number(el.value) || 1; w.name = tsLaneName(w); Store.saveExperiment(rec); syncLibraryRecordDrive(rec); renderTapestation(); }));
     host.querySelectorAll('button[data-tse-del]').forEach((b) => b.addEventListener('click', () => { const p = b.dataset.tseDel.split('|'); const ri = +p[0], wi = +p[1]; if (confirm('Delete this trace from the record?')) { rec.tapestation[ri].wells.splice(wi, 1); Store.saveExperiment(rec); renderTapestation(); } }));
     host.querySelectorAll('.ts-zoom').forEach((img) => img.addEventListener('click', () => openImageLightbox(img.src, img.getAttribute('data-caption') || '')));
   }
@@ -5075,14 +5076,14 @@
     const tsBy = {};
     (rec.tapestation || []).forEach((run) => { const region = tsChipRegion(rec, run.chip); (run.wells || []).forEach((wl) => {
       const id = tsWellLibId(wl); if (!id) return; const k = normLibId(id) + '|' + (Number(wl.round) || 1);
-      const acc = (tsBy[k] = tsBy[k] || { chip: '', concs: [], bps: [], d1c: [], d1b: [], d5c: [], d5b: [] });
+      const acc = (tsBy[k] = tsBy[k] || { chip: '', concs: [], bps: [], fxc: [], fxb: [] });
       if (!acc.chip && run.chip) acc.chip = run.chip;
       const asz = parseFloat(wl.avgSize); const fallBp = isNaN(asz) ? null : Math.round(asz);
       const reg = tsRegion(wl.peaks, region[0], region[1]);
       if (reg && reg.conc > 0) { acc.concs.push(ngOf(reg.conc, wl.dilution)); } else { const n = parseFloat(wl.conc); if (!isNaN(n)) acc.concs.push(ngOf(n, wl.dilution)); }
       if (reg && reg.avgBp) acc.bps.push(reg.avgBp); else if (fallBp) acc.bps.push(fallBp);
-      if (isD1000(run.chip)) { const r1 = tsRegion(wl.peaks, 100, 1000); if (r1 && r1.conc > 0) acc.d1c.push(ngOf(r1.conc, wl.dilution)); if (r1 && r1.avgBp) acc.d1b.push(r1.avgBp); else if (fallBp) acc.d1b.push(fallBp); }
-      if (isD5000(run.chip)) { const r5 = tsRegion(wl.peaks, 100, 5000); if (r5 && r5.conc > 0) acc.d5c.push(ngOf(r5.conc, wl.dilution)); if (r5 && r5.avgBp) acc.d5b.push(r5.avgBp); else if (fallBp) acc.d5b.push(fallBp); }
+      const fxRange = isD1000(run.chip) ? [100, 1000] : (isD5000(run.chip) ? [100, 5000] : null);
+      if (fxRange) { const rf = tsRegion(wl.peaks, fxRange[0], fxRange[1]); if (rf && rf.conc > 0) acc.fxc.push(ngOf(rf.conc, wl.dilution)); if (rf && rf.avgBp) acc.fxb.push(rf.avgBp); else if (fallBp) acc.fxb.push(fallBp); }
     }); });
     const loadCells = {};
     const bd = (rec.worksheets && rec.worksheets.batchday && rec.worksheets.batchday.loading) || {};
@@ -5112,8 +5113,7 @@
         rows.push({ libId: r[0], type: type, cdna: cdna, modality: modality, abbrev: abbrev, expId: expId, round: (Number(tb.round) || 1),
           index: r[1] || '', indexType: info.label, i7: i7, i5: i5, chip: tsd.chip || '', qubit: corr(r[4], r[3]),
           ts: (tsd.concs && tsd.concs.length) ? tsd.concs.join(', ') : '', avgBp: (tsd.bps && tsd.bps.length) ? tsd.bps.join(', ') : '',
-          d1c: (tsd.d1c && tsd.d1c.length) ? tsd.d1c.join(', ') : '', d1b: (tsd.d1b && tsd.d1b.length) ? tsd.d1b.join(', ') : '',
-          d5c: (tsd.d5c && tsd.d5c.length) ? tsd.d5c.join(', ') : '', d5b: (tsd.d5b && tsd.d5b.length) ? tsd.d5b.join(', ') : '',
+          fxc: (tsd.fxc && tsd.fxc.length) ? tsd.fxc.join(', ') : '', fxb: (tsd.fxb && tsd.fxb.length) ? tsd.fxb.join(', ') : '',
           cells: loadCells[laneOf(r[0])] || '', reads: cdna ? '' : (reads[String(type).toUpperCase()] || ''), notes: r[5] || '' });
       }));
     });
@@ -5124,10 +5124,10 @@
     if (!rec) return null;
     const rows = buildLibraryRecordRows(rec);
     const expId = rec.experimentId || rec.name || 'experiment';
-    const LIB_HDR = ['Tube Inventoried', 'Sample Group', 'Project_Abbreviation', 'Experiment_ID', 'Tube_ID', 'Modality', 'Library_Type', 'Prep round', 'Library Volume', '# Cells loaded in lane', 'Desired reads/cell', 'Index_Type', 'Index_ID', 'Index_Sequence_i7', 'Index_Sequence_i5', 'Chip type', 'Concentration- Tapestation (ng/uL)', 'Concentration- Qubit (ng/uL)', 'Average bp size', 'Conc- TS 100-1000 (D1000, ng/uL)', 'Avg bp 100-1000 (D1000)', 'Conc- TS 100-5000 (D5000, ng/uL)', 'Avg bp 100-5000 (D5000)', 'RIN Value', 'Pooled into (Library Pool ID)', 'Freezer', 'Box', 'Notes'];
-    const CDNA_HDR = ['Tube Inventoried', 'Sample Group', 'Project_Abbreviation', 'Experiment_ID', 'Tube_ID', 'Modality', 'cDNA_Type', 'Prep round', 'Library Volume', '# Cells loaded in lane', 'Chip type', 'Concentration- Tapestation (ng/uL)', 'Concentration- Qubit (ng/uL)', 'Average bp size', 'Conc- TS 100-1000 (D1000, ng/uL)', 'Avg bp 100-1000 (D1000)', 'Conc- TS 100-5000 (D5000, ng/uL)', 'Avg bp 100-5000 (D5000)', 'RIN Value', 'Pooled into (Library Pool ID)', 'Freezer', 'Box', 'Notes'];
-    const libRow = (d) => ['', '', d.abbrev, d.expId, d.libId, d.modality, typeLabel(d.type), d.round, '', d.cells, d.reads, d.indexType, d.index, d.i7, d.i5, d.chip, d.ts, d.qubit, d.avgBp, d.d1c, d.d1b, d.d5c, d.d5b, '', '', '', '', d.notes];
-    const cdnaRow = (d) => ['', '', d.abbrev, d.expId, d.libId, d.modality, typeLabel(d.type), d.round, '', d.cells, d.chip, d.ts, d.qubit, d.avgBp, d.d1c, d.d1b, d.d5c, d.d5b, '', '', '', '', d.notes];
+    const LIB_HDR = ['Tube Inventoried', 'Sample Group', 'Project_Abbreviation', 'Experiment_ID', 'Tube_ID', 'Modality', 'Library_Type', 'Prep round', 'Library Volume', '# Cells loaded in lane', 'Desired reads/cell', 'Index_Type', 'Index_ID', 'Index_Sequence_i7', 'Index_Sequence_i5', 'Chip type', 'Concentration- Tapestation (ng/uL)', 'Concentration- Qubit (ng/uL)', 'Average bp size', 'Conc- TS in range (D1000 100-1000 / D5000 100-5000, ng/uL)', 'Avg bp in range (D1000 100-1000 / D5000 100-5000)', 'RIN Value', 'Pooled into (Library Pool ID)', 'Freezer', 'Box', 'Notes'];
+    const CDNA_HDR = ['Tube Inventoried', 'Sample Group', 'Project_Abbreviation', 'Experiment_ID', 'Tube_ID', 'Modality', 'cDNA_Type', 'Prep round', 'Library Volume', '# Cells loaded in lane', 'Chip type', 'Concentration- Tapestation (ng/uL)', 'Concentration- Qubit (ng/uL)', 'Average bp size', 'Conc- TS in range (D1000 100-1000 / D5000 100-5000, ng/uL)', 'Avg bp in range (D1000 100-1000 / D5000 100-5000)', 'RIN Value', 'Pooled into (Library Pool ID)', 'Freezer', 'Box', 'Notes'];
+    const libRow = (d) => ['', '', d.abbrev, d.expId, d.libId, d.modality, typeLabel(d.type), d.round, '', d.cells, d.reads, d.indexType, d.index, d.i7, d.i5, d.chip, d.ts, d.qubit, d.avgBp, d.fxc, d.fxb, '', '', '', '', d.notes];
+    const cdnaRow = (d) => ['', '', d.abbrev, d.expId, d.libId, d.modality, typeLabel(d.type), d.round, '', d.cells, d.chip, d.ts, d.qubit, d.avgBp, d.fxc, d.fxb, '', '', '', '', d.notes];
     const tOrd = { 'P': 0, 'S': 0.1, 'TCR-c': 0.2, 'BCR-c': 0.3, 'cDNA': 0.4, 'GEX': 1, 'ADT': 2, 'ADT/CSP': 2, 'CSP': 2, 'TCR': 3, 'BCR': 4, 'ATAC': 5, 'HTO': 6 };
     const bySort = (a, b) => { const oa = tOrd[a.type] != null ? tOrd[a.type] : 9, ob = tOrd[b.type] != null ? tOrd[b.type] : 9; if (oa !== ob) return oa - ob; if (a.libId !== b.libId) return a.libId < b.libId ? -1 : 1; return (a.round || 0) - (b.round || 0); };
     const libByMod = {}; const cdna = [];
