@@ -184,10 +184,10 @@
     var max = 0;
     _exp().forEach(function (e) {
       if ((e.project || '') !== projectName) return;
-      var m = (e.experimentId || '').match(/_(\d+)$/);
+      var m = (e.experimentId || '').match(/[-_](\d+)$/);
       if (m) max = Math.max(max, parseInt(m[1], 10));
     });
-    return abbrev + '_' + (max + 1);
+    return abbrev + '-' + (max + 1);
   }
   function deleteProject(name) {
     var t = (name || '').trim();

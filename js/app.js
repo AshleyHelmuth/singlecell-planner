@@ -34,7 +34,7 @@
   const WS_SEC_OPEN = {};      // which worksheet sections are expanded (default collapsed)
   function worksheetSectionIds(rec, type) {
     if (type === 'library') return ['kits', 'loading'].concat(QUBIT_TABLES.map((qt) => 'qb:' + qt.key)).concat(['notes']);
-    if (type === 'batchday') { const w = rec && rec.worksheets && rec.worksheets.batchday; const nSort = (w && w.sortStains && w.sortStains.length) || 1; const ids = ['pooling', 'cite']; for (let i = 0; i < nSort; i++) ids.push('sort:' + i); ids.push('notes'); return ids; }
+    if (type === 'batchday') { const w = rec && rec.worksheets && rec.worksheets.batchday; const nSort = (w && w.sortStains && w.sortStains.length) || 1; const ids = ['pooling', 'cite']; for (let i = 0; i < nSort; i++) ids.push('sort:' + i); ids.push('channels', 'notes'); return ids; }
     return ['notes'];
   }
   function worksheetComplete(rec, type) { const w = rec && rec.worksheets && rec.worksheets[type]; if (!w || !w.sectionDone) return false; const ids = worksheetSectionIds(rec, type); return ids.length > 0 && ids.every((id) => !!w.sectionDone[id]); }
@@ -59,9 +59,9 @@
       { id: 'reagents', label: 'Reagents & cost' } ] },
     record: { sidebar: true, panels: [
       { id: 'rec-freezer', label: 'Freezer Record' },
-      { id: 'rec-cellaca', label: 'Cellaca counts' }, { id: 'rec-batchday', label: 'Batch Day Worksheet' },
+      { id: 'rec-cellaca', label: 'Cellaca counts' }, { id: 'rec-batchday', label: 'Batch Day Entry' },
       { id: 'rec-sort', label: 'Sort summary' },
-      { id: 'rec-library', label: 'Library Worksheets' }, { id: 'rec-tapestation', label: 'Tapestation Output' },
+      { id: 'rec-library', label: 'Library Prep Entry' }, { id: 'rec-tapestation', label: 'Tapestation Output' },
       { id: 'rec-supply', label: 'Supply Usage' }, { id: 'rec-seqdata', label: 'Sequencing data' }, { id: 'rec-libstatus', label: 'Library status' }, { id: 'rec-notes', label: 'General notes' } ] },
     review: { sidebar: true, panels: [
       { id: 'rev-design', label: 'Experimental design' }, { id: 'rev-seq', label: 'Sequencing' },
@@ -169,8 +169,8 @@
   const REC_STUBS = {
     'rec-freezer': ['recFreezerContent', 'Freezer Record', 'Track sample storage moves here: samples moved to a temporary batch box, removed from the LN2 tank, and library/cDNA storage locations logged into the official freezer record. Coming soon \u2014 this will confirm each sample\u2019s chain of custody from LN2 \u2192 batch box \u2192 freezer.'],
     'rec-cellaca': ['recCellacaContent', 'Cellaca counts', 'Record cell-count readouts from the Cellaca here (per sample: live %, cells/mL). Coming soon \u2014 this will feed the Cell count sheet automatically.'],
-    'rec-batchday': ['recBatchdayContent', 'Batch Day Worksheet', 'Log the batch-day timeline and per-step notes here. Coming soon.'],
-    'rec-library': ['recLibraryContent', 'Library Worksheets', 'Enter per-library prep details (volumes, indexes used, yields). Coming soon.'],
+    'rec-batchday': ['recBatchdayContent', 'Batch Day Entry', 'Log the batch-day timeline and per-step notes here. Coming soon.'],
+    'rec-library': ['recLibraryContent', 'Library Prep Entry', 'Enter per-library prep details (volumes, indexes used, yields). Coming soon.'],
     'rec-tapestation': ['recTapestationContent', 'Tapestation Output', 'Attach or enter TapeStation traces and sizing per library. Coming soon.'],
     'rec-supply': ['recSupplyContent', 'Supply Usage', 'Record actual kit / reagent / tip usage for this experiment. Coming soon \u2014 will reconcile against Inventory.'],
     'rec-seqdata': ['recSeqdataContent', 'Sequencing data', 'Enter sequencing run info and data paths. Coming soon.']
@@ -212,9 +212,25 @@
   // on Library status / records even before the worksheet has migrated it).
   function qubitReadKeys() { return QUBIT_TABLES.concat([{ key: 'final5', title: "Final 5' libraries" }]); }
   // Expected tube IDs for a Qubit table, from the plan's lane counts per arm.
-  function qubitExpectedTubes(qtKey) {
+  // Planned 10X channels per modality (from the design).
+  function plannedLanes() {
     let lanes = { unsort: 0, asap: 0, sort: 0 };
     try { const c = computePooling(); lanes = laneOverridesFromCost(c.samples.length, (c.poolRes && c.poolRes.nPools) || 0, c.samples) || lanes; } catch (e) { /* */ }
+    return lanes;
+  }
+  // Effective channels: the actual number loaded (Batch Day Entry \u2192 10X channels loaded)
+  // when it's been entered, otherwise the planned number. Drives expected libraries, loading, etc.
+  function effectiveLanes() {
+    const lanes = plannedLanes();
+    try {
+      const rec = CURRENT_EXP_ID ? Store.getExperiment(CURRENT_EXP_ID) : null;
+      const ch = rec && rec.worksheets && rec.worksheets.batchday && rec.worksheets.batchday.channels;
+      if (ch) ['unsort', 'sort', 'asap'].forEach((k) => { const a = ch[k] && ch[k].actual; if (a != null && String(a).trim() !== '') { const n = parseInt(a, 10); if (!isNaN(n) && n >= 0) lanes[k] = n; } });
+    } catch (e) { /* */ }
+    return lanes;
+  }
+  function qubitExpectedTubes(qtKey) {
+    const lanes = effectiveLanes();
     const out = [];
     const add5 = (types) => { [['U', lanes.unsort], ['S', lanes.sort]].forEach((a) => { const pfx = a[0], n = a[1] || 0; types.forEach((t) => { for (let i = 1; i <= n; i++) out.push(pfx + i + '-' + t); }); }); };
     if (qtKey === 'cdna5') add5(['P']);
@@ -278,10 +294,10 @@
     return rounds.length ? rounds.map((rd) => ({ round: rd, rows: byRound[rd] })) : null;
   }
   const WORKSHEET_CFG = {
-    batchday: { title: 'Batch Day Worksheet', host: 'recBatchdayContent',
+    batchday: { title: 'Batch Day Entry', host: 'recBatchdayContent',
       kits: [],
       countCols: ['Tube / population', 'Total vol (µL)', 'Count', 'Total cell # (count×vol)', 'Dilution', 'Final conc (nuclei/µL)'] },
-    library: { title: 'Library Worksheets', host: 'recLibraryContent',
+    library: { title: 'Library Prep Entry', host: 'recLibraryContent',
       kits: [["Single Cell 5' GEM Kit v3", ''], ['Library Construction Kit C', ''], ["Single Cell 5' Gel Bead Kit v3", ''], ["GEM-X 5' Feature Barcode Kit v3, 16 rxns", 'PN-1000703'], ["GEM-X 5' Chip Kit v3, 4 chips", 'PN-1000698'], ['Dual Index Kit TT Set A, 96 rxns', 'PN-1000215'], ['Dual Index Kit TN Set A, 96 rxns', 'PN-1000250'], ['Single Cell Human TCR Amplification, 16 rxns', 'PN-1000252'], ['Single Cell Human BCR Amplification, 16 rxns', 'PN-1000253']],
       countCols: ['Population', 'Tube label', 'Total vol (µL)', 'Total count', 'Viability', 'Live count', 'Total live cell #', 'Dilution', 'Final conc (cells/µL)'] }
   };
@@ -376,6 +392,17 @@
       if (inp) { e.preventDefault(); inp.focus(); if (inp.select) inp.select(); }
     }));
   }
+  function bdChannelsBody(w) {
+    w.channels = w.channels || {};
+    const planned = plannedLanes();
+    const mods = [['unsort', "5' unsort"], ['sort', "5' sort"], ['asap', 'ASAP']];
+    let h = '<p class="step-hint">Enter the actual number of 10X channels loaded per modality. When set, downstream sections (Library Prep Entry expected libraries, 10X loading, etc.) use the actual count instead of the planned one \u2014 so if fewer channels were loaded, fewer libraries are expected.</p>';
+    h += '<table class="cost-table qb-table qb-narrow"><thead><tr><th>Modality</th><th>Planned channels</th><th>Actual loaded</th><th>Notes</th></tr></thead><tbody>';
+    mods.forEach((m) => { const k = m[0]; const c = (w.channels[k] = w.channels[k] || {});
+      h += '<tr><td><strong>' + esc(m[1]) + '</strong></td><td class="num">' + (planned[k] || 0) + '</td><td class="qb-cell">' + bdInp('bd-chan', 'data-k="' + k + '" data-f="actual"', c.actual == null ? '' : c.actual) + '</td><td class="qb-cell">' + bdInp('bd-chan', 'data-k="' + k + '" data-f="notes"', c.notes || '') + '</td></tr>';
+    });
+    return h + '</tbody></table>';
+  }
   function bdPoolingBody(w, ctx) {    w.pooling = w.pooling || {};
     if (!w.pooling.pools) w.pooling.pools = ctx.pools.map((p) => ({ label: 'Pool ' + p.idx, samples: p.samples.join(', ') }));
     w.pooling.pools.forEach((p) => { if (p.hto != null) delete p.hto; });
@@ -447,8 +474,7 @@
     const LOAD_ARMS = [['unsort', "Unsort 5'", 'U', 'Unsorted'], ['sort', "Sort 5'", 'S', ''], ['asap', 'ASAP', 'A', 'Unsorted']];
     let loadBody = '';
     if (type === 'library') {
-      let LANES = { unsort: 0, asap: 0, sort: 0 }; let SORTPOPS = [];
-      try { const c = computePooling(); LANES = laneOverridesFromCost(c.samples.length, (c.poolRes && c.poolRes.nPools) || 0, c.samples) || LANES; } catch (e) { /* */ }
+      let LANES = effectiveLanes(); let SORTPOPS = [];
       try { SORTPOPS = (sortSelList() || []).filter(Boolean); } catch (e) { /* */ }
       w.loading = w.loading || {};
       LOAD_ARMS.forEach((a) => { const key = a[0], pfx = a[2], defPop = a[3] || (SORTPOPS[0] || ''); if (!w.loading[key]) { const n = LANES[key] || 0; const rows = []; for (let i = 1; i <= n; i++) rows.push([String(Math.ceil(i / 8)), String(((i - 1) % 8) + 1), defPop, pfx + i, '', '']); if (!rows.length) rows.push(['', '', defPop, '', '', '']); w.loading[key] = rows; } });
@@ -486,6 +512,7 @@
       sectionsHtml += section('cite', 'CITE-seq staining', '', bdCiteBody(w, ctx, rec));
       w.sortStains.forEach((st, si) => { sectionsHtml += section('sort:' + si, 'Sort staining ' + (si + 1), '', bdSortBody(w, ctx, si)); });
       sectionsHtml += '<div class="row-actions" style="margin:2px 0 8px"><button class="btn ghost" id="bdAddSort">+ Add sort staining</button>' + (w.sortStains.length > 1 ? ' <button class="btn ghost" id="bdDelSort">Remove last sort staining</button>' : '') + '</div>';
+      sectionsHtml += section('channels', '10X channels loaded', '', bdChannelsBody(w));
       sectionsHtml += section('notes', 'Notes', '', notesBody);
     } else {
       sectionsHtml += section('notes', 'Notes', '', notesBody);
@@ -575,6 +602,7 @@
       host.querySelectorAll('button[data-sortcnt-del]').forEach((b) => b.addEventListener('click', () => { const p = b.dataset.sortcntDel.split('|'); w.sortStains[+p[0]].counts.splice(+p[1], 1); Store.saveExperiment(rec); renderWorksheet(type); }));
       const bdAddSort = $('#bdAddSort'); if (bdAddSort) bdAddSort.addEventListener('click', () => { w.sortStains.push({}); Store.saveExperiment(rec); renderWorksheet(type); });
       const bdDelSort = $('#bdDelSort'); if (bdDelSort) bdDelSort.addEventListener('click', () => { if (w.sortStains.length > 1) { delete w.sectionDone['sort:' + (w.sortStains.length - 1)]; w.sortStains.pop(); Store.saveExperiment(rec); renderWorksheet(type); } });
+      host.querySelectorAll('.bd-chan').forEach((el) => el.addEventListener('input', () => { const k = el.dataset.k; w.channels[k] = w.channels[k] || {}; w.channels[k][el.dataset.f] = el.value; bdSave(); }));
       attachGridArrows(host, '.bp-pool, .cite-u-hto, .cite-a-hto, .cite-u-cnt, .cite-a-cnt, .cite-lyo, .sort-hto, .sort-cnt');
     }
     const save = $('#wsSave'); if (save) save.addEventListener('click', () => saveWorksheet(rec, type));
@@ -638,7 +666,7 @@
       }
       rec.worksheets[type] = ws; ensureQubitShape(rec.worksheets[type]);
       if (type === 'library' && !ws.loading && prev.loading) ws.loading = prev.loading;
-      if (type === 'batchday') { ws.pooling = ws.pooling || prev.pooling; ws.cite = ws.cite || prev.cite; ws.sortStains = ws.sortStains || prev.sortStains; }
+      if (type === 'batchday') { ws.pooling = ws.pooling || prev.pooling; ws.cite = ws.cite || prev.cite; ws.sortStains = ws.sortStains || prev.sortStains; ws.channels = ws.channels || prev.channels; }
       ws.sectionDone = ws.sectionDone || prev.sectionDone;
       Store.saveExperiment(rec);
       if (stEl) stEl.textContent = ' Loaded from Drive.'; renderWorksheet(type);
@@ -1542,7 +1570,7 @@
         + '<table class="cost-table"><thead><tr><th>Pool</th><th class="num"># samples</th><th class="num">Target cells pooled</th><th>Samples</th></tr></thead><tbody>' + pr + '</tbody></table>';
     }
 
-    host.innerHTML = '<h2>Counts <span class="who">' + esc(rec.name || '') + '</span></h2>' + (body || '<p class="empty">No counts yet. Upload Cellaca counts (Record \u2192 Cellaca counts) and enter worksheet counts (Record \u2192 Batch Day / Library Worksheets).</p>');
+    host.innerHTML = '<h2>Counts <span class="who">' + esc(rec.name || '') + '</span></h2>' + (body || '<p class="empty">No counts yet. Upload Cellaca counts (Record \u2192 Cellaca counts) and enter worksheet counts (Record \u2192 Batch Day / Library Prep Entry).</p>');
   }
   function renderReviewKits() {
     const host = $('#revKitsContent'); if (!host) return;
@@ -1560,7 +1588,7 @@
     (bd.sortStains || []).forEach((st, si) => { htoHtml += htoRO('Sort staining ' + (si + 1) + ' hashtags', st.hto, (i) => (st.counts && st.counts[i] && st.counts[i].pool) || ('Sort pool ' + (i + 1))); });
     host.innerHTML = '<h2>Kit and supply usage <span class="who">' + esc(rec.name || '') + '</span></h2>'
       + '<h3>Recorded 10X kit lots &amp; rxns used</h3>'
-      + (kitRows ? '<table class="cost-table"><thead><tr><th>Worksheet</th><th>10X kit</th><th>PN</th><th>Lot #</th><th class="num">Rxns used</th><th>Notes</th></tr></thead><tbody>' + kitRows + '</tbody></table>' : '<p class="empty">No kit lots recorded yet. Enter them on Record \u2192 Batch Day / Library Worksheets.</p>')
+      + (kitRows ? '<table class="cost-table"><thead><tr><th>Worksheet</th><th>10X kit</th><th>PN</th><th>Lot #</th><th class="num">Rxns used</th><th>Notes</th></tr></thead><tbody>' + kitRows + '</tbody></table>' : '<p class="empty">No kit lots recorded yet. Enter them on Record \u2192 Batch Day / Library Prep Entry.</p>')
       + (htoHtml ? '<h3 style="margin-top:16px">Hashtags (TotalSeqC HTO) used</h3>' + htoHtml : '')
       + '<p class="who" style="margin-top:10px">Planned reagent quantities &amp; cost are on Plan \u2192 Reagents &amp; cost.</p>';
   }
@@ -1923,7 +1951,7 @@
       if (w.notes) body += '<h4>Notes</h4><p class="who" style="white-space:pre-wrap">' + esc(w.notes) + '</p>';
       body += '<div style="margin-bottom:18px"></div>';
     });
-    host.innerHTML = '<h2>Worksheets <span class="who">' + esc(rec.name || '') + '</span></h2>' + (body || '<p class="empty">Nothing recorded yet. Enter worksheet values on Record \u2192 Batch Day / Library Worksheets.</p>');
+    host.innerHTML = '<h2>Worksheets <span class="who">' + esc(rec.name || '') + '</span></h2>' + (body || '<p class="empty">Nothing recorded yet. Enter worksheet values on Record \u2192 Batch Day / Library Prep Entry.</p>');
   }
   function renderReviewData() {
     const host = $('#revDataContent'); if (!host) return;
@@ -6778,7 +6806,12 @@
   function esc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
   function escAttr(s) { return esc(s).replace(/"/g, '&quot;'); }
   // ---- boot -----------------------------------------------------------------
+  // one-time migration: experiment IDs now join with a dash (BCP-1, not BCP_1)
+  function migrateExpIdsToDash() {
+    try { (Store.allExperiments() || []).forEach((rec) => { if (rec.experimentId && /_\d+\s*$/.test(rec.experimentId)) { rec.experimentId = rec.experimentId.replace(/_(\d+)\s*$/, '-$1'); Store.saveExperiment(rec); } }); } catch (e) { /* */ }
+  }
   document.addEventListener('DOMContentLoaded', () => {
+    migrateExpIdsToDash();
     initTabs();
     initGrid();
     renderOptions();
