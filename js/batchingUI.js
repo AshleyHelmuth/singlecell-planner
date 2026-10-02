@@ -58,6 +58,54 @@
     host.querySelector('#bxRun').addEventListener('click', run);
   }
 
+  // Parse an uploaded Project_Samples workbook (.xlsx) or .csv into PARSED
+  // (same shape as a pasted table: { headers, rows:[{col:val}] }). One row per
+  // vial; EXAMPLE template rows are skipped. Works with whatever columns exist.
+  function loadFile(file) {
+    var colsHost = document.getElementById('bxCols');
+    var note = document.getElementById('bxUploadNote');
+    var reader = new FileReader();
+    reader.onload = function (e) {
+      try {
+        if (!root.XLSX) { if (colsHost) colsHost.innerHTML = '<div class="callout warn">Spreadsheet reader not loaded.</div>'; return; }
+        var wb = root.XLSX.read(e.target.result, { type: 'array' });
+        var sn = wb.SheetNames.filter(function (n) { return /project[_ ]?samples/i.test(n); })[0] || wb.SheetNames[0];
+        var aoa = root.XLSX.utils.sheet_to_json(wb.Sheets[sn], { header: 1, defval: '' });
+        if (!aoa || !aoa.length) { if (colsHost) colsHost.innerHTML = '<div class="callout warn">That sheet is empty.</div>'; return; }
+        var headers = (aoa[0] || []).map(function (h) { return String(h == null ? '' : h).trim(); });
+        var pidx = headers.map(function (h) { return h.toLowerCase(); }).indexOf('project_abbrev');
+        var rows = [];
+        for (var i = 1; i < aoa.length; i++) {
+          var r = aoa[i]; if (!r) continue;
+          if (pidx >= 0 && String(r[pidx] == null ? '' : r[pidx]).trim().toUpperCase() === 'EXAMPLE') continue;
+          var o = {}, any = false;
+          headers.forEach(function (hh, ci) { var v = (r[ci] == null ? '' : String(r[ci]).trim()); if (hh) o[hh] = v; if (v) any = true; });
+          if (any) rows.push(o);
+        }
+        PARSED = { headers: headers.filter(Boolean), rows: rows, sheet: sn };
+      } catch (err) { if (colsHost) colsHost.innerHTML = '<div class="callout warn">Could not read that file.</div>'; return; }
+      if (!PARSED.rows.length) { if (colsHost) colsHost.innerHTML = '<div class="callout warn">No sample rows found (only EXAMPLE rows?).</div>'; return; }
+      renderColumnPickers(colsHost);
+      autoSelectColumns();
+      document.getElementById('bxOutput').innerHTML = '';
+      if (note) note.textContent = PARSED.rows.length + ' vial rows loaded from \u201c' + PARSED.sheet + '\u201d. Adjust the column roles below, then Create batch plan.';
+    };
+    reader.readAsArrayBuffer(file);
+  }
+
+  // Sensible defaults for the standard template so it works out of the box.
+  function autoSelectColumns() {
+    if (!PARSED) return;
+    var idSel = document.getElementById('bxId');
+    if (idSel) { for (var i = 0; i < idSel.options.length; i++) { if (idSel.options[i].value.toLowerCase() === 'sample_id') { idSel.selectedIndex = i; break; } } }
+    var setRole = function (col, role) { var sel = '[data-bx-role="' + (root.CSS && CSS.escape ? CSS.escape(col) : col) + '"]'; var el = document.querySelector(sel); if (el) el.value = role; };
+    PARSED.headers.forEach(function (h) {
+      var lc = h.toLowerCase();
+      if (lc === 'subject_id' || lc === 'lineage') setRole(h, 'keep');
+      else if (lc === 'sex' || lc === 'group' || lc === 'cohort' || lc === 'race_ethnicity' || lc === 'timepoint') setRole(h, 'balance');
+    });
+  }
+
   var INFO = {
     total: 'Total imbalance = the sum of the association scores across all your balanced variables. 0 means batch membership is completely independent of every variable (ideal). Lower is better. Use it to compare batch-count options at a glance.',
     worst: 'Worst variable = the single largest association score among your balanced variables. Even if the total looks fine, a high worst value means one variable is poorly balanced. Lower is better.',
@@ -87,7 +135,12 @@
     var nB = Number(document.getElementById('bxN').value) || null;
     var per = Number(document.getElementById('bxPer').value) || null;
     var cols = balance.concat(keep);
-    var samples = PARSED.rows.map(function (r) { var o = { sampleId: r[idField] }; cols.forEach(function (f) { o[f] = r[f]; }); return o; }).filter(function (s) { return s.sampleId; });
+    // One entry per sample (uploads are one row per vial \u2014 collapse vials sharing a sample_id).
+    var seenId = {}, samples = [];
+    PARSED.rows.forEach(function (r) {
+      var id = r[idField]; if (!id || seenId[id]) return; seenId[id] = 1;
+      var o = { sampleId: id }; cols.forEach(function (f) { o[f] = r[f]; }); samples.push(o);
+    });
     var cmp;
     try {
       cmp = root.Batching.compareBatchCounts(samples, { balance: balance, keepTogether: keep }, { nBatches: nB, samplesPerBatch: per, idField: 'sampleId', iterations: 5000, seed: 12345, span: 1 });
@@ -197,8 +250,12 @@
       '<p class="who">Plan confounder-balanced batches for a whole project before assigning samples to experiments. Paste your sample table (CSV or tab-separated, with a header row), choose the ID column and how each column is used, and set the number of batches.</p>' +
       '<div id="bxNoProj" class="callout warn"' + (noProj ? '' : ' hidden') + '>Select or create a project on the <strong>Project manager</strong> tab before planning batches.</div>' +
       '<div class="bx-row"><label>Project <select id="bxProject"></select></label></div>' +
-      '<textarea id="bxPaste" rows="6" placeholder="sampleId,patientId,sex,age,cohort\n1234-d1-001,1234,F,42,A\n..." style="width:100%;font-family:monospace;font-size:12px"></textarea>' +
-      '<div class="bx-row"><button id="bxParse" class="btn">Parse samples</button></div>' +
+      '<div class="bx-row"><button id="bxTemplate" class="btn ghost" type="button">\u2b07 Download sample template</button> ' +
+      '<label class="btn file-btn" style="background:#1f6f6f;color:#fff">\u2b06 Upload Project_Samples (.xlsx/.csv)<input type="file" id="bxUpload" accept=".xlsx,.xls,.csv" hidden></label> ' +
+      '<span class="who" id="bxUploadNote"></span></div>' +
+      '<p class="who">Upload a filled <strong>Project_Samples</strong> sheet for the whole project (one row per vial) \u2014 or paste a table below. Download the template first so every project captures the same fields; include as much as you have and batching still works with whatever columns you provide.</p>' +
+      '<textarea id="bxPaste" rows="6" placeholder="sample_id,subject_id,sex,age,cohort\n1234-d1-001,1234,F,42,A\n...  (or use Upload above)" style="width:100%;font-family:monospace;font-size:12px"></textarea>' +
+      '<div class="bx-row"><button id="bxParse" class="btn">Parse pasted samples</button></div>' +
       '<div id="bxCols"></div><div id="bxOutput"></div>';
     host.appendChild(sec);
     var projSel = document.getElementById('bxProject');
@@ -215,8 +272,14 @@
       PARSED = parseTable(document.getElementById('bxPaste').value);
       if (!PARSED) { document.getElementById('bxCols').innerHTML = '<div class="callout warn">Need a header row plus at least one sample row.</div>'; return; }
       renderColumnPickers(document.getElementById('bxCols'));
+      autoSelectColumns();
       document.getElementById('bxOutput').innerHTML = '';
     });
+    { var tb = document.getElementById('bxTemplate'); if (tb) tb.addEventListener('click', function () { if (root.ProjectSamples && root.ProjectSamples.downloadTemplate) root.ProjectSamples.downloadTemplate(); }); }
+    { var up = document.getElementById('bxUpload'); if (up) up.addEventListener('change', function (e) { var f = e.target.files && e.target.files[0]; if (f) loadFile(f); e.target.value = ''; }); }
+    sec.addEventListener('dragover', function (e) { e.preventDefault(); sec.classList.add('bx-drag'); });
+    sec.addEventListener('dragleave', function (e) { if (e.target === sec) sec.classList.remove('bx-drag'); });
+    sec.addEventListener('drop', function (e) { e.preventDefault(); sec.classList.remove('bx-drag'); var f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0]; if (f) loadFile(f); });
     // refresh the no-project prompt whenever the tab is shown
     var tabBtn = document.querySelector('[data-tab="planproject"]');
     if (tabBtn) tabBtn.addEventListener('click', function () {

@@ -3450,6 +3450,8 @@
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(PROJECT_SAMPLE_DICT), 'Data_Dictionary');
     XLSX.writeFile(wb, 'Project_Samples_template.xlsx');
   }
+  // Shared with the Create-batch-plan module (batchingUI.js).
+  window.ProjectSamples = { COLS: PROJECT_SAMPLE_COLS, downloadTemplate: downloadProjectSamplesTemplate };
 
   function handleProjectSamplesUpload(file) {
     const note = $('#projectSamplesNote');
@@ -3493,8 +3495,6 @@
   }
 
   function initGrid() {
-    { const b = $('#dlSampleTemplate'); if (b) b.addEventListener('click', downloadProjectSamplesTemplate); }
-    { const u = $('#projectSamplesUpload'); if (u) u.addEventListener('change', (e) => { const f = e.target.files && e.target.files[0]; if (f) handleProjectSamplesUpload(f); e.target.value = ''; }); }
     $('#sampleGrid').addEventListener('input', gridInputHandler);
     $('#sampleGrid').addEventListener('click', gridClickHandler);
     $('#sampleGrid').addEventListener('paste', gridPasteHandler);
@@ -5647,16 +5647,19 @@
     })));
     addSheet('Samples & pools', sRows, [{ wch: 14 }, { wch: 22 }, { wch: 20 }, { wch: 12 }, { wch: 12 }, { wch: 12 }, { wch: 8 }, { wch: 16 }].concat(customSet.map(() => ({ wch: 14 }))));
 
-    // 3b) Project_Samples — the uploaded, uniform vial-level metadata (most complete upload wins)
+    // 3b) Project_Samples — the uploaded, uniform vial-level metadata + batch assignment
+    //     (from the project batch plan built on the Create batch plan tab).
     try {
-      const withPS = Store.allExperiments().filter((e) => e.project === project && e.projectSamples && e.projectSamples.rows && e.projectSamples.rows.length);
-      if (withPS.length) {
-        withPS.sort((a, b) => b.projectSamples.rows.length - a.projectSamples.rows.length);
-        const ps = withPS[0].projectSamples;
-        const psCols = (ps.columns && ps.columns.length) ? ps.columns : PROJECT_SAMPLE_COLS;
-        addSheet('Project_Samples', [psCols].concat(ps.rows), psCols.map(() => ({ wch: 16 })));
+      const bp = readBatchPlan(project);
+      if (bp && bp.samples && bp.samples.length) {
+        const idf = bp.idField || 'sample_id';
+        const asg = (bp.plan && bp.plan.assignment) || {};
+        const psCols = Object.keys(bp.samples[0] || {});
+        const outCols = psCols.concat(['batch']);
+        const psRows = bp.samples.map((s) => psCols.map((c) => (s[c] == null ? '' : s[c])).concat([asg[s[idf]] != null ? asg[s[idf]] : '']));
+        addSheet('Project_Samples', [outCols].concat(psRows), outCols.map(() => ({ wch: 16 })));
       }
-    } catch (e) { /* no uploaded samples */ }
+    } catch (e) { /* no batch plan uploaded */ }
 
     // 4) Cost by experiment
     const cHdr = ['Experiment_ID', 'Experiment', 'Date', 'Status', 'Samples', 'Pools', 'Est. cost ($)'];
