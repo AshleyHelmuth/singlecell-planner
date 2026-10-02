@@ -374,7 +374,7 @@
   }
   // counts table: one row per pool; conc (cells/mL), live%, total (=conc*1000), vol pooled
   function bdCountsTable(cls, rows, poolLabels) {
-    let h = '<table class="cost-table qb-table qb-narrow"><thead><tr><th>Pool</th><th>Cell conc (cells/mL)</th><th>Live %</th><th>Total cells (conc\u00d71000)</th><th>Vol pooled (\u00b5L)</th></tr></thead><tbody>';
+    let h = '<table class="cost-table qb-table qb-narrow"><thead><tr><th>Pool</th><th>Super-pool conc (cells/mL)</th><th>Live %</th><th>Total cells (conc\u00d71000)</th><th>Vol pooled (\u00b5L)</th></tr></thead><tbody>';
     poolLabels.forEach((p, i) => { const r = rows[i] || {}; const conc = parseFloat(r.conc); const total = isNaN(conc) ? '' : Math.round(conc * 1000).toLocaleString();
       h += '<tr><td><strong>' + esc(p) + '</strong></td><td class="qb-cell">' + bdInp(cls, 'data-i="' + i + '" data-f="conc"', r.conc) + '</td><td class="qb-cell">' + bdInp(cls, 'data-i="' + i + '" data-f="live"', r.live) + '</td><td class="num">' + (total || '\u2014') + '</td><td class="qb-cell">' + bdInp(cls, 'data-i="' + i + '" data-f="vol"', r.vol) + '</td></tr>';
     });
@@ -444,7 +444,7 @@
     let h = '<table class="cost-table qb-table qb-narrow"><thead><tr><th>Sort pool</th><th>TotalSeqC HTO#</th><th>Tube ID</th></tr></thead><tbody>';
     labels.forEach((p, i) => { h += '<tr><td><strong>' + esc(p) + '</strong></td><td class="qb-cell">' + bdInp('sort-hto', 'data-si="' + si + '" data-i="' + i + '" data-f="hto"', (st.hto[i] && st.hto[i].hto) || '') + '</td><td class="qb-cell">' + bdInp('sort-hto', 'data-si="' + si + '" data-i="' + i + '" data-f="tube"', (st.hto[i] && st.hto[i].tube) || '') + '</td></tr>'; });
     h += '</tbody></table>';
-    h += '<h4 style="margin:14px 0 4px">Sort pool cell counts</h4><div style="overflow:auto"><table class="cost-table qb-table qb-narrow"><thead><tr><th>Sort pool</th><th>Cell conc (cells/mL)</th><th>Vol (mL)</th><th>Total cells (conc\u00d7vol\u00d71000)</th><th>Vol pooled (\u00b5L)</th><th></th></tr></thead><tbody>'
+    h += '<h4 style="margin:14px 0 4px">Sort pool cell counts</h4><div style="overflow:auto"><table class="cost-table qb-table qb-narrow"><thead><tr><th>Sort pool</th><th>Super-pool conc (cells/mL)</th><th>Vol (mL)</th><th>Total cells (conc\u00d7vol\u00d71000)</th><th>Vol pooled (\u00b5L)</th><th></th></tr></thead><tbody>'
       + st.counts.map((r, i) => { const conc = parseFloat(r.conc), vol = parseFloat(r.vol); const total = (isNaN(conc) || isNaN(vol)) ? '' : Math.round(conc * vol * 1000).toLocaleString();
         return '<tr><td class="qb-cell">' + bdInp('sort-cnt', 'data-si="' + si + '" data-i="' + i + '" data-f="pool"', r.pool) + '</td><td class="qb-cell">' + bdInp('sort-cnt', 'data-si="' + si + '" data-i="' + i + '" data-f="conc"', r.conc) + '</td><td class="qb-cell">' + bdInp('sort-cnt', 'data-si="' + si + '" data-i="' + i + '" data-f="vol"', r.vol) + '</td><td class="num">' + (total || '\u2014') + '</td><td class="qb-cell">' + bdInp('sort-cnt', 'data-si="' + si + '" data-i="' + i + '" data-f="volPooled"', r.volPooled) + '</td><td><button class="btn tiny" data-sortcnt-del="' + si + '|' + i + '">\u2715</button></td></tr>'; }).join('')
       + '</tbody></table></div><div class="row-actions" style="margin:4px 0"><button class="btn ghost" data-sortcnt-add="' + si + '">+ Add sort pool</button></div>';
@@ -1359,7 +1359,7 @@
     if (!order.length) { XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([['No counts yet']]), 'Counts'); return wb; }
     const used = {};
     order.forEach((p) => {
-      const rows = [['Sample #', 'Sample ID', 'Tube label', 'Well', 'Thawer', 'Live (cells/mL)', 'Viability (%)', 'Total (cells/mL)', 'Notes', 'Uploaded']];
+      const rows = [['sample_number', 'sample_id', 'tube_id', 'well', 'thawer', 'cellaca_conc_cells_ml', 'viability_pct', 'cellaca_total_cells_ml', 'notes', 'uploaded_at']];
       byPurpose[p].slice().sort((a, b) => (a.sampleNo || 0) - (b.sampleNo || 0))
         .forEach((r) => rows.push([r.sampleNo, r.sampleId, r.tubeLabel || '', r.well, r.thawer || '', r.live != null ? r.live : '', r.viability != null ? r.viability : '', r.total != null ? r.total : '', r.notes || '', r.uploadedAt || '']));
       const ws = XLSX.utils.aoa_to_sheet(rows);
@@ -3406,7 +3406,95 @@
     if (t.checked) CONFOUNDER_CHECKED_IDX.add(i); else CONFOUNDER_CHECKED_IDX.delete(i);
   }
 
+  // Canonical Project_Samples columns (one row per vial/aliquot). Matches the
+  // shared project-metadata template so everyone uploads the same shape.
+  const PROJECT_SAMPLE_COLS = ['project_abbrev', 'sample_id', 'subject_id', 'cohort', 'group', 'sex', 'date_of_birth', 'date_enrollment', 'age_at_enrollment', 'race_ethnicity', 'lineage', 'enrollment_site', 'timepoint', 'treatment', 'treatment_date', 'visit_id', 'collection_date', 'collection_site', 'age_at_collection', 'sample_type', 'processing_date', 'processed_by', 'aliquot_id', 'volume_uL', 'cells_per_vial', 'date_aliquoted', 'storage_id', 'shipment_batch', 'sample_notes'];
+  const PROJECT_SAMPLE_DICT = [
+    ['column', 'tier', 'definition'],
+    ['project_abbrev', 'Required', 'Short project code, e.g. BCP, IDvax.'],
+    ['sample_id', 'Required', 'Unique per sample (subject + timepoint), e.g. S01_D0. Repeats across that sample\u2019s vials.'],
+    ['subject_id', 'Required', 'De-identified subject ID. Never names or MRNs.'],
+    ['cohort', 'Recommended', 'Cohort / study name.'],
+    ['group', 'Recommended', 'Study arm / clinical group.'],
+    ['sex', 'Recommended', 'Female / Male / Unknown.'],
+    ['date_of_birth', 'Optional (PHI)', 'YYYY-MM-DD. PHI \u2014 keep on approved storage; remove before sharing.'],
+    ['date_enrollment', 'Optional', 'Date the subject enrolled (YYYY-MM-DD).'],
+    ['age_at_enrollment', 'Optional', 'Age at enrollment.'],
+    ['race_ethnicity', 'Optional', 'Self-reported race/ethnicity.'],
+    ['lineage', 'Optional', 'Shared label for related subjects (family/dyad) so they stay in the same pool.'],
+    ['enrollment_site', 'Optional', 'Enrollment site.'],
+    ['timepoint', 'Recommended', 'Visit / timepoint label, e.g. D0, D7, D28.'],
+    ['treatment', 'Optional', 'Treatment given.'],
+    ['treatment_date', 'Optional', 'YYYY-MM-DD.'],
+    ['visit_id', 'Optional', 'Visit identifier.'],
+    ['collection_date', 'Recommended', 'Sample collection date (YYYY-MM-DD).'],
+    ['collection_site', 'Optional', 'Collection site.'],
+    ['age_at_collection', 'Optional', 'Age at collection.'],
+    ['sample_type', 'Recommended', 'e.g. PBMC, whole blood.'],
+    ['processing_date', 'Optional', 'YYYY-MM-DD.'],
+    ['processed_by', 'Optional', 'Who processed the sample.'],
+    ['aliquot_id', 'Recommended', 'Unique per vial, e.g. S01_D0_A1. One row per aliquot.'],
+    ['volume_uL', 'Optional', 'Vial volume (\u00b5L).'],
+    ['cells_per_vial', 'Recommended', 'Cells in this vial. Summed across a sample\u2019s vials to estimate cells available.'],
+    ['date_aliquoted', 'Optional', 'YYYY-MM-DD.'],
+    ['storage_id', 'Recommended', 'Pointer into the sample-management software (FreezerPro/LabKey) where vial location lives.'],
+    ['shipment_batch', 'Optional', 'Shipment / batch grouping.'],
+    ['sample_notes', 'Optional', 'Free text.']
+  ];
+  function downloadProjectSamplesTemplate() {
+    const example = ['BCP', 'S01_D0', 'S01', 'EX-cohort', 'Vaccinated', 'Female', '', '', '', '', '', '', 'D0', '', '', 'V01', '', '', '', 'PBMC', '', '', 'S01_D0_A1', '1000', '5000000', '', 'FP10001', '', ''];
+    const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.aoa_to_sheet([PROJECT_SAMPLE_COLS, example]);
+    ws['!cols'] = PROJECT_SAMPLE_COLS.map(() => ({ wch: 16 }));
+    XLSX.utils.book_append_sheet(wb, ws, 'Project_Samples');
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(PROJECT_SAMPLE_DICT), 'Data_Dictionary');
+    XLSX.writeFile(wb, 'Project_Samples_template.xlsx');
+  }
+
+  function handleProjectSamplesUpload(file) {
+    const note = $('#projectSamplesNote');
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      let wb; try { wb = XLSX.read(e.target.result, { type: 'array' }); } catch (err) { if (note) note.textContent = 'Could not read that file.'; return; }
+      const sheetName = wb.SheetNames.find((n) => /project[_ ]?samples/i.test(n)) || wb.SheetNames[0];
+      const aoa = XLSX.utils.sheet_to_json(wb.Sheets[sheetName], { header: 1, defval: '' });
+      if (!aoa.length) { if (note) note.textContent = 'That sheet is empty.'; return; }
+      const hdr = (aoa[0] || []).map((h) => String(h == null ? '' : h).trim().toLowerCase());
+      const col = (name) => hdr.indexOf(name);
+      const ci = { sampleId: col('sample_id'), subject: col('subject_id'), lineage: col('lineage'), cells: col('cells_per_vial'), proj: col('project_abbrev'),
+        Timepoint: col('timepoint'), Cohort: col('cohort'), Group: col('group'), Sex: col('sex'), Race_ethnicity: col('race_ethnicity') };
+      if (ci.sampleId < 0) { if (note) note.textContent = 'No sample_id column \u2014 please use the template.'; return; }
+      const CONF = ['Timepoint', 'Cohort', 'Group', 'Sex', 'Race_ethnicity'];
+      const bySample = {}, order = [], dataRows = [];
+      for (let i = 1; i < aoa.length; i++) {
+        const r = aoa[i]; if (!r) continue;
+        const sid = String(r[ci.sampleId] == null ? '' : r[ci.sampleId]).trim(); if (!sid) continue;
+        if (ci.proj >= 0 && String(r[ci.proj] || '').trim().toUpperCase() === 'EXAMPLE') continue;   // skip template example rows
+        dataRows.push(r);
+        if (!bySample[sid]) { bySample[sid] = { sampleId: sid, patientId: '', lineage: '', cells: 0, hasCells: false, conf: {} }; order.push(sid); }
+        const s = bySample[sid];
+        const gv = (idx) => idx >= 0 ? String(r[idx] == null ? '' : r[idx]).trim() : '';
+        if (!s.patientId) s.patientId = gv(ci.subject);
+        if (!s.lineage) s.lineage = gv(ci.lineage);
+        CONF.forEach((k) => { if (!s.conf[k]) { const v = gv(ci[k]); if (v) s.conf[k] = v; } });
+        if (ci.cells >= 0) { const cv = Number(String(r[ci.cells] == null ? '' : r[ci.cells]).replace(/[^0-9.\-]/g, '')); if (!isNaN(cv) && cv) { s.cells += cv; s.hasCells = true; } }
+      }
+      if (!order.length) { if (note) note.textContent = 'No sample rows found (only EXAMPLE rows?).'; return; }
+      const keepConf = CONF.filter((k) => order.some((sid) => bySample[sid].conf[k]));   // only columns that actually have data
+      CUSTOM_COLS = keepConf.slice();
+      CONFOUNDER_CHECKED_IDX = new Set();
+      GRID_ROWS = order.map((sid) => { const s = bySample[sid]; return [s.sampleId, s.patientId || '', s.lineage || '', s.hasCells ? String(s.cells) : ''].concat(keepConf.map((k) => s.conf[k] || '')); });
+      POOL_OVERRIDE = null; LANE_OVERRIDE = null;
+      if (CURRENT_EXP_ID) { const rec = Store.getExperiment(CURRENT_EXP_ID); if (rec) { rec.projectSamples = { sheet: sheetName, columns: (aoa[0] || []).map((h) => String(h == null ? '' : h)), rows: dataRows.map((r) => (r || []).map((c) => (c == null ? '' : c))) }; Store.saveExperiment(rec); } }
+      renderGrid(); resetPoolingPreview();
+      if (note) note.textContent = 'Loaded ' + order.length + ' samples from ' + dataRows.length + ' vial rows' + (keepConf.length ? ' \u00b7 confounders: ' + keepConf.join(', ') : '') + '.';
+    };
+    reader.readAsArrayBuffer(file);
+  }
+
   function initGrid() {
+    { const b = $('#dlSampleTemplate'); if (b) b.addEventListener('click', downloadProjectSamplesTemplate); }
+    { const u = $('#projectSamplesUpload'); if (u) u.addEventListener('change', (e) => { const f = e.target.files && e.target.files[0]; if (f) handleProjectSamplesUpload(f); e.target.value = ''; }); }
     $('#sampleGrid').addEventListener('input', gridInputHandler);
     $('#sampleGrid').addEventListener('click', gridClickHandler);
     $('#sampleGrid').addEventListener('paste', gridPasteHandler);
@@ -3873,7 +3961,7 @@
         <div class="summary-card"><span class="sc-num">${Object.values(plan.lanesByArm).reduce((a, b) => a + b, 0) || '—'}</span><span class="sc-lbl">10x lanes</span></div>
       </div>`;
     $('#workflowContent').innerHTML = `
-      <div class="section-head"><h2>Workflow</h2><button class="btn ghost" onclick="window.print()">Print / save PDF</button></div>
+      <div class="section-head"><h2>Workflow</h2><span><button class="btn primary" id="editBatchPlanBtn" type="button">Review &amp; edit batch plan</button> <button class="btn ghost" onclick="window.print()">Print / save PDF</button></span></div>
       ${manualNote}${warn}${summary}
       <h3>Cell flow &amp; pooling</h3>
       <p class="muted">How cells move from samples \u2192 fixed per-sample takes (pooling / stim / bulk) \u2192 genetic pools \u2192 per-modality cells (unsort &amp; ASAP take a fixed amount per pool; sort takes the remainder) \u2192 loading channels \u2192 libraries. All the cell-count numbers (pooling take, bulk &amp; stim reserves, cells taken per pool, ALLCELLS %) live in the <strong>Cell_Flow_Assumptions</strong> sheet of the spreadsheet \u2014 edit there and reload. Channel counts come from the recovered-cell lane math (Step 04); the upstream numbers are raw thaw-cell counts.</p>
@@ -3884,6 +3972,7 @@
       <h3>Batch scenario &amp; numbers ${infoDot('perSampleAllocation')}</h3>
       <p class="muted">Per-sample cell allocation, pool-size comparison, per-arm lane/chip/library counts, sort-population fill (dynamic lane assignment), and library-by-type pooling \u2014 computed from this plan and the assumptions in Step 04. Click any <span class="info-i-inline">i</span> for where a number comes from.</p>
       <div id="scenarioHolder">${(window.Pooling && window.Workflow) ? (function () { const sc = scenarioForPlan(plan); return sc ? Workflow.renderExplore(sc, (spp) => { const a = readScenarioAssumptions(); return Pooling.exploreScenario(Object.assign({}, a, { nSamples: plan.nSamples, samplesPerPool: spp, sortPopulations: sortSelList(), arms: sc.cfg.arms })); }) : ''; })() : ''}</div>`;
+    { const b = $('#editBatchPlanBtn'); if (b) b.addEventListener('click', () => selectTop('plan', 'modify')); }
     updateNav();
   }
 
@@ -5558,6 +5647,17 @@
     })));
     addSheet('Samples & pools', sRows, [{ wch: 14 }, { wch: 22 }, { wch: 20 }, { wch: 12 }, { wch: 12 }, { wch: 12 }, { wch: 8 }, { wch: 16 }].concat(customSet.map(() => ({ wch: 14 }))));
 
+    // 3b) Project_Samples — the uploaded, uniform vial-level metadata (most complete upload wins)
+    try {
+      const withPS = Store.allExperiments().filter((e) => e.project === project && e.projectSamples && e.projectSamples.rows && e.projectSamples.rows.length);
+      if (withPS.length) {
+        withPS.sort((a, b) => b.projectSamples.rows.length - a.projectSamples.rows.length);
+        const ps = withPS[0].projectSamples;
+        const psCols = (ps.columns && ps.columns.length) ? ps.columns : PROJECT_SAMPLE_COLS;
+        addSheet('Project_Samples', [psCols].concat(ps.rows), psCols.map(() => ({ wch: 16 })));
+      }
+    } catch (e) { /* no uploaded samples */ }
+
     // 4) Cost by experiment
     const cHdr = ['Experiment_ID', 'Experiment', 'Date', 'Status', 'Samples', 'Pools', 'Est. cost ($)'];
     const cRows = [cHdr];
@@ -5995,7 +6095,7 @@
     // ---- Counts tab (Cellaca readouts entered on Record -> Cellaca counts) ----
     const cellList = (rec && rec.cellacaCountsList) || [];
     const ctRows = [['How to use: populated from the Cellaca WellLevel files uploaded on Record \u2192 Cellaca counts.'], [],
-      ['Sample #', 'Sample ID', 'Tube label', 'Well', 'Count for', 'Thawer', 'Live (cells/mL)', 'Viability (%)', 'Total (cells/mL)', 'Notes']];
+      ['sample_number', 'sample_id', 'tube_id', 'well', 'count_purpose', 'thawer', 'cellaca_conc_cells_ml', 'viability_pct', 'cellaca_total_cells_ml', 'notes']];
     const _ctNoMap = (function () { try { return sampleNoMap().byId; } catch (e) { return {}; } })();
     const _ctNo = (c) => (c.sampleId && _ctNoMap[c.sampleId] != null) ? _ctNoMap[c.sampleId] : (c.sampleNo != null ? c.sampleNo : '');
     cellList.slice().sort((a, b) => (Number(_ctNo(a)) || 0) - (Number(_ctNo(b)) || 0) || String(a.purpose || '').localeCompare(String(b.purpose || '')))

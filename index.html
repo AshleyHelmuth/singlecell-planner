@@ -97,7 +97,12 @@
             <button type="button" class="info-i" data-explain="inputMode">i</button>
           </div>
           <div id="gridInputWrap">
-            <p class="step-hint">One row per sample — paste directly from Excel/Sheets. Give each a <strong>Sample ID</strong> and <strong>Patient ID</strong> (repeat Patient ID for a donor’s timepoints; share a <strong>Lineage</strong> label for related people). Add columns for confounders, then flag which to spread across pools.</p>
+            <p class="step-hint">Upload a filled <strong>Project_Samples</strong> sheet (one row per vial — the template has every field; include as much as you have and pooling still works with whatever you provide), or paste/type one row per sample below. Each sample needs a <strong>Sample ID</strong> and <strong>Subject ID</strong> (repeat Subject ID for a donor’s timepoints; share a <strong>Lineage</strong> label for related people).</p>
+            <div class="row-actions" style="margin-bottom:8px">
+              <button id="dlSampleTemplate" class="btn ghost" type="button">\u2b07 Download sample template</button>
+              <label class="btn file-btn" style="background:#1f6f6f;color:#fff">\u2b06 Upload Project_Samples<input type="file" id="projectSamplesUpload" accept=".xlsx,.xls,.csv" hidden /></label>
+              <span class="muted small" id="projectSamplesNote"></span>
+            </div>
             <div class="row-actions">
               <button id="addGridRow" class="btn ghost" type="button">+ Row</button>
               <button id="addGridCol" class="btn ghost" type="button">+ Column</button>
