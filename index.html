@@ -289,6 +289,11 @@
   <div id="explainBody"></div>
 </aside>
 <script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
+<script>window.XLSX_COMMUNITY = window.XLSX;</script>
+<!-- Style-capable SheetJS fork, isolated as window.XLSXStyle. Used ONLY for the styled
+     Project_Samples template + project-summary coloring; all other exports keep the
+     community build above. If this CDN is unreachable, styled fills are simply skipped. -->
+<script src="https://cdn.jsdelivr.net/npm/xlsx-js-style@1.2.0/dist/xlsx.bundle.js" onload="window.XLSXStyle=window.XLSX;window.XLSX=window.XLSX_COMMUNITY;" onerror="window.XLSX=window.XLSX_COMMUNITY;"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 <script>if(window.pdfjsLib){pdfjsLib.GlobalWorkerOptions.workerSrc="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";}</script>

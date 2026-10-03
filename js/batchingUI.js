@@ -253,7 +253,8 @@
       '<div class="bx-row"><button id="bxTemplate" class="btn ghost" type="button">\u2b07 Download sample template</button> ' +
       '<label class="btn file-btn" style="background:#1f6f6f;color:#fff">\u2b06 Upload Project_Samples (.xlsx/.csv)<input type="file" id="bxUpload" accept=".xlsx,.xls,.csv" hidden></label> ' +
       '<span class="who" id="bxUploadNote"></span></div>' +
-      '<p class="who">Upload a filled <strong>Project_Samples</strong> sheet for the whole project (one row per vial) \u2014 or paste a table below. Download the template first so every project captures the same fields; include as much as you have and batching still works with whatever columns you provide.</p>' +
+      '<div class="callout" style="background:#eef4fb;border-left:4px solid #1f3864;padding:8px 10px;margin:6px 0"><strong>Use the provided template.</strong> Samples must be entered in the <strong>Project_Samples</strong> format \u2014 click <em>Download sample template</em> first and fill it in (one row per vial). Uploading a sheet that doesn\u2019t follow the template\u2019s column names may not parse correctly. Include as much as you have; batching works with whatever columns are present.</div>' +
+      '<p class="who">Upload a filled Project_Samples sheet for the whole project, or paste a table below.</p>' +
       '<textarea id="bxPaste" rows="6" placeholder="sample_id,subject_id,sex,age,cohort\n1234-d1-001,1234,F,42,A\n...  (or use Upload above)" style="width:100%;font-family:monospace;font-size:12px"></textarea>' +
       '<div class="bx-row"><button id="bxParse" class="btn">Parse pasted samples</button></div>' +
       '<div id="bxCols"></div><div id="bxOutput"></div>';

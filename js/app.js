@@ -3442,16 +3442,36 @@
     ['sample_notes', 'Optional', 'Free text.']
   ];
   function downloadProjectSamplesTemplate() {
-    const example = ['BCP', 'S01_D0', 'S01', 'EX-cohort', 'Vaccinated', 'Female', '', '', '', '', '', '', 'D0', '', '', 'V01', '', '', '', 'PBMC', '', '', 'S01_D0_A1', '1000', '5000000', '', 'FP10001', '', ''];
-    const wb = XLSX.utils.book_new();
-    const ws = XLSX.utils.aoa_to_sheet([PROJECT_SAMPLE_COLS, example]);
-    ws['!cols'] = PROJECT_SAMPLE_COLS.map(() => ({ wch: 16 }));
-    XLSX.utils.book_append_sheet(wb, ws, 'Project_Samples');
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(PROJECT_SAMPLE_DICT), 'Data_Dictionary');
-    XLSX.writeFile(wb, 'Project_Samples_template.xlsx');
+    // Ship the organization's exact styled template (tiered header colors, QC-check
+    // formulas, README) rather than regenerating it \u2014 preserves all formatting.
+    const a = document.createElement('a');
+    a.href = 'data/Project_Samples_template.xlsx';
+    a.download = 'Project_Samples_template.xlsx';
+    document.body.appendChild(a); a.click(); a.remove();
   }
   // Shared with the Create-batch-plan module (batchingUI.js).
   window.ProjectSamples = { COLS: PROJECT_SAMPLE_COLS, downloadTemplate: downloadProjectSamplesTemplate };
+
+  // Tiered header colors matching the org template: navy = required, blue = recommended,
+  // gray = optional, green = derived/QC. Only renders when the style-capable build is present.
+  const PS_BLUE = ['date_of_birth', 'date_enrollment', 'race_ethnicity', 'enrollment_site', 'treatment', 'age_at_collection', 'processing_date', 'processed_by', 'volume_ul', 'cells_per_vial', 'date_aliquoted', 'storage_id'];
+  const PS_GRAY = ['lineage', 'treatment_date', 'visit_id', 'collection_site', 'shipment_batch', 'sample_notes', 'comment', 'notes'];
+  const PS_GREEN = ['batch', 'n_modalities', 'check_aliquot_unique', 'check_subject_consistent', 'check_sample_consistent'];
+  function psHeaderFill(name) {
+    const c = String(name == null ? '' : name).toLowerCase();
+    if (PS_GREEN.indexOf(c) >= 0 || c.indexOf('check_') === 0) return { bg: '548235', fg: 'FFFFFF' };
+    if (PS_BLUE.indexOf(c) >= 0) return { bg: '4472C4', fg: 'FFFFFF' };
+    if (PS_GRAY.indexOf(c) >= 0) return { bg: 'BFBFBF', fg: '000000' };
+    return { bg: '1F3864', fg: 'FFFFFF' };   // navy = required / default
+  }
+  function styleHeaderRow(XL, ws, headerCols, tiered) {
+    if (!window.XLSXStyle || !ws) return;   // only the style build renders fills
+    headerCols.forEach((name, ci) => {
+      const addr = XL.utils.encode_cell({ r: 0, c: ci }); if (!ws[addr]) return;
+      const t = tiered ? psHeaderFill(name) : { bg: '1F3864', fg: 'FFFFFF' };
+      ws[addr].s = { fill: { patternType: 'solid', fgColor: { rgb: t.bg } }, font: { bold: true, sz: 10, color: { rgb: t.fg } }, alignment: { vertical: 'center', wrapText: true } };
+    });
+  }
 
   function handleProjectSamplesUpload(file) {
     const note = $('#projectSamplesNote');
@@ -5615,8 +5635,9 @@
     const exps = withSnapshotExps(project);
     const proj = Store.allProjects().find((p) => p.name === project);
     const abbrev = (proj && proj.abbreviation) || '';
-    const wb = XLSX.utils.book_new();
-    const addSheet = (name, aoa, cols) => { const ws = XLSX.utils.aoa_to_sheet(aoa); if (cols) ws['!cols'] = cols; XLSX.utils.book_append_sheet(wb, ws, name); };
+    const XL = window.XLSXStyle || XLSX;   // style-capable build for header colors
+    const wb = XL.utils.book_new();
+    const addSheet = (name, aoa, cols) => { const ws = XL.utils.aoa_to_sheet(aoa); if (cols) ws['!cols'] = cols; XL.utils.book_append_sheet(wb, ws, name); return ws; };
 
     // 1) Overview
     let totalSamples = 0, totalCost = 0; const dates = []; const statusCount = {}; const modSet = {};
@@ -5657,7 +5678,8 @@
         const psCols = Object.keys(bp.samples[0] || {});
         const outCols = psCols.concat(['batch']);
         const psRows = bp.samples.map((s) => psCols.map((c) => (s[c] == null ? '' : s[c])).concat([asg[s[idf]] != null ? asg[s[idf]] : '']));
-        addSheet('Project_Samples', [outCols].concat(psRows), outCols.map(() => ({ wch: 16 })));
+        const psWs = addSheet('Project_Samples', [outCols].concat(psRows), outCols.map(() => ({ wch: 16 })));
+        styleHeaderRow(XL, psWs, outCols, true);   // tiered template colors
       }
     } catch (e) { /* no batch plan uploaded */ }
 
@@ -5754,7 +5776,7 @@
 
   function downloadProjectSummary(project) {
     if (!withSnapshotExps(project).length) { alert('No saved experiments with computed plans in this project yet.'); return; }
-    XLSX.writeFile(buildProjectWb(project), 'project_' + projectLabel(project) + '_summary.xlsx');
+    (window.XLSXStyle||XLSX).writeFile(buildProjectWb(project), 'project_' + projectLabel(project) + '_summary.xlsx');
   }
 
   async function exportProjectSummaryToDrive(project) {
@@ -5764,7 +5786,7 @@
       const path = await driveApi({ action: 'ensurePath', project: project });
       if (!path || !path.projectId) { alert('Could not reach the project\u2019s Drive folder.'); return; }
       const res = await driveApi({ action: 'upload', name: 'Project summary', folderId: path.projectId,
-        base64: wbBase64(buildProjectWb(project)), sourceMime: XLSX_MIME, targetMime: GSHEET_MIME });
+        base64: (window.XLSXStyle||XLSX).write(buildProjectWb(project), { bookType: 'xlsx', type: 'base64' }), sourceMime: XLSX_MIME, targetMime: GSHEET_MIME });
       if (res && res.id) { const pr = Store.allProjects().find((p) => p.name === project); if (pr) { pr.projectSummaryFileId = res.id; Store.saveProject(pr); } alert('Project summary saved to the project\u2019s Drive folder.'); renderManage(); }
       else alert('Upload failed: ' + JSON.stringify(res));
     } catch (e) { alert('Project summary export failed: ' + e); }
