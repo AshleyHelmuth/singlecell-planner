@@ -620,6 +620,18 @@ h3{font-size:15px;margin:22px 0 10px}
 .bx-colname { font-size: 12px; font-weight: 600; color: #2e4a62; }
 .bx-col select { font-size: 12px; }
 
+/* Three category checklist dropdowns (keep / balance / ignore) */
+.bx-rolerow { display: flex; flex-wrap: wrap; gap: 12px; margin: 10px 0; }
+.bx-drop { flex: 1 1 200px; min-width: 180px; border: 1px solid #d0d7de; border-radius: 8px; background: #fff; }
+.bx-drop > summary { cursor: pointer; font-weight: 600; color: #1f3864; padding: 8px 10px; list-style: none; user-select: none; }
+.bx-drop > summary::-webkit-details-marker { display: none; }
+.bx-drop > summary::before { content: "\25b8"; display: inline-block; margin-right: 6px; transition: transform .15s; color: #6b7682; }
+.bx-drop[open] > summary::before { transform: rotate(90deg); }
+.bx-count { color: #6b7682; font-weight: 400; font-size: 12px; }
+.bx-checks { display: flex; flex-direction: column; gap: 4px; max-height: 220px; overflow: auto; padding: 4px 10px 10px; border-top: 1px solid #eef1f4; }
+.bx-chk { font-size: 13px; display: flex; align-items: center; gap: 7px; padding: 2px 0; cursor: pointer; }
+.bx-chk input { margin: 0; }
+
 /* Batching comparison + visuals + info */
 .bx-h { margin: 16px 0 6px; }
 .bx-cmp .bx-opt { cursor: pointer; }

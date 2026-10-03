@@ -35,26 +35,60 @@
     sel.innerHTML = names.map(function (n) { return '<option value="' + esc(n) + '">' + esc(n) + '</option>'; }).join('') || '<option value="">(create a project first)</option>';
   }
 
+  // Columns never offered as batching variables (vial-level / admin fields).
+  var BX_EXCLUDE = { processing_date: 1, processed_by: 1, aliquot_id: 1, volume_ul: 1, cells_per_vial: 1, date_aliquoted: 1, storage_id: 1, shipment_batch: 1, sample_notes: 1 };
+
   function renderColumnPickers(host) {
     if (!PARSED) { host.innerHTML = ''; return; }
-    var h = PARSED.headers;
+    // only columns that are actually filled in (and not excluded)
+    var filled = PARSED.headers.filter(function (hh) {
+      if (!hh) return false;
+      if (BX_EXCLUDE[hh.toLowerCase()]) return false;
+      return PARSED.rows.some(function (r) { return String(r[hh] == null ? '' : r[hh]).trim() !== ''; });
+    });
+    var defaultId = filled.filter(function (hh) { return hh.toLowerCase() === 'sample_id'; })[0] || filled[0] || '';
+    var roleCols = filled.filter(function (hh) { return hh !== defaultId; });
+    function defCat(hh) {
+      var lc = hh.toLowerCase();
+      if (lc === 'subject_id' || lc === 'lineage') return 'keep';
+      if (lc === 'sex' || lc === 'group' || lc === 'cohort' || lc === 'race_ethnicity' || lc === 'timepoint') return 'balance';
+      return 'ignore';
+    }
+    function chkList(cat) {
+      if (!roleCols.length) return '<span class="who">(no filled columns)</span>';
+      return roleCols.map(function (hh) {
+        return '<label class="bx-chk"><input type="checkbox" class="bx-catchk" data-bx-cat="' + cat + '" data-bx-col="' + esc(hh) + '"' + (defCat(hh) === cat ? ' checked' : '') + '> ' + esc(hh) + '</label>';
+      }).join('');
+    }
     host.innerHTML =
       '<div class="bx-row"><label>ID column <select id="bxId">' +
-      h.map(function (c) { return '<option value="' + esc(c) + '">' + esc(c) + '</option>'; }).join('') +
+      filled.map(function (c) { return '<option value="' + esc(c) + '"' + (c === defaultId ? ' selected' : '') + '>' + esc(c) + '</option>'; }).join('') +
       '</select></label></div>' +
-      '<div class="bx-collabels"><span class="bx-lbl">Set how each column is used:</span></div>' +
-      '<div class="bx-cols">' + h.map(function (c) {
-        return '<div class="bx-col"><span class="bx-colname">' + esc(c) + '</span>' +
-          '<select data-bx-role="' + esc(c) + '">' +
-          '<option value="ignore">Ignore</option>' +
-          '<option value="balance">Balance (spread evenly)</option>' +
-          '<option value="keep">Keep together (same value \u2192 same batch)</option>' +
-          '</select></div>';
-      }).join('') + '</div>' +
+      '<div class="bx-rolerow">' +
+      '<details class="bx-drop" open><summary>Keep together <span class="bx-count"></span></summary><div class="bx-checks">' + chkList('keep') + '</div></details>' +
+      '<details class="bx-drop" open><summary>Balance <span class="bx-count"></span></summary><div class="bx-checks">' + chkList('balance') + '</div></details>' +
+      '<details class="bx-drop"><summary>Ignore <span class="bx-count"></span></summary><div class="bx-checks">' + chkList('ignore') + '</div></details>' +
+      '</div>' +
       '<div class="bx-row"><label>Batches <input id="bxN" type="number" min="1" value="2" style="width:5em"></label>' +
       ' <span class="who">or</span> <label>target samples/batch <input id="bxPer" type="number" min="1" placeholder="auto" style="width:6em"></label>' +
       ' <button id="bxRun" class="btn">Create batch plan</button></div>' +
-      '<p class="who">' + PARSED.rows.length + ' samples parsed. <strong>Balance</strong> spreads a variable evenly across batches to minimize confounding; <strong>Keep together</strong> groups all rows sharing that column\u2019s value (e.g. all timepoints for one patient) into the same batch.</p>';
+      '<p class="who">' + PARSED.rows.length + ' rows parsed \u00b7 ' + roleCols.length + ' usable columns shown. <strong>Keep together</strong> = same value stays in one batch (e.g. subject_id); <strong>Balance</strong> = spread evenly to minimize confounding; <strong>Ignore</strong> = not used. Only filled-in columns appear.</p>';
+    // one category per column (checking in one unchecks it in the others) + live counts
+    var checks = Array.prototype.slice.call(host.querySelectorAll('.bx-catchk'));
+    function updateCounts() {
+      ['keep', 'balance', 'ignore'].forEach(function (cat, i) {
+        var n = host.querySelectorAll('.bx-catchk[data-bx-cat="' + cat + '"]:checked').length;
+        var cnt = host.querySelectorAll('.bx-drop')[i].querySelector('.bx-count');
+        if (cnt) cnt.textContent = '(' + n + ')';
+      });
+    }
+    checks.forEach(function (chk) {
+      chk.addEventListener('change', function () {
+        if (chk.checked) { var col = chk.getAttribute('data-bx-col'); checks.forEach(function (o) { if (o !== chk && o.getAttribute('data-bx-col') === col) o.checked = false; }); }
+        updateCounts();
+      });
+    });
+    updateCounts();
     host.querySelector('#bxRun').addEventListener('click', run);
   }
 
@@ -93,18 +127,8 @@
     reader.readAsArrayBuffer(file);
   }
 
-  // Sensible defaults for the standard template so it works out of the box.
-  function autoSelectColumns() {
-    if (!PARSED) return;
-    var idSel = document.getElementById('bxId');
-    if (idSel) { for (var i = 0; i < idSel.options.length; i++) { if (idSel.options[i].value.toLowerCase() === 'sample_id') { idSel.selectedIndex = i; break; } } }
-    var setRole = function (col, role) { var sel = '[data-bx-role="' + (root.CSS && CSS.escape ? CSS.escape(col) : col) + '"]'; var el = document.querySelector(sel); if (el) el.value = role; };
-    PARSED.headers.forEach(function (h) {
-      var lc = h.toLowerCase();
-      if (lc === 'subject_id' || lc === 'lineage') setRole(h, 'keep');
-      else if (lc === 'sex' || lc === 'group' || lc === 'cohort' || lc === 'race_ethnicity' || lc === 'timepoint') setRole(h, 'balance');
-    });
-  }
+  // Defaults are now baked into renderColumnPickers (checked boxes per category).
+  function autoSelectColumns() { /* no-op */ }
 
   var INFO = {
     total: 'Total imbalance = the sum of the association scores across all your balanced variables. 0 means batch membership is completely independent of every variable (ideal). Lower is better. Use it to compare batch-count options at a glance.',
@@ -126,10 +150,10 @@
     if (!PARSED || !root.Batching) { out.innerHTML = '<div class="callout warn">Parse a sample table first.</div>'; return; }
     var idField = document.getElementById('bxId').value;
     var balance = [], keep = [];
-    Array.prototype.slice.call(document.querySelectorAll('[data-bx-role]')).forEach(function (sel) {
-      var col = sel.getAttribute('data-bx-role');
-      if (sel.value === 'balance') balance.push(col);
-      else if (sel.value === 'keep') keep.push(col);
+    Array.prototype.slice.call(document.querySelectorAll('.bx-catchk:checked')).forEach(function (chk) {
+      var col = chk.getAttribute('data-bx-col'), cat = chk.getAttribute('data-bx-cat');
+      if (cat === 'balance') balance.push(col);
+      else if (cat === 'keep') keep.push(col);
     });
     if (!balance.length && !keep.length) { out.innerHTML = '<div class="callout warn">Set at least one column to Balance or Keep together.</div>'; return; }
     var nB = Number(document.getElementById('bxN').value) || null;
