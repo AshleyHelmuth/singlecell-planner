@@ -3456,7 +3456,7 @@
   // gray = optional, green = derived/QC. Only renders when the style-capable build is present.
   const PS_BLUE = ['date_of_birth', 'date_enrollment', 'race_ethnicity', 'enrollment_site', 'treatment', 'age_at_collection', 'processing_date', 'processed_by', 'volume_ul', 'cells_per_vial', 'date_aliquoted', 'storage_id'];
   const PS_GRAY = ['lineage', 'treatment_date', 'visit_id', 'collection_site', 'shipment_batch', 'sample_notes', 'comment', 'notes'];
-  const PS_GREEN = ['batch', 'n_modalities', 'check_aliquot_unique', 'check_subject_consistent', 'check_sample_consistent'];
+  const PS_GREEN = ['batch_id', 'genetic_pool_id', 'n_modalities', 'check_aliquot_unique', 'check_subject_consistent', 'check_sample_consistent'];
   function psHeaderFill(name) {
     const c = String(name == null ? '' : name).toLowerCase();
     if (PS_GREEN.indexOf(c) >= 0 || c.indexOf('check_') === 0) return { bg: '548235', fg: 'FFFFFF' };
@@ -5676,8 +5676,11 @@
         const idf = bp.idField || 'sample_id';
         const asg = (bp.plan && bp.plan.assignment) || {};
         const psCols = Object.keys(bp.samples[0] || {});
-        const outCols = psCols.concat(['batch']);
-        const psRows = bp.samples.map((s) => psCols.map((c) => (s[c] == null ? '' : s[c])).concat([asg[s[idf]] != null ? asg[s[idf]] : '']));
+        // sample_id -> genetic pool, from the computed pooling in each experiment snapshot
+        const poolBySample = {};
+        exps.forEach((e) => ((e.snapshot && e.snapshot.batches) || []).forEach((b) => (b.samples || []).forEach((sm) => { if (sm && sm.sampleId != null) poolBySample[String(sm.sampleId)] = b.pool; })));
+        const outCols = psCols.concat(['batch_id', 'genetic_pool_id']);
+        const psRows = bp.samples.map((s) => { const sid = s[idf]; return psCols.map((c) => (s[c] == null ? '' : s[c])).concat([asg[sid] != null ? asg[sid] : '', poolBySample[String(sid)] != null ? poolBySample[String(sid)] : '']); });
         const psWs = addSheet('Project_Samples', [outCols].concat(psRows), outCols.map(() => ({ wch: 16 })));
         styleHeaderRow(XL, psWs, outCols, true);   // tiered template colors
       }
