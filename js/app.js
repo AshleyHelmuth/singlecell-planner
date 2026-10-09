@@ -2338,7 +2338,19 @@
         };
       });
       if (kits.length || reagents.length || oligos.length || antibodies.length || totalseq.length) {
-        DATA.liveInventory = kits.concat(reagents, oligos, antibodies, totalseq);
+        // Dedupe by item_id. The same item can appear in more than one tab (e.g. an
+        // oligo like OL003/BOA listed in both "Oligos" and "Reagents & Supplies") —
+        // that caused duplicate rows and made oligos resolve to the Reagents category.
+        // Keep one entry per id, preferring the dedicated tab over Reagents/Supplies.
+        const CAT_RANK = { 'Oligos': 0, 'Antibodies': 1, 'TotalSeq': 2, '10X Kits': 3, 'Reagents': 4, 'Supplies': 5 };
+        const rankOf = (c) => (CAT_RANK[c] != null ? CAT_RANK[c] : 9);
+        const chosen = {};
+        kits.concat(reagents, oligos, antibodies, totalseq).forEach((it) => {
+          if (!it.id) return;
+          const prev = chosen[it.id];
+          if (!prev || rankOf(it.category) < rankOf(prev.category)) chosen[it.id] = it;   // prefer more specific category; first wins on ties
+        });
+        DATA.liveInventory = Object.keys(chosen).map((id) => chosen[id]);
         DATA.inventorySource = 'live';
       }
     } catch (e) { /* keep workbook fallback */ }
