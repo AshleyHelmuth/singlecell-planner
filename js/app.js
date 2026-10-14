@@ -72,7 +72,7 @@
 
   function panelRenderHook(id) {
     if (id === 'scheduling' && window.Scheduling) Scheduling.render($('#schedulingContent'));
-    else if (id === 'plan') refreshBatchLoadControl();
+    else if (id === 'plan') { ensurePlanStateLoaded(); refreshBatchLoadControl(); }
     else if (id === 'modify') renderModify();
     else if (id === 'inventory') renderInventory();
     else if (id === 'projects') renderManage();
@@ -4402,15 +4402,14 @@
   // Full SOP: fill the vendored Tsang-lab .docx template with this experiment's
   // plan values by replacing «TOKEN» strings inside word/document.xml, leaving all
   // formatting/wording byte-identical. Values the planner can't derive stay blank.
-  async function downloadFullSop() {
-    if (!window.JSZip) { alert('Zip reader not loaded \u2014 reload the page and try again.'); return; }
-    const plan = PROTOCOL_PLAN;
-    if (!plan) { alert('Build a plan first (Plan experiment \u2192 Build).'); return; }
+  // Returns a filled JSZip of the full SOP for the given plan (null if unavailable).
+  // Shared by the Full-SOP download button and the Drive export so they never diverge.
+  async function fillFullSopZip(plan) {
+    if (!window.JSZip || !plan) return null;
     const nPools = plan.nPools || 0, nSamples = plan.nSamples || 0;
     let lanes = { unsort: 0, asap: 0, sort: 0 };
     try { const c = computePooling(); lanes = laneOverridesFromCost((c.samples || []).length, (c.poolRes && c.poolRes.nPools) || nPools, c.samples) || lanes; } catch (e) { /* leave blank */ }
-    // FBS to thaw = total FBS this plan uses, reusing prepProtocol's media/buffer math:
-    // R10 is 50 mL FBS per 500 mL bottle; FACS sort buffer adds 10% of ~70 mL/pool (+10% margin).
+    // FBS to thaw = total FBS this plan uses, reusing prepProtocol's media/buffer math.
     const nBottles = Math.max(1, Math.ceil((nSamples + 1) * 15 / 500));
     let fbsMl = 50 * nBottles;
     if ((plan.arms || []).includes('sort5') && nPools) { const facsPrep = Math.ceil(70 * nPools * 1.1 / 10) * 10; fbsMl += Math.round(facsPrep * 0.10); }
@@ -4418,34 +4417,34 @@
       LANE_UNSORT: lanes.unsort || '', LANE_ASAP: lanes.asap || '', LANE_SORT: lanes.sort || '',
       RXN_UNSORT: lanes.unsort || '', RXN_CSP: lanes.unsort || '', RXN_VDJ: lanes.unsort || '', RXN_ASAP: lanes.asap || '',
       ALLCELLS_FRAC: nPools || '', N_POOLS: nPools || '', N_SAMPLES: nSamples || '',
-      HTO_UL: nPools ? 2 : '', HTO_RANGE: nPools ? ('1\u2013' + nPools) : '',   // 2 µL/pool hashtag; HTOs 1..nPools
-      FBS_ML: nSamples ? fbsMl : ''   // reuses prepProtocol's media/FACS FBS math
+      HTO_UL: nPools ? 2 : '', HTO_RANGE: nPools ? ('1\u2013' + nPools) : '',
+      FBS_ML: nSamples ? fbsMl : ''
     };
+    const buf = await (await fetch('data/full_sop_template.docx')).arrayBuffer();
+    const zip = await JSZip.loadAsync(buf);
+    let xml = await zip.file('word/document.xml').async('string');
+    Object.keys(v).forEach((k) => { xml = xml.split('\u00ab' + k + '\u00bb').join(String(v[k])); });
+    const active = {
+      SORT: (plan.arms || []).includes('sort5'), ASAP: (plan.arms || []).includes('asap3'),
+      BULK: !!plan.includeBulk, STIM: (plan.modalities || []).includes('In vitro stimulation')
+    };
+    const pStartOf = (s, i) => { let j = i; while (j > 0) { j = s.lastIndexOf('<w:p', j - 1); if (j < 0) return 0; const c = s[j + 4]; if (c === '>' || c === ' ') return j; } return 0; };
+    const pEndOf = (s, i) => { const e = s.indexOf('</w:p>', i); return e < 0 ? s.length : e + 6; };
+    ['SORT', 'ASAP', 'BULK', 'STIM'].forEach((name) => {
+      const sTok = '\u00abSEC_' + name + '_START\u00bb', eTok = '\u00abSEC_' + name + '_END\u00bb';
+      if (active[name]) { [sTok, eTok].forEach((tok) => { const ti = xml.indexOf(tok); if (ti >= 0) xml = xml.slice(0, pStartOf(xml, ti)) + xml.slice(pEndOf(xml, ti)); }); }
+      else { const si = xml.indexOf(sTok), ei = xml.indexOf(eTok); if (si >= 0 && ei >= 0) xml = xml.slice(0, pStartOf(xml, si)) + xml.slice(pEndOf(xml, ei)); }
+    });
+    zip.file('word/document.xml', xml);
+    return zip;
+  }
+  async function downloadFullSop() {
+    if (!window.JSZip) { alert('Zip reader not loaded \u2014 reload the page and try again.'); return; }
+    if (!PROTOCOL_PLAN) { alert('Build a plan first (Plan experiment \u2192 Build).'); return; }
     try {
-      const buf = await (await fetch('data/full_sop_template.docx')).arrayBuffer();
-      const zip = await JSZip.loadAsync(buf);
-      let xml = await zip.file('word/document.xml').async('string');
-      Object.keys(v).forEach((k) => { xml = xml.split('\u00ab' + k + '\u00bb').join(String(v[k])); });
-      // Per-arm section include/exclude: drop whole modality sections not in this plan.
-      const active = {
-        SORT: (plan.arms || []).includes('sort5'),
-        ASAP: (plan.arms || []).includes('asap3'),
-        BULK: !!plan.includeBulk,
-        STIM: (plan.modalities || []).includes('In vitro stimulation')
-      };
-      const pStartOf = (s, i) => { let j = i; while (j > 0) { j = s.lastIndexOf('<w:p', j - 1); if (j < 0) return 0; const c = s[j + 4]; if (c === '>' || c === ' ') return j; } return 0; };
-      const pEndOf = (s, i) => { const e = s.indexOf('</w:p>', i); return e < 0 ? s.length : e + 6; };
-      ['SORT', 'ASAP', 'BULK', 'STIM'].forEach((name) => {
-        const sTok = '\u00abSEC_' + name + '_START\u00bb', eTok = '\u00abSEC_' + name + '_END\u00bb';
-        if (active[name]) {
-          [sTok, eTok].forEach((tok) => { const ti = xml.indexOf(tok); if (ti >= 0) xml = xml.slice(0, pStartOf(xml, ti)) + xml.slice(pEndOf(xml, ti)); });
-        } else {
-          const si = xml.indexOf(sTok), ei = xml.indexOf(eTok);
-          if (si >= 0 && ei >= 0) xml = xml.slice(0, pStartOf(xml, si)) + xml.slice(pEndOf(xml, ei));
-        }
-      });
-      zip.file('word/document.xml', xml);
-      const out = await zip.generateAsync({ type: 'blob', mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' });
+      const zip = await fillFullSopZip(PROTOCOL_PLAN);
+      if (!zip) { alert('Could not build the full SOP.'); return; }
+      const out = await zip.generateAsync({ type: 'blob', mimeType: DOCX_MIME });
       const rec = CURRENT_EXP_ID ? Store.getExperiment(CURRENT_EXP_ID) : null;
       const name = ((rec && rec.project) || 'project') + '_' + ((rec && rec.name) || 'experiment');
       const a = document.createElement('a'); a.href = URL.createObjectURL(out);
@@ -4972,6 +4971,18 @@
     };
   }
 
+  // Which experiment's plan state is currently loaded into the Plan-experiment UI.
+  // Lets us restore the grid/selection when the tab is entered for an experiment
+  // that isn't the one currently shown, without clobbering unsaved edits.
+  let PLAN_STATE_EXP = null;
+  function ensurePlanStateLoaded() {
+    if (!CURRENT_EXP_ID || PLAN_STATE_EXP === CURRENT_EXP_ID) return;
+    const rec = Store.getExperiment(CURRENT_EXP_ID);
+    if (rec && rec.state) {
+      restoreState(rec.state); PLAN_STATE_EXP = CURRENT_EXP_ID;
+      try { const res = computeCurrent(); if (!res.error) renderAllTabs(res); } catch (e) { /* preview best-effort */ }
+    }
+  }
   function restoreState(state) {
     if (!state) return;
     SEL = state.sel ? JSON.parse(JSON.stringify(state.sel)) : freshSelection();
@@ -5611,7 +5622,7 @@
     const rec = Store.getExperiment(id);
     if (!rec) return;
     restoreState(rec.state);
-    CURRENT_EXP_ID = id;
+    CURRENT_EXP_ID = id; PLAN_STATE_EXP = id;
     try { runComputePooling(false); } catch (e) { /* preview is best-effort */ }
     const res = computeCurrent();
     if (!res.error) renderAllTabs(res);
@@ -5625,7 +5636,7 @@
     const rec = Store.getExperiment(id);
     if (!rec) return;
     restoreState(rec.state);
-    CURRENT_EXP_ID = id;
+    CURRENT_EXP_ID = id; PLAN_STATE_EXP = id;
     const res = computeCurrent();
     if (res.error) { alert('Could not build protocols: ' + res.error); return; }
     renderAllTabs(res);
@@ -5870,6 +5881,7 @@
   const GSHEET_MIME = 'application/vnd.google-apps.spreadsheet';
   const HTML_MIME = 'text/html';
   const GDOC_MIME = 'application/vnd.google-apps.document';
+  const DOCX_MIME = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
 
   function wbBase64(wb) { return XLSX.write(wb, { bookType: 'xlsx', type: 'base64' }); }
   function htmlBase64(html) { return btoa(unescape(encodeURIComponent(html))); }
@@ -5997,20 +6009,28 @@
       const sumRes = await driveApi({ action: 'upload', name: pfx + 'Experiment summary', folderId: vFolderId,
         base64: wbBase64(buildExperimentWb(rec)), sourceMime: XLSX_MIME, targetMime: GSHEET_MIME });
       files.summary = (sumRes && sumRes.id) || null;
-      // Protocol packet (rendered HTML) -> Google Doc
-      let protoRes = null;
-      const protoEl = document.getElementById('protocolsContent');
-      if (protoEl && protoEl.innerHTML.trim()) {
-        // Export only the packet pages themselves (not the website buttons/help text).
-        // This is presentation-only filtering; all protocol wording/numbers remain intact.
-        const pageHtml = Array.from(protoEl.querySelectorAll('.protocol-page')).map((el) => el.outerHTML).join('');
-        if (pageHtml.trim()) {
-          const html = '<html><head><meta charset="utf-8"></head><body style="margin:0.55in 0.65in;font-family:Arial,Calibri,sans-serif;">' + inlineProtocolColors(pageHtml) + '</body></html>';
-          protoRes = await driveApi({ action: 'upload', name: pfx + 'Protocol', folderId: vFolderId,
-            base64: htmlBase64(html), sourceMime: HTML_MIME, targetMime: GDOC_MIME });
+      // Protocol documents: Simplified protocol (Google Doc) + Full SOP (native .docx),
+      // both built from the SAME generators as the on-page download buttons so Drive
+      // always matches what you'd download.
+      let protoRes = null, fullRes = null;
+      const planForSop = PROTOCOL_PLAN || (rec && rec.snapshot && rec.snapshot.plan) || null;
+      try {
+        if (planForSop && typeof buildSopHtml === 'function') {
+          const simpHtml = buildSopHtml(planForSop);
+          protoRes = await driveApi({ action: 'upload', name: pfx + 'Protocol (simplified)', folderId: vFolderId,
+            base64: htmlBase64(simpHtml), sourceMime: HTML_MIME, targetMime: GDOC_MIME });
         }
-      }
+      } catch (e) { /* simplified upload best-effort */ }
+      try {
+        const zip = planForSop ? await fillFullSopZip(planForSop) : null;
+        if (zip) {
+          const b64 = await zip.generateAsync({ type: 'base64' });
+          fullRes = await driveApi({ action: 'upload', name: pfx + 'Full SOP', folderId: vFolderId,
+            base64: b64, sourceMime: DOCX_MIME, targetMime: DOCX_MIME });   // keep native .docx (exact formatting)
+        }
+      } catch (e) { /* full SOP upload best-effort */ }
       files.protocol = (protoRes && protoRes.id) || null;
+      files.protocolFull = (fullRes && fullRes.id) || null;
       // Tube labels + Library record -> Google Sheets
       const labelsBuilt = buildTubeLabelsWb();
       if (labelsBuilt) {
@@ -6840,7 +6860,8 @@
                      + (e.driveFiles && e.driveFiles.summary ? ' \u00b7 <a href="https://docs.google.com/spreadsheets/d/' + escAttr(e.driveFiles.summary) + '/edit" target="_blank" rel="noopener">Experiment summary (Sheet)</a>' : '')
                      + (e.driveFiles && e.driveFiles.labels ? ' \u00b7 <a href="https://docs.google.com/spreadsheets/d/' + escAttr(e.driveFiles.labels) + '/edit" target="_blank" rel="noopener">Tube labels (Sheet)</a>' : '')
                      + (e.driveFiles && e.driveFiles.library ? ' \u00b7 <a href="https://docs.google.com/spreadsheets/d/' + escAttr(e.driveFiles.library) + '/edit" target="_blank" rel="noopener">Library record (Sheet)</a>' : '')
-                     + (e.driveFiles && e.driveFiles.protocol ? ' \u00b7 <a href="https://docs.google.com/document/d/' + escAttr(e.driveFiles.protocol) + '/edit" target="_blank" rel="noopener">Protocol (Doc)</a>' : '')
+                     + (e.driveFiles && e.driveFiles.protocol ? ' \u00b7 <a href="https://docs.google.com/document/d/' + escAttr(e.driveFiles.protocol) + '/edit" target="_blank" rel="noopener">Protocol \u2014 simplified (Doc)</a>' : '')
+                     + (e.driveFiles && e.driveFiles.protocolFull ? ' \u00b7 <a href="https://drive.google.com/file/d/' + escAttr(e.driveFiles.protocolFull) + '/view" target="_blank" rel="noopener">Full SOP (Word)</a>' : '')
                      + '</p><p class="muted small">Open the live Drive copies above, or generate a fresh download below.</p>')
                   : '<p class="muted small">Build the experiment to create live Google Drive copies (Sheet + Doc) here. Until then, generate downloads below.</p>')
               + '<div class="sec-actions">' + B('drive', 'Export / refresh Drive copies') + B('packet', 'Experiment summary (xlsx)') + B('protocols', 'Protocols') + B('labels', 'Tube labels') + B('libRecord', 'Library record (xlsx)') + B('reagents', 'Reagent checklist') + '</div></details>'
