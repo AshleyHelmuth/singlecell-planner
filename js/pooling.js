@@ -642,20 +642,26 @@
     const balanceColumns = (opts.balanceColumns || []).filter(Boolean);
     const total = (samples || []).length;
     if (!total) return [];
-    const candidates = opts.samplesPerPoolValues || [8, 10, 12, 15, 18, 20, 24];
+    // Try every samples-per-pool value from 2 up to the sample count (capped for
+    // performance). Odd and even alike — the spread-aware dedupe below collapses
+    // any that produce an identical plan, so the table stays clean but complete.
+    const candidates = opts.samplesPerPoolValues || (function () { const a = [], hi = Math.min(total, 40); for (let i = 2; i <= hi; i++) a.push(i); return a; })();
     const seen = new Set();
     const options = [];
     candidates.forEach((spp) => {
       if (spp < 1) return;
       const res = buildGeneticPools(samples, relatedPairs, { cap: spp, balanceColumns });
       if (!res.pools.length) { options.push({ samplesPerPool: spp, cap: spp, nPools: 0, spreadScore: 0, feasible: false, warnings: res.warnings }); return; }
-      const key = res.nPools;
-      if (seen.has(key)) return;          // collapse caps that yield the same pool count
+      const spread = spreadQuality(res.confounderReport);
+      // Collapse only genuinely identical plans (same pool count AND same spread).
+      // Previously any caps sharing a pool count were collapsed, which hid every
+      // alternative whenever the biological constraints fixed the pool count.
+      const key = res.nPools + '|' + Math.round(spread * 1000);
+      if (seen.has(key)) return;
       seen.add(key);
       options.push({
         samplesPerPool: spp, cap: spp, nPools: res.nPools,
-        spreadScore: spreadQuality(res.confounderReport),
-        feasible: true, warnings: res.warnings
+        spreadScore: spread, feasible: true, warnings: res.warnings
       });
     });
     // default = fewest pools; tie-break by best spread
@@ -667,7 +673,7 @@
       });
       if (best) best.isDefault = true;
     }
-    return options.sort((a, b) => (a.nPools || 1e9) - (b.nPools || 1e9));
+    return options.sort((a, b) => ((a.nPools || 1e9) - (b.nPools || 1e9)) || ((b.spreadScore || 0) - (a.spreadScore || 0)));
   }
 
   // 0..1 — higher means confounder values are more evenly spread across pools.
