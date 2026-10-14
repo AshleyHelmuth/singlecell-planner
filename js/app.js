@@ -4399,6 +4399,62 @@
     document.body.appendChild(a); a.click(); document.body.removeChild(a);
   }
 
+  // Full SOP: fill the vendored Tsang-lab .docx template with this experiment's
+  // plan values by replacing «TOKEN» strings inside word/document.xml, leaving all
+  // formatting/wording byte-identical. Values the planner can't derive stay blank.
+  async function downloadFullSop() {
+    if (!window.JSZip) { alert('Zip reader not loaded \u2014 reload the page and try again.'); return; }
+    const plan = PROTOCOL_PLAN;
+    if (!plan) { alert('Build a plan first (Plan experiment \u2192 Build).'); return; }
+    const nPools = plan.nPools || 0, nSamples = plan.nSamples || 0;
+    let lanes = { unsort: 0, asap: 0, sort: 0 };
+    try { const c = computePooling(); lanes = laneOverridesFromCost((c.samples || []).length, (c.poolRes && c.poolRes.nPools) || nPools, c.samples) || lanes; } catch (e) { /* leave blank */ }
+    // FBS to thaw = total FBS this plan uses, reusing prepProtocol's media/buffer math:
+    // R10 is 50 mL FBS per 500 mL bottle; FACS sort buffer adds 10% of ~70 mL/pool (+10% margin).
+    const nBottles = Math.max(1, Math.ceil((nSamples + 1) * 15 / 500));
+    let fbsMl = 50 * nBottles;
+    if ((plan.arms || []).includes('sort5') && nPools) { const facsPrep = Math.ceil(70 * nPools * 1.1 / 10) * 10; fbsMl += Math.round(facsPrep * 0.10); }
+    const v = {
+      LANE_UNSORT: lanes.unsort || '', LANE_ASAP: lanes.asap || '', LANE_SORT: lanes.sort || '',
+      RXN_UNSORT: lanes.unsort || '', RXN_CSP: lanes.unsort || '', RXN_VDJ: lanes.unsort || '', RXN_ASAP: lanes.asap || '',
+      ALLCELLS_FRAC: nPools || '', N_POOLS: nPools || '', N_SAMPLES: nSamples || '',
+      HTO_UL: nPools ? 2 : '', HTO_RANGE: nPools ? ('1\u2013' + nPools) : '',   // 2 µL/pool hashtag; HTOs 1..nPools
+      FBS_ML: nSamples ? fbsMl : ''   // reuses prepProtocol's media/FACS FBS math
+    };
+    try {
+      const buf = await (await fetch('data/full_sop_template.docx')).arrayBuffer();
+      const zip = await JSZip.loadAsync(buf);
+      let xml = await zip.file('word/document.xml').async('string');
+      Object.keys(v).forEach((k) => { xml = xml.split('\u00ab' + k + '\u00bb').join(String(v[k])); });
+      // Per-arm section include/exclude: drop whole modality sections not in this plan.
+      const active = {
+        SORT: (plan.arms || []).includes('sort5'),
+        ASAP: (plan.arms || []).includes('asap3'),
+        BULK: !!plan.includeBulk,
+        STIM: (plan.modalities || []).includes('In vitro stimulation')
+      };
+      const pStartOf = (s, i) => { let j = i; while (j > 0) { j = s.lastIndexOf('<w:p', j - 1); if (j < 0) return 0; const c = s[j + 4]; if (c === '>' || c === ' ') return j; } return 0; };
+      const pEndOf = (s, i) => { const e = s.indexOf('</w:p>', i); return e < 0 ? s.length : e + 6; };
+      ['SORT', 'ASAP', 'BULK', 'STIM'].forEach((name) => {
+        const sTok = '\u00abSEC_' + name + '_START\u00bb', eTok = '\u00abSEC_' + name + '_END\u00bb';
+        if (active[name]) {
+          [sTok, eTok].forEach((tok) => { const ti = xml.indexOf(tok); if (ti >= 0) xml = xml.slice(0, pStartOf(xml, ti)) + xml.slice(pEndOf(xml, ti)); });
+        } else {
+          const si = xml.indexOf(sTok), ei = xml.indexOf(eTok);
+          if (si >= 0 && ei >= 0) xml = xml.slice(0, pStartOf(xml, si)) + xml.slice(pEndOf(xml, ei));
+        }
+      });
+      zip.file('word/document.xml', xml);
+      const out = await zip.generateAsync({ type: 'blob', mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' });
+      const rec = CURRENT_EXP_ID ? Store.getExperiment(CURRENT_EXP_ID) : null;
+      const name = ((rec && rec.project) || 'project') + '_' + ((rec && rec.name) || 'experiment');
+      const a = document.createElement('a'); a.href = URL.createObjectURL(out);
+      a.download = 'full_SOP_' + name.replace(/[^a-z0-9_\-]+/gi, '_') + '.docx';
+      document.body.appendChild(a); a.click(); document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(a.href), 3000);
+    } catch (e) { alert('Could not build the full SOP: ' + e.message); }
+  }
+
   // Preparation timeline checklists (T-3 weeks -> morning-of), arm-gated with
   // plan-driven counts. Rendered as checkbox lists.
   function prepChecklists(plan) {
@@ -4514,8 +4570,8 @@
     }).join(''));
 
     $('#protocolsContent').innerHTML = `
-      <div class="section-head"><h2>Protocol packet</h2><div><button class="btn ghost" id="dlWordSop">Download Word SOP</button> <button class="btn primary" onclick="window.print()">Print packet</button></div></div>
-      <p class="muted">Workflow summary first, then one page per module. “Download Word SOP” gives a Word document with only the sections for this experiment’s arms, all numbers filled in. “Print packet” → Save as PDF for a printable version.</p>
+      <div class="section-head"><h2>Protocol packet</h2><div><button class="btn ghost" id="dlFullSop">Full SOP (Word)</button> <button class="btn ghost" id="dlWordSop">Simplified protocol (Word)</button> <button class="btn primary" onclick="window.print()">Print packet</button></div></div>
+      <p class="muted">Two documents: <strong>Full SOP</strong> is the complete Tsang‑lab multimodal protocol (overview, supplies, prep checklists, buffers, and every bench step). <strong>Simplified protocol</strong> is the lighter packet with only this experiment’s bench sections (buffers, thaw, pool/split, staining per arm, GEM loading), all numbers filled in. “Print packet” → Save as PDF.</p>
       <article class="protocol-page cover pp-slate">
         <header class="pp-head"><span class="pp-no">Overview</span><h2>Experiment workflow</h2></header>
         <div class="flow-holder">${Workflow.renderSampleFlow(plan)}</div>
@@ -4525,6 +4581,7 @@
     PROTOCOL_PLAN = plan;
     const dlBtn = document.getElementById('dlWordSop');
     if (dlBtn) dlBtn.addEventListener('click', downloadWordSOP);
+    { const fb = $('#dlFullSop'); if (fb) fb.addEventListener('click', downloadFullSop); }
   }
 
   function thawProtocol(plan) {
