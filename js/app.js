@@ -1313,11 +1313,11 @@
     const save = $('#ccSave'); if (save) save.addEventListener('click', () => saveCellaca(rec));
     host.querySelectorAll('button[data-cc-del]').forEach((b) => b.addEventListener('click', () => {
       const i = parseInt(b.dataset.ccDel, 10);
-      if (rec.cellacaCountsList && !isNaN(i)) { rec.cellacaCountsList.splice(i, 1); Store.saveExperiment(rec); renderCellaca(); }
+      if (rec.cellacaCountsList && !isNaN(i)) { rec.cellacaCountsList.splice(i, 1); Store.saveExperiment(rec); syncExperimentSummaryDrive(rec); renderCellaca(); }
     }));
     host.querySelectorAll('.cc-note').forEach((el) => el.addEventListener('change', () => {
       const i = parseInt(el.dataset.i, 10);
-      if (rec.cellacaCountsList && rec.cellacaCountsList[i]) { rec.cellacaCountsList[i].notes = el.value; Store.saveExperiment(rec); }
+      if (rec.cellacaCountsList && rec.cellacaCountsList[i]) { rec.cellacaCountsList[i].notes = el.value; Store.saveExperiment(rec); syncExperimentSummaryDrive(rec); }
     }));
     host.querySelectorAll('.cc-fix-no').forEach((el) => el.addEventListener('change', () => {
       const i = parseInt(el.dataset.i, 10); const v = parseInt(el.value, 10);
@@ -1425,6 +1425,7 @@
     if (!(rec.cellacaCountsList || []).length) { if (stEl) stEl.textContent = 'No counts to save yet.'; return; }
     const expId = rec.experimentId || projectLabel(rec.name || 'experiment');
     const fileName = sanitizeName(expId + ' cellaca counts');
+    syncExperimentSummaryDrive(rec);   // also refresh the summary's Counts tab
     if (stEl) stEl.textContent = 'Uploading to Drive\u2026';
     const base64 = XLSX.write(buildCellacaWb(rec), { type: 'base64', bookType: 'xlsx' });
     ensureCellacaFolder(rec)
@@ -4418,19 +4419,22 @@
       RXN_UNSORT: lanes.unsort || '', RXN_CSP: lanes.unsort || '', RXN_VDJ: lanes.unsort || '', RXN_ASAP: lanes.asap || '',
       ALLCELLS_FRAC: nPools || '', N_POOLS: nPools || '', N_SAMPLES: nSamples || '',
       HTO_UL: nPools ? 2 : '', HTO_RANGE: nPools ? ('1\u2013' + nPools) : '',
-      FBS_ML: nSamples ? fbsMl : ''
+      FBS_ML: nSamples ? fbsMl : '',
+      CELLS_PER_SAMPLE: (function () { try { const a = readScenarioAssumptions(); const c = (a && a.poolContributionPerSample) || 1500000; return (Math.round(c / 1e5) / 10) + 'M'; } catch (e) { return ''; } })()   // per-sample pool take (same source as poolProtocol)
     };
     const buf = await (await fetch('data/full_sop_template.docx')).arrayBuffer();
     const zip = await JSZip.loadAsync(buf);
     let xml = await zip.file('word/document.xml').async('string');
     Object.keys(v).forEach((k) => { xml = xml.split('\u00ab' + k + '\u00bb').join(String(v[k])); });
+    const stim = (plan.modalities || []).includes('In vitro stimulation');
     const active = {
       SORT: (plan.arms || []).includes('sort5'), ASAP: (plan.arms || []).includes('asap3'),
-      BULK: !!plan.includeBulk, STIM: (plan.modalities || []).includes('In vitro stimulation')
+      BULK: !!plan.includeBulk, STIM: stim,
+      BULKSTIM: !!plan.includeBulk || stim   // the "set aside remaining cells for bulk/stim" line
     };
     const pStartOf = (s, i) => { let j = i; while (j > 0) { j = s.lastIndexOf('<w:p', j - 1); if (j < 0) return 0; const c = s[j + 4]; if (c === '>' || c === ' ') return j; } return 0; };
     const pEndOf = (s, i) => { const e = s.indexOf('</w:p>', i); return e < 0 ? s.length : e + 6; };
-    ['SORT', 'ASAP', 'BULK', 'STIM'].forEach((name) => {
+    ['SORT', 'ASAP', 'BULK', 'STIM', 'BULKSTIM'].forEach((name) => {
       const sTok = '\u00abSEC_' + name + '_START\u00bb', eTok = '\u00abSEC_' + name + '_END\u00bb';
       if (active[name]) { [sTok, eTok].forEach((tok) => { const ti = xml.indexOf(tok); if (ti >= 0) xml = xml.slice(0, pStartOf(xml, ti)) + xml.slice(pEndOf(xml, ti)); }); }
       else { const si = xml.indexOf(sTok), ei = xml.indexOf(eTok); if (si >= 0 && ei >= 0) xml = xml.slice(0, pStartOf(xml, si)) + xml.slice(pEndOf(xml, ei)); }
@@ -5432,6 +5436,21 @@
   }
   let LIBREC_TIMER = null;
   function syncLibraryRecordDrive(rec) { clearTimeout(LIBREC_TIMER); LIBREC_TIMER = setTimeout(function () { pushLibraryRecordNow(rec); }, 3000); }
+
+  // Refresh the current-version Experiment summary Sheet in Drive in place (no new
+  // version), so late-arriving data like Cellaca counts shows up on its Counts tab.
+  function pushExperimentSummaryNow(rec) {
+    try {
+      if (!rec || !rec.snapshot || !rec.materialVersions || !rec.materialVersions.length) return Promise.resolve(null);
+      const cur = rec.materialVersions[rec.materialVersions.length - 1];
+      if (!cur || !cur.folderId) return Promise.resolve(null);
+      const expId = rec.experimentId || projectLabel(rec.name || 'experiment');
+      return driveApi({ action: 'upload', name: expId + '_v' + cur.version + ' Experiment summary', folderId: cur.folderId,
+        base64: wbBase64(buildExperimentWb(rec)), sourceMime: XLSX_MIME, targetMime: GSHEET_MIME });
+    } catch (e) { return Promise.resolve(null); }
+  }
+  let EXPSUM_TIMER = null;
+  function syncExperimentSummaryDrive(rec) { clearTimeout(EXPSUM_TIMER); EXPSUM_TIMER = setTimeout(function () { pushExperimentSummaryNow(rec); }, 3000); }
   function generateLibraryRecord() {
     const r = buildLibraryRecordWb();
     if (!r) { alert('Add samples and compute a pooling strategy first.'); return; }
