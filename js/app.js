@@ -1398,6 +1398,7 @@
       else { rowRec.tubeLabel = v; rowRec.sampleNo = ''; rowRec.sampleId = ''; }
       rec.cellacaCountsList.push(rowRec); });
     Store.saveExperiment(rec);
+    syncExperimentSummaryDrive(rec);   // also refresh the Experiment summary's Counts tab
     const base64 = XLSX.write(buildCellacaWb(rec), { type: 'base64', bookType: 'xlsx' });
     ensureCellacaFolder(rec)
       .then((path) => { if (!path || !path.subId) throw new Error('could not reach the experiment\u2019s data/cellaca counts folder');
