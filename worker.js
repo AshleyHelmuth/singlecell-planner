@@ -1355,6 +1355,36 @@ async function handleDrivePost(request, env) {
       if (d && d.id && /document/i.test(body.targetMime || '')) { try { await formatDocument(token, d.id); } catch (e) { console.warn('[drive] document formatting', e); } }
       return json({ ok: true, id: d.id, name: d.name });
     }
+    if (body.action === 'writeTab') {
+      // Replace the contents of ONE tab of an existing Google Sheet, leaving every
+      // other tab untouched (used to refresh the summary's Counts tab in place).
+      if (!body.sheetId || !body.tab || !Array.isArray(body.values)) return json({ error: 'missing_fields' }, 400);
+      try {
+        await fetch('https://sheets.googleapis.com/v4/spreadsheets/' + body.sheetId + '/values/' + encodeURIComponent(qtab(body.tab)) + ':clear',
+          { method: 'POST', headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' }, body: '{}' });
+        await sheetsUpdateValues(token, body.sheetId, qtab(body.tab) + '!A1', body.values);
+        return json({ ok: true });
+      } catch (e) { return json({ error: 'write_failed', detail: String(e) }, 502); }
+    }
+    if (body.action === 'writeTabs') {
+      // Update (and create-if-missing) ONLY the named tabs of an existing Google
+      // Sheet; any tab not in the list (e.g. one the user added by hand) is left
+      // completely untouched.
+      if (!body.sheetId || !Array.isArray(body.tabs)) return json({ error: 'missing_fields' }, 400);
+      try {
+        const metaR = await fetch('https://sheets.googleapis.com/v4/spreadsheets/' + body.sheetId + '?fields=sheets(properties(title))', { headers: { Authorization: 'Bearer ' + token } });
+        const meta = await metaR.json();
+        const have = {}; (meta.sheets || []).forEach((s) => { have[s.properties.title] = true; });
+        const addReqs = body.tabs.filter((t) => t && t.name && !have[t.name]).map((t) => ({ addSheet: { properties: { title: t.name } } }));
+        if (addReqs.length) { await fetch('https://sheets.googleapis.com/v4/spreadsheets/' + body.sheetId + ':batchUpdate', { method: 'POST', headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' }, body: JSON.stringify({ requests: addReqs }) }); }
+        for (const t of body.tabs) {
+          if (!t || !t.name || !Array.isArray(t.values)) continue;
+          await fetch('https://sheets.googleapis.com/v4/spreadsheets/' + body.sheetId + '/values/' + encodeURIComponent(qtab(t.name)) + ':clear', { method: 'POST', headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' }, body: '{}' });
+          await sheetsUpdateValues(token, body.sheetId, qtab(t.name) + '!A1', t.values);
+        }
+        return json({ ok: true });
+      } catch (e) { return json({ error: 'write_failed', detail: String(e) }, 502); }
+    }
     if (body.action === 'trash') {
       if (!body.id) return json({ error: 'missing_id' }, 400);
       await driveTrash(token, parent, body.id);

@@ -973,3 +973,20 @@ main > .panel { flex: 1 1 auto; min-width: 0; }
 /* ===== Library prep rounds ===== */
 .lib-chosen { background: #eaf6ef; }
 .lib-chosen td { border-top: 1px solid #bfe3cd; border-bottom: 1px solid #bfe3cd; }
+
+/* Review -> Experimental design summary */
+.rev-cards { display: flex; flex-wrap: wrap; gap: 10px; margin: 10px 0; }
+.rev-card { flex: 1 1 110px; min-width: 96px; background: #f3f6fa; border: 1px solid #e3e9f0; border-radius: 10px; padding: 10px 12px; }
+.rev-card-n { font-size: 20px; font-weight: 700; color: #1f3b57; line-height: 1.1; }
+.rev-card-l { font-size: 12px; color: #667085; margin-top: 2px; }
+.rev-flow { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 6px 0 4px; }
+.rev-step { background: #eef4fb; border: 1px solid #cfe0f0; border-radius: 10px; padding: 8px 14px; text-align: center; min-width: 92px; }
+.rev-step-n { font-size: 18px; font-weight: 700; color: #1f6f6f; }
+.rev-step-l { font-size: 12px; color: #4a5b6b; }
+.rev-arrow { font-size: 20px; color: #9aa7b4; }
+.rev-tree { display: flex; flex-direction: column; gap: 8px; margin: 6px 0; }
+.rev-tree-pool { border: 1px solid #d0d7de; border-left: 4px solid #1f6f6f; border-radius: 8px; padding: 8px 12px; background: #fff; }
+.rev-tree-head { font-weight: 600; color: #1f3b57; }
+.rev-tree-samples { margin: 6px 0; display: flex; flex-wrap: wrap; gap: 5px; }
+.rev-pill { background: #eef1f4; border-radius: 12px; padding: 2px 9px; font-size: 12px; color: #334; }
+.rev-tree-libs { font-size: 12.5px; color: #4a5b6b; }

@@ -606,7 +606,7 @@
       attachGridArrows(host, '.bp-pool, .cite-u-hto, .cite-a-hto, .cite-u-cnt, .cite-a-cnt, .cite-lyo, .sort-hto, .sort-cnt');
     }
     const save = $('#wsSave'); if (save) save.addEventListener('click', () => saveWorksheet(rec, type));
-    const libRecBtn = $('#wsLibRec'); if (libRecBtn) libRecBtn.addEventListener('click', () => { const st = $('#wsStatus'); if (st) st.textContent = ' Updating Library record in Drive\u2026'; pushLibraryRecordNow(rec).then((r) => { if (!st) return; if (r && r.id) st.innerHTML = ' Library record updated \u2014 <a href="https://docs.google.com/spreadsheets/d/' + escAttr(r.id) + '/edit" target="_blank" rel="noopener">open in Drive</a>'; else if (r && r.error) st.textContent = ' Update failed: ' + r.error; else st.textContent = ' Could not update the Library record (' + ((r && r.skipped) || 'no Drive access') + ').'; }); });
+    const libRecBtn = $('#wsLibRec'); if (libRecBtn) libRecBtn.addEventListener('click', () => { const st = $('#wsStatus'); if (st) st.textContent = ' Updating Library record in Drive\u2026'; pushLibraryRecordTabsOnly(rec).then((r) => { if (!st) return; if (r && r.id) st.innerHTML = ' Library record updated \u2014 <a href="https://docs.google.com/spreadsheets/d/' + escAttr(r.id) + '/edit" target="_blank" rel="noopener">open in Drive</a>'; else if (r && r.error) st.textContent = ' Update failed: ' + r.error; else st.textContent = ' Could not update the Library record (' + ((r && r.skipped) || 'no Drive access') + ').'; }); });
     const reload = $('#wsReload'); if (reload) reload.addEventListener('click', () => reloadWorksheetFromDrive(rec, type));
   }
   // Excel/Google Sheets tab names: no \ / ? * [ ] : and can't start/end with an apostrophe.
@@ -638,7 +638,7 @@
         : ' Saved to the experiment. Drive sync failed (your data is still saved locally).'; });
     // also refresh the Library record Sheet (if materials have been exported)
     if (type === 'library') {
-      pushLibraryRecordNow(rec).then((r) => { if (stEl && r && r.id) stEl.textContent = ' Saved to the experiment and Drive \u00b7 Library record updated.'; else if (stEl && r && r.skipped === 'no-materials') stEl.textContent = ' Saved. (Run \u201cExport / refresh Drive copies\u201d once to create the Library record Sheet, then it auto-updates.)'; });
+      pushLibraryRecordTabsOnly(rec).then((r) => { if (stEl && r && r.id) stEl.textContent = ' Saved to the experiment and Drive \u00b7 Library record updated.'; else if (stEl && r && r.skipped === 'no-materials') stEl.textContent = ' Saved. (Run \u201cExport / refresh Drive copies\u201d once to create the Library record Sheet, then it auto-updates.)'; });
     }
   }
   function reloadWorksheetFromDrive(rec, type) {
@@ -1525,7 +1525,84 @@
     const kitBtn = $('#suKits'); if (kitBtn) kitBtn.addEventListener('click', () => recordUsageUI(rec.id));
   }
   let REV_TS_ARM = 'all', REV_TS_TYPE = 'all', REV_TS_VIEW = 'summary', REV_TS_MIN = '', REV_TS_MAX = '';
+  function renderReviewDesign() {
+    const host = $('#revDesignContent'); if (!host) return;
+    const rec = CURRENT_EXP_ID ? Store.getExperiment(CURRENT_EXP_ID) : null;
+    if (!rec) { host.innerHTML = '<h2>Experimental design</h2><p class="empty">Select a project and experiment in the sidebar first.</p>'; return; }
+    const snap = rec.snapshot;
+    if (!snap || !snap.batches || !snap.batches.length) { host.innerHTML = '<h2>Experimental design</h2><p class="empty">Build a plan first (Plan experiment \u2192 Build), then the summary appears here.</p>'; return; }
+    const ws = rec.worksheets || {}, lib = ws.library || {}, bd = ws.batchday || {};
+    const ARM_LABEL = { unsort5: "5' unsort", sort5: "5' sort", asap3: 'ASAP' };
+    const ARM_LOADKEY = { unsort5: 'unsort', sort5: 'sort', asap3: 'asap' };
+    const ARM_LIBS = { unsort5: ['GEX', 'ADT', 'TCR', 'BCR'], sort5: ['GEX', 'ADT'], asap3: ['ATAC', 'ADT', 'HTO'] };
+    const arms = (snap.arms || []).filter((a) => ARM_LABEL[a]);
+
+    const allSamples = []; const subjSet = {};
+    snap.batches.forEach((b) => (b.samples || []).forEach((s) => { allSamples.push(s); if (s.patientId) subjSet[s.patientId] = 1; }));
+    const nSamples = allSamples.length, nSubjects = Object.keys(subjSet).length || nSamples, nPools = snap.batches.length;
+    let nSuper = 1; snap.batches.forEach((b) => { if (b.superPool != null) nSuper = Math.max(nSuper, b.superPool + 1); });
+
+    let planned = { unsort: 0, sort: 0, asap: 0 };
+    try { const c = computePooling(); planned = laneOverridesFromCost((c.samples || []).length, (c.poolRes && c.poolRes.nPools) || nPools, c.samples) || planned; } catch (e) { /* */ }
+    const loadRows = (arm) => ((lib.loading && lib.loading[ARM_LOADKEY[arm]]) || []).filter((r) => r.some((c) => String(c || '') !== ''));
+    const lanesOf = (arm) => loadRows(arm).length || planned[ARM_LOADKEY[arm]] || 0;
+    const totalLanes = arms.reduce((a, arm) => a + lanesOf(arm), 0);
+    const nLibs = arms.reduce((a, arm) => a + lanesOf(arm) * ARM_LIBS[arm].length, 0);
+    const cellsLoaded = (arm) => loadRows(arm).reduce((a, r) => a + (parseFloat(String(r[4]).replace(/[^0-9.]/g, '')) || 0), 0);
+
+    const card = (n, l) => '<div class="rev-card"><div class="rev-card-n">' + esc(String(n)) + '</div><div class="rev-card-l">' + esc(l) + '</div></div>';
+    const step = (n, l) => '<div class="rev-step"><div class="rev-step-n">' + esc(String(n)) + '</div><div class="rev-step-l">' + esc(l) + '</div></div>';
+
+    let html = '<h2>Experimental design <span class="who">' + esc(rec.name || '') + ' \u00b7 ' + esc(rec.experimentId || '') + '</span></h2>';
+    html += '<p class="who">A read-only summary of this experiment, built from the plan and the recorded bench data.</p>';
+
+    html += '<div class="rev-cards">' + card(arms.map((a) => ARM_LABEL[a]).join(' + ') || '\u2014', 'Modalities') + card(nSubjects, 'Subjects') + card(nSamples, 'Samples') + card(nPools, 'Genetic pools') + (nSuper > 1 ? card(nSuper, 'Super-pools') : '') + card(totalLanes, '10x lanes') + card(nLibs, 'Libraries') + '</div>';
+
+    html += '<h3 style="margin-top:20px">Experiment flow</h3>';
+    html += '<div class="rev-flow">' + step(nSamples, 'samples') + '<div class="rev-arrow">\u2192</div>' + step(nPools, 'genetic pools') + '<div class="rev-arrow">\u2192</div>' + step(totalLanes, '10x lanes') + '<div class="rev-arrow">\u2192</div>' + step(nLibs, 'libraries') + '</div>';
+
+    html += '<h3 style="margin-top:20px">Lanes loaded</h3>';
+    arms.forEach((arm) => {
+      const rows = loadRows(arm), n = lanesOf(arm);
+      html += '<h4 style="margin:10px 0 4px">' + esc(ARM_LABEL[arm]) + ' <span class="who">\u2014 ' + n + ' lane' + (n === 1 ? '' : 's') + '</span></h4>';
+      if (rows.length) html += '<div style="overflow:auto"><table class="cost-table"><thead><tr><th>Chip</th><th class="num">Lane</th><th>Population loaded</th><th>Tube</th><th class="num">Cells loaded</th></tr></thead><tbody>' + rows.map((r) => '<tr><td>' + esc(r[0] || '') + '</td><td class="num">' + esc(r[1] || '') + '</td><td>' + esc(r[2] || '') + '</td><td>' + esc(r[3] || '') + '</td><td class="num">' + (r[4] ? fmtN(parseFloat(String(r[4]).replace(/[^0-9.]/g, '')) || 0) : '\u2014') + '</td></tr>').join('') + '</tbody></table></div>';
+      else html += '<p class="who">Planned ' + n + ' lanes \u2014 loading not yet recorded (Record \u2192 Library prep entry \u2192 10x loading).</p>';
+    });
+
+    const htoByPool = {}; snap.batches.forEach((b) => { if (b.hto != null) htoByPool[b.pool] = b.hto; });
+    html += '<h3 style="margin-top:20px">Hashtags (HTOs) per pool</h3>';
+    html += '<div style="overflow:auto"><table class="cost-table"><thead><tr><th>Pool</th><th>HTO</th><th class="num"># samples</th><th>Samples</th></tr></thead><tbody>'
+      + snap.batches.map((b) => '<tr><td>Pool ' + esc(b.pool) + '</td><td>' + (htoByPool[b.pool] != null ? 'TotalSeqC HTO ' + esc(htoByPool[b.pool]) : '\u2014') + '</td><td class="num">' + (b.samples || []).length + '</td><td class="who">' + (b.samples || []).map((s) => esc(s.sampleId)).join(', ') + '</td></tr>').join('')
+      + '</tbody></table></div>';
+
+    html += '<h3 style="margin-top:20px">Sample \u2192 pool \u2192 library map</h3>';
+    html += '<p class="who">Each genetic pool is hashtag-labeled and co-loaded with its super-pool into the 10x lanes for each modality; those lanes generate the library types below (samples are demultiplexed computationally by hashtag + genotype).</p>';
+    html += '<div class="rev-tree">';
+    snap.batches.forEach((b) => {
+      html += '<div class="rev-tree-pool"><div class="rev-tree-head">Pool ' + esc(b.pool) + (htoByPool[b.pool] != null ? ' <span class="who">\u00b7 HTO ' + esc(htoByPool[b.pool]) + '</span>' : '') + (b.superPool != null ? ' <span class="who">\u00b7 super-pool ' + esc(b.superPool + 1) + '</span>' : '') + '</div>';
+      html += '<div class="rev-tree-samples">' + (b.samples || []).map((s) => '<span class="rev-pill">' + esc(s.sampleId) + '</span>').join('') + '</div>';
+      html += '<div class="rev-tree-libs">\u2192 ' + (arms.map((arm) => '<strong>' + esc(ARM_LABEL[arm]) + '</strong>: ' + ARM_LIBS[arm].join(', ')).join(' &nbsp;\u00b7&nbsp; ') || '\u2014') + '</div></div>';
+    });
+    html += '</div>';
+
+    html += '<h3 style="margin-top:20px">Libraries generated</h3>';
+    html += '<div style="overflow:auto"><table class="cost-table"><thead><tr><th>Modality</th><th>Library types</th><th class="num"># lanes</th><th class="num"># libraries</th></tr></thead><tbody>'
+      + arms.map((arm) => '<tr><td>' + esc(ARM_LABEL[arm]) + '</td><td>' + ARM_LIBS[arm].join(', ') + '</td><td class="num">' + lanesOf(arm) + '</td><td class="num">' + (lanesOf(arm) * ARM_LIBS[arm].length) + '</td></tr>').join('')
+      + '<tr style="font-weight:600;background:#f3f6fa"><td>Total</td><td></td><td class="num">' + totalLanes + '</td><td class="num">' + nLibs + '</td></tr>'
+      + '</tbody></table></div>';
+
+    html += '<h3 style="margin-top:20px">Estimated cells recovered <span class="who">(rough estimate)</span></h3>';
+    html += '<p class="who">Cells loaded is summed from the recorded 10x loading (where entered). Recovered is a rough estimate at ~65% of loaded; use your own lane-recovery figures for precision.</p>';
+    html += '<div style="overflow:auto"><table class="cost-table"><thead><tr><th>Modality</th><th class="num">Cells loaded</th><th class="num">~Cells recovered (est.)</th></tr></thead><tbody>';
+    let totLoad = 0, totRec = 0;
+    arms.forEach((arm) => { const cl = cellsLoaded(arm); const rc = Math.round(cl * 0.65); totLoad += cl; totRec += rc; html += '<tr><td>' + esc(ARM_LABEL[arm]) + '</td><td class="num">' + (cl ? fmtN(cl) : '\u2014') + '</td><td class="num">' + (cl ? '~' + fmtN(rc) : '\u2014') + '</td></tr>'; });
+    html += '<tr style="font-weight:600;background:#f3f6fa"><td>Total</td><td class="num">' + (totLoad ? fmtN(totLoad) : '\u2014') + '</td><td class="num">' + (totLoad ? '~' + fmtN(totRec) : '\u2014') + '</td></tr></tbody></table></div>';
+
+    host.innerHTML = html;
+  }
+
   function renderReview(id) {
+    if (id === 'rev-design') { renderReviewDesign(); return; }
     if (id === 'rev-data') { renderReviewData(); return; }
     if (id === 'rev-sort') { renderReviewSort(); return; }
     if (id === 'rev-counts') { renderReviewCounts(); return; }
@@ -5436,7 +5513,21 @@
     } catch (e) { return Promise.resolve({ error: String(e) }); }
   }
   let LIBREC_TIMER = null;
-  function syncLibraryRecordDrive(rec) { clearTimeout(LIBREC_TIMER); LIBREC_TIMER = setTimeout(function () { pushLibraryRecordNow(rec); }, 3000); }
+  // Update only the generated tabs of the existing Library record Sheet, leaving
+  // any tab the user added by hand untouched. Falls back to a full upload when the
+  // Sheet doesn't exist yet (first creation) or the targeted write fails.
+  function pushLibraryRecordTabsOnly(rec) {
+    try {
+      const sheetId = rec && rec.driveFiles && rec.driveFiles.library;
+      if (!sheetId) return pushLibraryRecordNow(rec);
+      const built = buildLibraryRecordWb(); if (!built || !built.wb) return Promise.resolve({ skipped: 'empty' });
+      const tabs = built.wb.SheetNames.map((name) => ({ name: name, values: XLSX.utils.sheet_to_json(built.wb.Sheets[name], { header: 1, defval: '' }) }));
+      return driveApi({ action: 'writeTabs', sheetId: sheetId, tabs: tabs })
+        .then((res) => (!res || res.error) ? pushLibraryRecordNow(rec) : { id: sheetId })
+        .catch(() => pushLibraryRecordNow(rec));
+    } catch (e) { return pushLibraryRecordNow(rec); }
+  }
+  function syncLibraryRecordDrive(rec) { clearTimeout(LIBREC_TIMER); LIBREC_TIMER = setTimeout(function () { pushLibraryRecordTabsOnly(rec); }, 3000); }
 
   // Refresh the current-version Experiment summary Sheet in Drive in place (no new
   // version), so late-arriving data like Cellaca counts shows up on its Counts tab.
@@ -5450,8 +5541,31 @@
         base64: wbBase64(buildExperimentWb(rec)), sourceMime: XLSX_MIME, targetMime: GSHEET_MIME });
     } catch (e) { return Promise.resolve(null); }
   }
+  // The Counts tab rows (Cellaca readouts), sorted by sample number. Shared by the
+  // full workbook build and the targeted single-tab refresh so they stay identical.
+  function buildCountsRows(rec) {
+    const cellList = (rec && rec.cellacaCountsList) || [];
+    const rows = [['How to use: populated from the Cellaca WellLevel files uploaded on Record \u2192 Cellaca counts.'], [],
+      ['sample_number', 'sample_id', 'tube_id', 'well', 'count_purpose', 'thawer', 'cellaca_conc_cells_ml', 'viability_pct', 'cellaca_total_cells_ml', 'notes']];
+    const noMap = (function () { try { return sampleNoMap().byId; } catch (e) { return {}; } })();
+    const no = (c) => (c.sampleId && noMap[c.sampleId] != null) ? noMap[c.sampleId] : (c.sampleNo != null ? c.sampleNo : '');
+    cellList.slice().sort((a, b) => (Number(no(a)) || 0) - (Number(no(b)) || 0) || String(a.purpose || '').localeCompare(String(b.purpose || '')))
+      .forEach((c) => rows.push([no(c), c.sampleId || '', c.tubeLabel || '', c.well || '', c.purpose || '', c.thawer || '', c.live != null ? c.live : '', c.viability != null ? c.viability : '', c.total != null ? c.total : '', c.notes || '']));
+    return rows;
+  }
+  // Refresh ONLY the Counts tab of the existing summary Sheet (no full rewrite).
+  // Falls back to a full rebuild if there's no summary yet or the tab write fails.
+  function pushCountsTabOnly(rec) {
+    try {
+      const sheetId = rec && rec.driveFiles && rec.driveFiles.summary;
+      if (!sheetId) return pushExperimentSummaryNow(rec);
+      return driveApi({ action: 'writeTab', sheetId: sheetId, tab: 'Counts', values: buildCountsRows(rec) })
+        .then((res) => (!res || res.error) ? pushExperimentSummaryNow(rec) : res)
+        .catch(() => pushExperimentSummaryNow(rec));
+    } catch (e) { return pushExperimentSummaryNow(rec); }
+  }
   let EXPSUM_TIMER = null;
-  function syncExperimentSummaryDrive(rec) { clearTimeout(EXPSUM_TIMER); EXPSUM_TIMER = setTimeout(function () { pushExperimentSummaryNow(rec); }, 3000); }
+  function syncExperimentSummaryDrive(rec) { clearTimeout(EXPSUM_TIMER); EXPSUM_TIMER = setTimeout(function () { pushCountsTabOnly(rec); }, 3000); }
   function generateLibraryRecord() {
     const r = buildLibraryRecordWb();
     if (!r) { alert('Add samples and compute a pooling strategy first.'); return; }
@@ -6230,14 +6344,7 @@
     XLSX.utils.book_append_sheet(wb, wsCC, 'Cell count');
 
     // ---- Counts tab (Cellaca readouts entered on Record -> Cellaca counts) ----
-    const cellList = (rec && rec.cellacaCountsList) || [];
-    const ctRows = [['How to use: populated from the Cellaca WellLevel files uploaded on Record \u2192 Cellaca counts.'], [],
-      ['sample_number', 'sample_id', 'tube_id', 'well', 'count_purpose', 'thawer', 'cellaca_conc_cells_ml', 'viability_pct', 'cellaca_total_cells_ml', 'notes']];
-    const _ctNoMap = (function () { try { return sampleNoMap().byId; } catch (e) { return {}; } })();
-    const _ctNo = (c) => (c.sampleId && _ctNoMap[c.sampleId] != null) ? _ctNoMap[c.sampleId] : (c.sampleNo != null ? c.sampleNo : '');
-    cellList.slice().sort((a, b) => (Number(_ctNo(a)) || 0) - (Number(_ctNo(b)) || 0) || String(a.purpose || '').localeCompare(String(b.purpose || '')))
-      .forEach((c) => ctRows.push([_ctNo(c), c.sampleId || '', c.tubeLabel || '', c.well || '', c.purpose || '', c.thawer || '', c.live != null ? c.live : '', c.viability != null ? c.viability : '', c.total != null ? c.total : '', c.notes || '']));
-    const wsCT = XLSX.utils.aoa_to_sheet(ctRows);
+    const wsCT = XLSX.utils.aoa_to_sheet(buildCountsRows(rec));
     wsCT['!cols'] = [{ wch: 9 }, { wch: 20 }, { wch: 12 }, { wch: 7 }, { wch: 16 }, { wch: 14 }, { wch: 16 }, { wch: 13 }, { wch: 16 }, { wch: 20 }];
     XLSX.utils.book_append_sheet(wb, wsCT, 'Counts');
 
