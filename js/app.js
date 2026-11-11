@@ -1537,10 +1537,19 @@
     rows.forEach((d) => {
       if (d.cdna) return;   // only final sequenceable libraries
       const conc = parseFloat(String(d.qubit).split(',')[0]);   // dilution-corrected ng/µL (first prep if several)
-      const bp = parseFloat(String(d.avgBp).split(',')[0]);
+      let bp = parseFloat(String(d.fxb).split(',')[0]);         // average_bp_in_range
+      if (isNaN(bp)) bp = parseFloat(String(d.avgBp).split(',')[0]);
       out.push({ tubeId: d.tubeId, modalityAbbr: d.modalityAbbr || '', type: d.type || '', expId: d.expId || '', abbrev: d.abbrev || '',
         groupKey: (d.modalityAbbr || '?') + '-' + (d.type || '?'), conc: isNaN(conc) ? null : conc, avgBp: isNaN(bp) ? null : bp,
         cells: (parseFloat(String(d.cells).replace(/[^0-9.]/g, '')) || 0) });
+    });
+    // TapeStation avg-bp: where a library of a type has no trace, borrow the average
+    // avg-bp of the OTHER libraries of that type (flagged). Never impute Qubit.
+    const byGroup = {}; out.forEach((l) => { if (l.avgBp != null) (byGroup[l.groupKey] = byGroup[l.groupKey] || []).push(l.avgBp); });
+    const groupAvg = {}; Object.keys(byGroup).forEach((k) => { groupAvg[k] = Math.round(byGroup[k].reduce((a, b) => a + b, 0) / byGroup[k].length); });
+    out.forEach((l) => {
+      if (l.avgBp == null) { if (groupAvg[l.groupKey] != null) { l.avgBp = groupAvg[l.groupKey]; l.bpImputed = true; } else { l.bpMissing = true; } }
+      if (l.conc == null) l.qubitMissing = true;
     });
     return out;
   }
@@ -1554,6 +1563,10 @@
     const m = members.map((x) => { const mol = (x.conc != null && x.avgBp) ? (x.conc / (660 * x.avgBp)) * 1e6 : null; const reads = (x.cells || 0) * (x.reads || 0); return { x: x, mol: mol, reads: reads }; });
     const usable = m.filter((e) => e.mol && e.mol > 0);
     const warnings = [];
+    const nImp = members.filter((x) => x.bpImputed).length, nBpMiss = members.filter((x) => x.bpMissing).length, nQMiss = members.filter((x) => x.qubitMissing).length;
+    if (nImp) warnings.push('Used the average in-range bp of this type for ' + nImp + ' librar' + (nImp === 1 ? 'y' : 'ies') + ' missing TapeStation data.');
+    if (nBpMiss) warnings.push('No TapeStation data for ' + nBpMiss + ' librar' + (nBpMiss === 1 ? 'y' : 'ies') + ' (and none of this type to average) \u2014 excluded from the molarity calc.');
+    if (nQMiss) warnings.push('Missing Qubit concentration for ' + nQMiss + ' librar' + (nQMiss === 1 ? 'y' : 'ies') + ' \u2014 excluded.');
     if (!usable.length) return { members: m.map((e) => ({ tubeId: e.x.tubeId, mol: e.mol, frac: 0, uL: null })), finalConc: 0, finalVol: tVol, water: tVol, warnings: ['No usable concentration / avg-bp data for these libraries \u2014 record Qubit + TapeStation first.'] };
     const totReads = usable.reduce((a, e) => a + e.reads, 0);
     const frac = (e) => totReads > 0 ? e.reads / totReads : 1 / usable.length;
@@ -1577,108 +1590,155 @@
     return { members: rows, finalConc: conc, finalVol: vol, water: water, totPooled: totPooled, totReads: totReads, warnings: warnings };
   }
 
+  let SEQ_DRAFT = null, SEQ_OPEN = false;
+  function seqGroupLabel(members) { const g = {}; members.forEach((m) => { g[m.groupKey] = 1; }); const k = Object.keys(g); return k.length === 1 ? k[0] : 'mixed'; }
+  function seqPoolLabel(pi, members) { const g = seqGroupLabel(members); return 'Library pool ' + (pi + 1) + (g && g !== 'mixed' ? ' - ' + g : ''); }
+
   function renderSeqPooling() {
     const host = $('#recSeqdataContent'); if (!host) return;
     const rec = CURRENT_EXP_ID ? Store.getExperiment(CURRENT_EXP_ID) : null;
     if (!rec) { host.innerHTML = '<h2>Sequencing pooling</h2><p class="empty">Select a project and experiment in the sidebar first.</p>'; return; }
     const libs = seqLibraries(rec);
     if (!libs.length) { host.innerHTML = '<h2>Sequencing pooling</h2><p class="empty">No final libraries yet. Build a plan and record Qubit + TapeStation data first.</p>'; return; }
-    const cfg = seqCfg(rec);
+    const cfg = seqCfg(rec); cfg.pools = cfg.pools || [];
+    const libByTube = {}; libs.forEach((l) => { libByTube[l.tubeId] = l; });
+    const assigned = {}; cfg.pools.forEach((p) => (p.members || []).forEach((t) => { assigned[t] = true; }));
     const groups = {}; libs.forEach((l) => { (groups[l.groupKey] = groups[l.groupKey] || []).push(l); });
-    const order = Object.keys(groups).sort();
+    const membersOf = (p) => (p.members || []).map((t) => libByTube[t]).filter(Boolean).map((l) => Object.assign({}, l, { reads: SEQ_READS_DEFAULT[l.type] || 10000 }));
+    const poolCalcOf = (p) => { const mc = p.minConc != null ? p.minConc : (cfg.minConc != null ? cfg.minConc : 2), mv = p.minVol != null ? p.minVol : (cfg.minVol != null ? cfg.minVol : 20); const mem = membersOf(p); return mem.length ? seqPoolCalc(mem, mc, mv, mv, mc) : null; };
+
+    let banner = ''; { const anyTape = libs.some((l) => l.avgBp != null && !l.bpImputed); const nq = libs.filter((l) => l.qubitMissing).length; const b = [];
+      if (!anyTape) b.push('No TapeStation (average bp) data for any library \u2014 molarity cannot be computed. Record TapeStation first.');
+      if (nq) b.push(nq + ' librar' + (nq === 1 ? 'y is' : 'ies are') + ' missing a Qubit concentration \u2014 those will be excluded from pools.');
+      if (b.length) banner = '<div class="callout warn">\u26a0 ' + b.map(esc).join('<br>\u26a0 ') + '</div>'; }
 
     let html = '<h2>Sequencing pooling &amp; submission <span class="who">' + esc(rec.name || '') + '</span></h2>';
-    html += '<p class="who">Choose which libraries to pool (by modality) or send individually, set the target concentration / volume and minimum concentration / volume, then Calculate. The tool splits reads by cells \u00d7 reads/cell and avoids pipetting under 1 µL. Generate writes a versioned spreadsheet to <strong>data/sequencing pooling and submission</strong>.</p>';
-    html += '<div class="bx-row"><label>Min pool conc (nM) <input id="seqMinConc" type="number" min="0" step="0.5" value="' + escAttr(cfg.minConc != null ? cfg.minConc : 2) + '" style="width:6em"></label> <label>Min pool volume (µL) <input id="seqMinVol" type="number" min="0" value="' + escAttr(cfg.minVol != null ? cfg.minVol : 20) + '" style="width:6em"></label> <button id="seqCalc" class="btn">Calculate</button> <button id="seqGen" class="btn primary">Generate spreadsheet</button> <span class="who" id="seqGenNote"></span></div>';
+    html += '<details class="seq-box"' + (SEQ_OPEN ? ' open' : '') + '><summary>Pool libraries for sequencing <span class="who">' + cfg.pools.length + ' pool' + (cfg.pools.length === 1 ? '' : 's') + '</span></summary><div class="seq-box-body">';
+    html += banner;
+    html += '<div class="bx-row"><button id="seqGen" class="btn primary">\u2b07 Generate spreadsheet</button> <span class="who" id="seqGenNote"></span></div>';
 
-    order.forEach((k) => {
-      const g = cfg.groups[k] = cfg.groups[k] || { pool: true, targetConc: SEQ_CONC_DEFAULT, targetVol: SEQ_VOL_DEFAULT, reads: SEQ_READS_DEFAULT[groups[k][0].type] || 10000, exclude: {} };
-      html += '<div class="seq-group"><div class="seq-group-head"><strong>' + esc(k) + '</strong> <span class="who">' + groups[k].length + ' librar' + (groups[k].length === 1 ? 'y' : 'ies') + '</span>'
-        + ' <label class="who" style="margin-left:10px"><input type="radio" name="mode-' + esc(k) + '" class="seq-mode" data-k="' + escAttr(k) + '" value="pool"' + (g.pool ? ' checked' : '') + '> Pool together</label>'
-        + ' <label class="who"><input type="radio" name="mode-' + esc(k) + '" class="seq-mode" data-k="' + escAttr(k) + '" value="indiv"' + (!g.pool ? ' checked' : '') + '> Send individually</label></div>';
-      html += '<div class="bx-row" style="margin:4px 0"><label class="who">Target conc (nM) <input class="seq-g" data-k="' + escAttr(k) + '" data-f="targetConc" type="number" step="0.5" value="' + escAttr(g.targetConc) + '" style="width:5em"></label>'
-        + ' <label class="who">Target vol (µL) <input class="seq-g" data-k="' + escAttr(k) + '" data-f="targetVol" type="number" value="' + escAttr(g.targetVol) + '" style="width:5em"></label>'
-        + ' <label class="who">Reads/cell <input class="seq-g" data-k="' + escAttr(k) + '" data-f="reads" type="number" value="' + escAttr(g.reads) + '" style="width:7em"></label></div>';
-      html += '<table class="cost-table"><thead><tr><th>Incl.</th><th>Tube</th><th class="num">Qubit (ng/µL)</th><th class="num">Avg bp</th><th class="num">Molarity (nM)</th><th class="num">Cells</th></tr></thead><tbody>'
-        + groups[k].map((l) => { const mol = (l.conc != null && l.avgBp) ? Math.round((l.conc / (660 * l.avgBp)) * 1e6 * 100) / 100 : null; const ex = g.exclude && g.exclude[l.tubeId]; return '<tr><td><input type="checkbox" class="seq-incl" data-k="' + escAttr(k) + '" data-t="' + escAttr(l.tubeId) + '"' + (ex ? '' : ' checked') + '></td><td>' + esc(l.tubeId) + '</td><td class="num">' + (l.conc != null ? l.conc : '\u2014') + '</td><td class="num">' + (l.avgBp != null ? l.avgBp : '\u2014') + '</td><td class="num">' + (mol != null ? mol : '\u2014') + '</td><td class="num">' + (l.cells ? fmtNseq(l.cells) : '\u2014') + '</td></tr>'; }).join('')
-        + '</tbody></table>';
-      html += '<div class="seq-preview" id="seqprev-' + escAttr(k) + '"></div></div>';
+    cfg.pools.forEach((p, pi) => {
+      const mem = membersOf(p); const res = poolCalcOf(p); const warn = res && res.warnings.length;
+      html += '<details class="seq-pool"><summary>' + esc(seqPoolLabel(pi, mem)) + ' <span class="who">' + mem.length + ' lib</span>' + (warn ? ' <span class="seq-warn-dot">\u26a0</span>' : '') + '</summary>';
+      html += '<div class="bx-row" style="margin:4px 0"><label class="who">Min conc (nM) <input class="seq-pmin" data-pi="' + pi + '" data-f="minConc" type="number" step="0.5" value="' + escAttr(p.minConc != null ? p.minConc : (cfg.minConc != null ? cfg.minConc : 2)) + '" style="width:5em"></label> <label class="who">Min vol (\u00b5L) <input class="seq-pmin" data-pi="' + pi + '" data-f="minVol" type="number" value="' + escAttr(p.minVol != null ? p.minVol : (cfg.minVol != null ? cfg.minVol : 20)) + '" style="width:5em"></label> <button class="btn tiny" data-seq-delpool="' + pi + '">Remove pool</button></div>';
+      html += '<div class="who">Libraries: ' + mem.map((m) => esc(m.tubeId)).join(', ') + '</div>';
+      if (warn) html += '<div class="callout warn" style="margin-top:4px">\u26a0 ' + res.warnings.map(esc).join('<br>\u26a0 ') + '</div>';
+      html += '</details>';
     });
+
+    if (!SEQ_DRAFT) { html += '<div class="bx-row"><button id="seqCreate" class="btn">+ Create pool</button></div>'; }
+    else {
+      html += '<div class="seq-builder"><div style="font-weight:600;margin-bottom:4px">New pool \u2014 pick libraries</div>';
+      Object.keys(groups).sort().forEach((k) => {
+        const avail = groups[k].filter((l) => !assigned[l.tubeId]); if (!avail.length) return;
+        const allOn = avail.every((l) => SEQ_DRAFT.members[l.tubeId]);
+        html += '<details class="seq-cat"><summary><label><input type="checkbox" class="seq-cat-all" data-k="' + escAttr(k) + '"' + (allOn ? ' checked' : '') + '> <strong>' + esc(k) + '</strong></label> <span class="who">' + avail.length + '</span></summary>'
+          + avail.map((l) => '<label class="seq-lib"><input type="checkbox" class="seq-lib-chk" data-t="' + escAttr(l.tubeId) + '"' + (SEQ_DRAFT.members[l.tubeId] ? ' checked' : '') + '> ' + esc(l.tubeId) + (l.bpImputed ? ' <span class="who">(bp imputed)</span>' : '') + (l.qubitMissing ? ' <span class="who">(no qubit)</span>' : '') + '</label>').join('')
+          + '</details>';
+      });
+      html += '<div class="bx-row" style="margin-top:6px"><label class="who">Min conc (nM) <input id="seqDraftMinConc" type="number" step="0.5" value="' + escAttr(SEQ_DRAFT.minConc) + '" style="width:5em"></label> <label class="who">Min vol (\u00b5L) <input id="seqDraftMinVol" type="number" value="' + escAttr(SEQ_DRAFT.minVol) + '" style="width:5em"></label></div>';
+      html += '<div id="seqDraftWarn"></div>';
+      html += '<div class="bx-row"><button id="seqAddPool" class="btn primary">Add pool</button> <button id="seqCancelPool" class="btn ghost">Cancel</button></div></div>';
+    }
+
+    const unassigned = libs.filter((l) => !assigned[l.tubeId]);
+    html += '<details class="seq-unassigned"><summary>Libraries not in a pool <span class="who">' + unassigned.length + '</span></summary><div class="who" style="margin:4px 0">' + (unassigned.length ? unassigned.map((l) => esc(l.tubeId)).join(', ') : 'None \u2014 every library is in a pool.') + '</div><p class="who">These are listed as individual submissions in the generated spreadsheet.</p></details>';
+    html += '</div></details>';
     host.innerHTML = html;
 
     const save = () => Store.saveExperiment(rec);
-    host.querySelectorAll('.seq-mode').forEach((el) => el.addEventListener('change', () => { cfg.groups[el.dataset.k].pool = (el.value === 'pool'); save(); }));
-    host.querySelectorAll('.seq-g').forEach((el) => el.addEventListener('input', () => { cfg.groups[el.dataset.k][el.dataset.f] = parseFloat(el.value) || 0; save(); }));
-    host.querySelectorAll('.seq-incl').forEach((el) => el.addEventListener('change', () => { const g = cfg.groups[el.dataset.k]; g.exclude = g.exclude || {}; if (el.checked) delete g.exclude[el.dataset.t]; else g.exclude[el.dataset.t] = true; save(); }));
-    const mc = $('#seqMinConc'), mv = $('#seqMinVol');
-    if (mc) mc.addEventListener('input', () => { cfg.minConc = parseFloat(mc.value) || 0; save(); });
-    if (mv) mv.addEventListener('input', () => { cfg.minVol = parseFloat(mv.value) || 0; save(); });
-    const calc = $('#seqCalc'); if (calc) calc.addEventListener('click', () => seqRenderPreviews(rec, groups));
-    const gen = $('#seqGen'); if (gen) gen.addEventListener('click', () => generateSeqPool(rec, groups));
-    seqRenderPreviews(rec, groups);
+    const reopen = () => { SEQ_OPEN = true; renderSeqPooling(); };
+    const box = host.querySelector('.seq-box'); if (box) box.addEventListener('toggle', () => { SEQ_OPEN = box.open; });
+    const gen = $('#seqGen'); if (gen) gen.addEventListener('click', () => generateSeqPool(rec));
+    const cr = $('#seqCreate'); if (cr) cr.addEventListener('click', () => { SEQ_DRAFT = { members: {}, minConc: (cfg.minConc != null ? cfg.minConc : 2), minVol: (cfg.minVol != null ? cfg.minVol : 20) }; reopen(); });
+    host.querySelectorAll('.seq-pmin').forEach((el) => el.addEventListener('input', () => { const p = cfg.pools[+el.dataset.pi]; if (p) { p[el.dataset.f] = parseFloat(el.value) || 0; save(); } }));
+    host.querySelectorAll('button[data-seq-delpool]').forEach((b) => b.addEventListener('click', () => { cfg.pools.splice(+b.dataset.seqDelpool, 1); save(); reopen(); }));
+
+    if (SEQ_DRAFT) {
+      const updWarn = () => { const sel = Object.keys(SEQ_DRAFT.members).filter((t) => SEQ_DRAFT.members[t]); const mem = sel.map((t) => libByTube[t]).filter(Boolean).map((l) => Object.assign({}, l, { reads: SEQ_READS_DEFAULT[l.type] || 10000 })); const w = $('#seqDraftWarn'); if (!w) return; if (!mem.length) { w.innerHTML = '<p class="who">Select at least one library.</p>'; return; } const res = seqPoolCalc(mem, SEQ_DRAFT.minConc, SEQ_DRAFT.minVol, SEQ_DRAFT.minVol, SEQ_DRAFT.minConc); w.innerHTML = res.warnings.length ? '<div class="callout warn">\u26a0 ' + res.warnings.map(esc).join('<br>\u26a0 ') + '</div>' : '<p class="who">\u2713 ' + mem.length + ' libraries selected, no warnings at these minimums.</p>'; };
+      host.querySelectorAll('.seq-lib-chk').forEach((el) => el.addEventListener('change', () => { SEQ_DRAFT.members[el.dataset.t] = el.checked; const cat = el.closest('.seq-cat'); if (cat) { const all = cat.querySelector('.seq-cat-all'); const boxes = cat.querySelectorAll('.seq-lib-chk'); if (all) all.checked = Array.prototype.every.call(boxes, (b) => b.checked); } updWarn(); }));
+      host.querySelectorAll('.seq-cat-all').forEach((el) => el.addEventListener('change', () => { const cat = el.closest('.seq-cat'); cat.querySelectorAll('.seq-lib-chk').forEach((b) => { b.checked = el.checked; SEQ_DRAFT.members[b.dataset.t] = el.checked; }); updWarn(); }));
+      const dc = $('#seqDraftMinConc'); if (dc) dc.addEventListener('input', () => { SEQ_DRAFT.minConc = parseFloat(dc.value) || 0; updWarn(); });
+      const dv = $('#seqDraftMinVol'); if (dv) dv.addEventListener('input', () => { SEQ_DRAFT.minVol = parseFloat(dv.value) || 0; updWarn(); });
+      const add = $('#seqAddPool'); if (add) add.addEventListener('click', () => { const sel = Object.keys(SEQ_DRAFT.members).filter((t) => SEQ_DRAFT.members[t]); if (!sel.length) { const w = $('#seqDraftWarn'); if (w) w.innerHTML = '<p class="who">Select at least one library first.</p>'; return; } cfg.pools.push({ members: sel, minConc: SEQ_DRAFT.minConc, minVol: SEQ_DRAFT.minVol }); SEQ_DRAFT = null; save(); reopen(); });
+      const cancel = $('#seqCancelPool'); if (cancel) cancel.addEventListener('click', () => { SEQ_DRAFT = null; reopen(); });
+      updWarn();
+    }
   }
   function fmtNseq(n) { return (n == null || n === '') ? '\u2014' : Number(n).toLocaleString(); }
 
-  function seqPlanFor(rec, groups) {
-    const cfg = seqCfg(rec); const pools = [], individuals = [];
-    Object.keys(groups).sort().forEach((k) => {
-      const g = cfg.groups[k] || {}; const members = groups[k].filter((l) => !(g.exclude && g.exclude[l.tubeId])).map((l) => Object.assign({}, l, { reads: g.reads || 0 }));
-      if (!members.length) return;
-      if (g.pool !== false && members.length > 1) {
-        const res = seqPoolCalc(members, g.targetConc || SEQ_CONC_DEFAULT, g.targetVol || SEQ_VOL_DEFAULT, cfg.minVol || 0, cfg.minConc || 0);
-        pools.push({ key: k, poolId: (members[0].abbrev || rec.experimentId || '') + ' ' + k, res: res, members: members });
-      } else { members.forEach((l) => individuals.push(l)); }
+  function seqPlanFor(rec) {
+    const cfg = seqCfg(rec); cfg.pools = cfg.pools || []; const libs = seqLibraries(rec);
+    const libByTube = {}; libs.forEach((l) => { libByTube[l.tubeId] = l; });
+    const assigned = {}; const pools = [];
+    cfg.pools.forEach((p, pi) => {
+      const mem = (p.members || []).map((t) => libByTube[t]).filter(Boolean).map((l) => Object.assign({}, l, { reads: SEQ_READS_DEFAULT[l.type] || 10000 }));
+      mem.forEach((m) => { assigned[m.tubeId] = true; });
+      if (!mem.length) return;
+      const mc = p.minConc != null ? p.minConc : (cfg.minConc != null ? cfg.minConc : 2), mv = p.minVol != null ? p.minVol : (cfg.minVol != null ? cfg.minVol : 20);
+      pools.push({ key: 'Library pool ' + (pi + 1) + ' - ' + seqGroupLabel(mem), poolId: (mem[0].abbrev || rec.experimentId || '') + ' ' + seqGroupLabel(mem), res: seqPoolCalc(mem, mc, mv, mv, mc), members: mem });
     });
+    const individuals = libs.filter((l) => !assigned[l.tubeId]);
     return { pools: pools, individuals: individuals };
   }
-  function seqRenderPreviews(rec, groups) {
-    const plan = seqPlanFor(rec, groups);
-    Object.keys(groups).forEach((k) => { const el = $('#seqprev-' + (window.CSS && CSS.escape ? CSS.escape(k) : k)); if (el) el.innerHTML = ''; });
-    plan.pools.forEach((p) => {
-      const el = document.getElementById('seqprev-' + p.key); if (!el) return;
-      const r = p.res;
-      let h = '<div class="seq-result"><div class="who">Pool \u201c' + esc(p.poolId) + '\u201d \u2192 ' + (Math.round(r.finalConc * 100) / 100) + ' nM in ' + (Math.round(r.finalVol * 10) / 10) + ' µL (water ' + (Math.round(r.water * 10) / 10) + ' µL)</div>';
-      h += '<table class="cost-table"><thead><tr><th>Tube</th><th class="num">Molarity (nM)</th><th class="num">Read fraction</th><th class="num">µL to pool</th></tr></thead><tbody>'
-        + r.members.map((m) => '<tr><td>' + esc(m.tubeId) + '</td><td class="num">' + (m.mol != null ? Math.round(m.mol * 100) / 100 : '\u2014') + '</td><td class="num">' + (m.frac != null ? (Math.round(m.frac * 1000) / 10) + '%' : '\u2014') + '</td><td class="num"' + (m.uL != null && m.uL < 1 ? ' style="color:#b23"' : '') + '>' + (m.uL != null ? Math.round(m.uL * 100) / 100 : '\u2014') + '</td></tr>').join('')
-        + '</tbody></table>';
-      if (r.warnings.length) h += '<div class="callout warn" style="margin-top:4px">\u26a0 ' + r.warnings.map(esc).join('<br>\u26a0 ') + '</div>';
-      h += '</div>';
-      el.innerHTML = h;
-    });
-    if (plan.individuals.length) { /* individuals shown in their group rows already */ }
-  }
-
   function buildSeqPoolWb(rec, plan) {
     const wb = XLSX.utils.book_new();
-    const nM = (conc, bp) => (conc != null && bp) ? Math.round((conc / (660 * bp)) * 1e6 * 100) / 100 : '';
-    // Summary tab
-    const sum = [['', 'Library', 'Targeted concentration (nM)', 'Volume (uL)', 'Qubit Concentration (ng/uL)', 'Average size (bp)', 'Actual concentration (nM)']];
-    plan.pools.forEach((p) => { const m0 = p.members[0]; sum.push(['', p.poolId, Math.round(p.res.finalConc * 100) / 100, Math.round(p.res.finalVol * 10) / 10, m0.conc, m0.avgBp, nM(m0.conc, m0.avgBp)]); });
-    plan.individuals.forEach((l) => sum.push(['', (l.abbrev || rec.experimentId || '') + ' ' + l.tubeId + ' (individual)', '', '', l.conc, l.avgBp, nM(l.conc, l.avgBp)]));
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(sum), 'Summary');
-    // One tab per pool
+    const A = (r, c) => XLSX.utils.encode_cell({ r: r, c: c });
+    // Summary (one row per pool + individuals); actual nM is a live formula.
+    const S = {}; const setS = (r, c, cell) => { S[A(r, c)] = cell; };
+    ['', 'Library', 'Targeted concentration (nM)', 'Volume (uL)', 'Qubit Concentration (ng/uL)', 'Average size (bp)', 'Actual concentration (nM)'].forEach((h, c) => setS(0, c, { t: 's', v: h }));
+    let sr = 1;
+    plan.pools.forEach((p) => { const m0 = p.members[0] || {}; setS(sr, 1, { t: 's', v: p.poolId }); setS(sr, 2, { t: 'n', v: Math.round(p.res.finalConc * 100) / 100 }); setS(sr, 3, { t: 'n', v: Math.round(p.res.finalVol * 10) / 10 }); if (m0.conc != null) setS(sr, 4, { t: 'n', v: m0.conc }); if (m0.avgBp != null) setS(sr, 5, { t: 'n', v: m0.avgBp }); if (m0.conc != null && m0.avgBp) setS(sr, 6, { t: 'n', f: '(E' + (sr + 1) + '/(660*F' + (sr + 1) + ')*10^6)' }); sr++; });
+    plan.individuals.forEach((l) => { setS(sr, 1, { t: 's', v: (l.abbrev || rec.experimentId || '') + ' ' + l.tubeId + ' (individual)' }); if (l.conc != null) setS(sr, 4, { t: 'n', v: l.conc }); if (l.avgBp != null) setS(sr, 5, { t: 'n', v: l.avgBp }); if (l.conc != null && l.avgBp) setS(sr, 6, { t: 'n', f: '(E' + (sr + 1) + '/(660*F' + (sr + 1) + ')*10^6)' }); sr++; });
+    S['!ref'] = XLSX.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: Math.max(sr, 1), c: 6 } });
+    S['!cols'] = [{ wch: 2 }, { wch: 24 }, { wch: 15 }, { wch: 10 }, { wch: 15 }, { wch: 12 }, { wch: 15 }];
+    XLSX.utils.book_append_sheet(wb, S, 'Summary');
+    // One tab per pool with live equations (edit Desired conc/vol, dilution, etc.)
     plan.pools.forEach((p) => {
-      const r = p.res;
-      const rows = [['Library Pool ID:', '', p.poolId], ['Date pooled:', '', ''], ['Pooled By:', '', ''], [],
-        ['', 'Desired final concentration (nM)', Math.round(r.finalConc * 100) / 100, '', 'Total reads needed (M)', Math.round((r.totReads || 0) / 1e6 * 10) / 10],
-        ['', 'Desired total volume (uL)', Math.round(r.finalVol * 10) / 10, '', 'Total volume pooled (uL)', Math.round((r.totPooled || 0) * 10) / 10],
-        ['', '', '', '', 'Water to add (uL)', Math.round(r.water * 10) / 10], [],
-        ['Project_Abbreviation', 'Experiment_ID', 'Tube_ID', 'Concentration (ng/uL)', 'Average size (bp)', 'Molarity (nM)', '# Cells', 'Reads/cell', 'Total reads (M)', 'Fraction of reads', 'uL to pool']];
-      p.members.forEach((m) => rows.push([p.members[0].abbrev || '', m.expId || rec.experimentId || '', m.tubeId, m.conc, m.avgBp, m.mol != null ? Math.round(m.mol * 100) / 100 : '', m.cells || '', m.reads ? Math.round(m.reads / (m.cells || 1)) : '', m.reads ? Math.round(m.reads / 1e6 * 100) / 100 : '', m.frac != null ? Math.round(m.frac * 1000) / 10 + '%' : '', m.uL != null ? Math.round(m.uL * 100) / 100 : '']));
-      if (r.warnings.length) { rows.push([]); rows.push(['Warnings:']); r.warnings.forEach((w) => rows.push(['', w])); }
-      XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(rows), sheetSafeName(p.key));
+      const ws = {}; const set = (r, c, cell) => { ws[A(r, c)] = cell; };
+      set(0, 0, { t: 's', v: 'Library Pool ID:' }); set(0, 2, { t: 's', v: p.poolId });
+      set(1, 0, { t: 's', v: 'Date pooled:' }); set(2, 0, { t: 's', v: 'Pooled By:' });
+      set(4, 1, { t: 's', v: 'Desired final concentration (nM)' }); set(4, 2, { t: 'n', v: Math.round(p.res.finalConc * 100) / 100 });
+      set(5, 1, { t: 's', v: 'Desired total volume (uL)' }); set(5, 2, { t: 'n', v: Math.round(p.res.finalVol * 10) / 10 });
+      set(6, 1, { t: 's', v: 'uL*nM' }); set(6, 2, { t: 'n', f: 'C5*C6' });
+      const first = 10, last = 9 + p.members.length;
+      set(4, 4, { t: 's', v: 'Total reads needed (M)' }); set(4, 5, { t: 'n', f: 'SUM(K' + first + ':K' + last + ')' });
+      set(5, 4, { t: 's', v: 'Total volume pooled (uL)' }); set(5, 5, { t: 'n', f: 'SUM(M' + first + ':M' + last + ')' });
+      set(6, 4, { t: 's', v: 'Water to add (uL)' }); set(6, 5, { t: 'n', f: 'C6-SUM(M' + first + ':M' + last + ')' });
+      const hdr = ['Project_Abbreviation', 'Experiment_ID', 'Tube_ID', 'Concentration (ng/uL)', 'Dilution factor', 'diluted conc (ng/uL)', 'average size (bp)', 'Molarity (nM)', '# Cells', 'Target Reads/Cell', 'Total Reads (M)', 'Fraction of reads', 'uL to pool'];
+      hdr.forEach((h, c) => set(8, c, { t: 's', v: h }));
+      p.members.forEach((m, i) => {
+        const r = 9 + i, er = r + 1;
+        set(r, 0, { t: 's', v: m.abbrev || '' }); set(r, 1, { t: 's', v: m.expId || rec.experimentId || '' }); set(r, 2, { t: 's', v: m.tubeId });
+        if (m.conc != null) set(r, 3, { t: 'n', v: m.conc });
+        set(r, 4, { t: 'n', v: 1 });
+        set(r, 5, { t: 'n', f: 'D' + er + '/E' + er });
+        if (m.avgBp != null) set(r, 6, { t: 'n', v: m.avgBp });
+        set(r, 7, { t: 'n', f: '(F' + er + '/(660*G' + er + ')*10^6)' });
+        set(r, 8, { t: 'n', v: m.cells || 0 });
+        set(r, 9, { t: 'n', v: m.reads || 0 });
+        set(r, 10, { t: 'n', f: '(I' + er + '*J' + er + ')/1000000' });
+        set(r, 11, { t: 'n', f: 'K' + er + '/SUM(K' + first + ':K' + last + ')' });
+        set(r, 12, { t: 'n', f: 'L' + er + '*$C$7/H' + er });
+      });
+      let endR = last - 1;
+      if (p.res.warnings.length) { endR += 2; set(endR, 0, { t: 's', v: 'Warnings:' }); p.res.warnings.forEach((w, wi) => set(endR + 1 + wi, 1, { t: 's', v: w })); endR += p.res.warnings.length; }
+      ws['!ref'] = XLSX.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: endR + 1, c: 12 } });
+      ws['!cols'] = hdr.map(() => ({ wch: 13 }));
+      XLSX.utils.book_append_sheet(wb, ws, sheetSafeName(p.key));
     });
-    // Individually-submitted libraries
     if (plan.individuals.length) {
-      const ind = [['Project_Abbreviation', 'Experiment_ID', 'Tube_ID', 'Concentration (ng/uL)', 'Average size (bp)', 'Molarity (nM)', '# Cells']];
-      plan.individuals.forEach((l) => ind.push([l.abbrev || '', l.expId || rec.experimentId || '', l.tubeId, l.conc, l.avgBp, nM(l.conc, l.avgBp), l.cells || '']));
-      XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(ind), 'Individual libraries');
+      const ws = {}; const set = (r, c, cell) => { ws[A(r, c)] = cell; };
+      ['Project_Abbreviation', 'Experiment_ID', 'Tube_ID', 'Concentration (ng/uL)', 'average size (bp)', 'Molarity (nM)', '# Cells'].forEach((h, c) => set(0, c, { t: 's', v: h }));
+      plan.individuals.forEach((l, i) => { const r = i + 1, er = r + 1; set(r, 0, { t: 's', v: l.abbrev || '' }); set(r, 1, { t: 's', v: l.expId || rec.experimentId || '' }); set(r, 2, { t: 's', v: l.tubeId }); if (l.conc != null) set(r, 3, { t: 'n', v: l.conc }); if (l.avgBp != null) set(r, 4, { t: 'n', v: l.avgBp }); if (l.conc != null && l.avgBp) set(r, 5, { t: 'n', f: '(D' + er + '/(660*E' + er + ')*10^6)' }); set(r, 6, { t: 'n', v: l.cells || 0 }); });
+      ws['!ref'] = XLSX.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: plan.individuals.length, c: 6 } });
+      ws['!cols'] = [{ wch: 18 }, { wch: 14 }, { wch: 12 }, { wch: 15 }, { wch: 13 }, { wch: 13 }, { wch: 10 }];
+      XLSX.utils.book_append_sheet(wb, ws, 'Individual libraries');
     }
     return wb;
   }
-
-  function generateSeqPool(rec, groups) {
-    const note = $('#seqGenNote'); const plan = seqPlanFor(rec, groups);
+  function generateSeqPool(rec) {
+    const note = $('#seqGenNote'); const plan = seqPlanFor(rec);
     if (!plan.pools.length && !plan.individuals.length) { if (note) note.textContent = 'Nothing to generate \u2014 select libraries first.'; return; }
     const expId = rec.experimentId || projectLabel(rec.name || 'experiment');
     rec.seqPoolVersion = (rec.seqPoolVersion || 0) + 1; Store.saveExperiment(rec);

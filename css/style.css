@@ -996,3 +996,16 @@ main > .panel { flex: 1 1 auto; min-width: 0; }
 .seq-group-head { margin-bottom: 4px; }
 .seq-preview { margin-top: 6px; }
 .seq-result { background: #f3f6fa; border-radius: 8px; padding: 8px 10px; margin-top: 6px; }
+
+/* Sequencing pooling builder */
+.seq-box > summary { cursor: pointer; font-weight: 600; color: #1f3b57; padding: 8px 2px; }
+.seq-box-body { padding: 6px 2px 2px; }
+.seq-pool { border: 1px solid #d0d7de; border-left: 4px solid #1f6f6f; border-radius: 8px; padding: 6px 10px; margin: 6px 0; background: #fff; }
+.seq-pool > summary { cursor: pointer; font-weight: 600; color: #1f3b57; }
+.seq-warn-dot { color: #b23; }
+.seq-builder { border: 1px dashed #9ec3c3; border-radius: 8px; padding: 10px; margin: 8px 0; background: #f7fbfb; }
+.seq-cat { border: 1px solid #e3e9f0; border-radius: 6px; padding: 4px 8px; margin: 4px 0; background: #fff; }
+.seq-cat > summary { cursor: pointer; }
+.seq-lib { display: inline-flex; align-items: center; gap: 5px; margin: 2px 12px 2px 18px; font-size: 13px; }
+.seq-unassigned { margin-top: 8px; }
+.seq-unassigned > summary { cursor: pointer; color: #667085; }
