@@ -990,3 +990,9 @@ main > .panel { flex: 1 1 auto; min-width: 0; }
 .rev-tree-samples { margin: 6px 0; display: flex; flex-wrap: wrap; gap: 5px; }
 .rev-pill { background: #eef1f4; border-radius: 12px; padding: 2px 9px; font-size: 12px; color: #334; }
 .rev-tree-libs { font-size: 12.5px; color: #4a5b6b; }
+
+/* Sequencing pooling tool */
+.seq-group { border: 1px solid #d0d7de; border-radius: 8px; padding: 10px 12px; margin: 10px 0; background: #fff; }
+.seq-group-head { margin-bottom: 4px; }
+.seq-preview { margin-top: 6px; }
+.seq-result { background: #f3f6fa; border-radius: 8px; padding: 8px 10px; margin-top: 6px; }

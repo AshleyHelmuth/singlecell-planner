@@ -190,6 +190,7 @@
     if (id === 'rec-library') { renderWorksheet('library'); return; }
     if (id === 'rec-notes') { renderNotes(); return; }
     if (id === 'rec-libstatus') { renderLibStatus('recLibStatusContent', true); return; }
+    if (id === 'rec-seqdata') { renderSeqPooling(); return; }
     const s = REC_STUBS[id]; if (s) stubPage(s[0], s[1], s[2]);
   }
 
@@ -1525,6 +1526,176 @@
     const kitBtn = $('#suKits'); if (kitBtn) kitBtn.addEventListener('click', () => recordUsageUI(rec.id));
   }
   let REV_TS_ARM = 'all', REV_TS_TYPE = 'all', REV_TS_VIEW = 'summary', REV_TS_MIN = '', REV_TS_MAX = '';
+  // ===== Sequencing pooling & submission (Record -> Sequencing data) =====
+  const SEQ_READS_DEFAULT = { GEX: 20000, ADT: 5000, TCR: 5000, BCR: 5000, ATAC: 25000, HTO: 2000, CSP: 5000 };
+  const SEQ_CONC_DEFAULT = 10, SEQ_VOL_DEFAULT = 30;   // nM, µL
+
+  // Final libraries available to pool, from the library record (tube, modality, type, conc, avg bp).
+  function seqLibraries(rec) {
+    let rows = []; try { rows = buildLibraryRecordRows(rec) || []; } catch (e) { rows = []; }
+    const out = [];
+    rows.forEach((d) => {
+      if (d.cdna) return;   // only final sequenceable libraries
+      const conc = parseFloat(String(d.qubit).split(',')[0]);   // dilution-corrected ng/µL (first prep if several)
+      const bp = parseFloat(String(d.avgBp).split(',')[0]);
+      out.push({ tubeId: d.tubeId, modalityAbbr: d.modalityAbbr || '', type: d.type || '', expId: d.expId || '', abbrev: d.abbrev || '',
+        groupKey: (d.modalityAbbr || '?') + '-' + (d.type || '?'), conc: isNaN(conc) ? null : conc, avgBp: isNaN(bp) ? null : bp,
+        cells: (parseFloat(String(d.cells).replace(/[^0-9.]/g, '')) || 0) });
+    });
+    return out;
+  }
+  function seqCfg(rec) { rec.seqPooling = rec.seqPooling || { groups: {}, minVol: 20, minConc: 2 }; return rec.seqPooling; }
+
+  // Pooling math for one set of member libraries (see the lab's pooling sheet):
+  // molarity(nM) = conc/(660*bp)*1e6 ; reads split by cells*reads/cell ;
+  // µL to pool = read_fraction * (conc_nM * vol_µL) / molarity ; water fills to vol.
+  // Raises concentration (then volume) to avoid any pipetting step below 1 µL.
+  function seqPoolCalc(members, tConc, tVol, minVol, minConc) {
+    const m = members.map((x) => { const mol = (x.conc != null && x.avgBp) ? (x.conc / (660 * x.avgBp)) * 1e6 : null; const reads = (x.cells || 0) * (x.reads || 0); return { x: x, mol: mol, reads: reads }; });
+    const usable = m.filter((e) => e.mol && e.mol > 0);
+    const warnings = [];
+    if (!usable.length) return { members: m.map((e) => ({ tubeId: e.x.tubeId, mol: e.mol, frac: 0, uL: null })), finalConc: 0, finalVol: tVol, water: tVol, warnings: ['No usable concentration / avg-bp data for these libraries \u2014 record Qubit + TapeStation first.'] };
+    const totReads = usable.reduce((a, e) => a + e.reads, 0);
+    const frac = (e) => totReads > 0 ? e.reads / totReads : 1 / usable.length;
+    const sumFM = usable.reduce((a, e) => a + frac(e) / e.mol, 0);
+    const maxConc = 1 / sumFM;   // highest pool conc achievable at any volume (water = 0)
+    let conc = tConc, vol = tVol;
+    if (conc > maxConc) { conc = maxConc; warnings.push('Target ' + tConc + ' nM not achievable (libraries too dilute); using the max ' + (Math.round(maxConc * 100) / 100) + ' nM.'); }
+    const gMin = Math.min.apply(null, usable.map((e) => frac(e) / e.mol));   // smallest µL per (conc*vol)
+    if (gMin * conc * vol < 1) {
+      const needConc = 1 / (gMin * vol);
+      if (needConc <= maxConc) { conc = needConc; warnings.push('Raised pool concentration to ' + (Math.round(conc * 100) / 100) + ' nM so no pipetting step is under 1 µL.'); }
+      else { conc = maxConc; vol = 1 / (gMin * maxConc); warnings.push('Raised pool volume to ' + (Math.round(vol * 10) / 10) + ' µL so no pipetting step is under 1 µL.'); }
+    }
+    const rows = usable.map((e) => { const uL = frac(e) * conc * vol / e.mol; return { tubeId: e.x.tubeId, conc: e.x.conc, avgBp: e.x.avgBp, cells: e.x.cells, reads: e.reads, mol: e.mol, frac: frac(e), uL: uL }; });
+    const totPooled = rows.reduce((a, r) => a + r.uL, 0);
+    const water = vol - totPooled;
+    if (conc < minConc) warnings.push('Pool concentration ' + (Math.round(conc * 100) / 100) + ' nM is below your minimum (' + minConc + ' nM).');
+    if (vol < minVol) warnings.push('Pool volume ' + (Math.round(vol * 10) / 10) + ' µL is below your minimum (' + minVol + ' µL).');
+    if (rows.some((r) => r.uL < 1)) warnings.push('Some libraries still require under 1 µL \u2014 consider sending them individually.');
+    if (water < -0.01) warnings.push('Negative water (' + (Math.round(water * 10) / 10) + ' µL): cannot reach this concentration in this volume.');
+    return { members: rows, finalConc: conc, finalVol: vol, water: water, totPooled: totPooled, totReads: totReads, warnings: warnings };
+  }
+
+  function renderSeqPooling() {
+    const host = $('#recSeqdataContent'); if (!host) return;
+    const rec = CURRENT_EXP_ID ? Store.getExperiment(CURRENT_EXP_ID) : null;
+    if (!rec) { host.innerHTML = '<h2>Sequencing pooling</h2><p class="empty">Select a project and experiment in the sidebar first.</p>'; return; }
+    const libs = seqLibraries(rec);
+    if (!libs.length) { host.innerHTML = '<h2>Sequencing pooling</h2><p class="empty">No final libraries yet. Build a plan and record Qubit + TapeStation data first.</p>'; return; }
+    const cfg = seqCfg(rec);
+    const groups = {}; libs.forEach((l) => { (groups[l.groupKey] = groups[l.groupKey] || []).push(l); });
+    const order = Object.keys(groups).sort();
+
+    let html = '<h2>Sequencing pooling &amp; submission <span class="who">' + esc(rec.name || '') + '</span></h2>';
+    html += '<p class="who">Choose which libraries to pool (by modality) or send individually, set the target concentration / volume and minimum concentration / volume, then Calculate. The tool splits reads by cells \u00d7 reads/cell and avoids pipetting under 1 µL. Generate writes a versioned spreadsheet to <strong>data/sequencing pooling and submission</strong>.</p>';
+    html += '<div class="bx-row"><label>Min pool conc (nM) <input id="seqMinConc" type="number" min="0" step="0.5" value="' + escAttr(cfg.minConc != null ? cfg.minConc : 2) + '" style="width:6em"></label> <label>Min pool volume (µL) <input id="seqMinVol" type="number" min="0" value="' + escAttr(cfg.minVol != null ? cfg.minVol : 20) + '" style="width:6em"></label> <button id="seqCalc" class="btn">Calculate</button> <button id="seqGen" class="btn primary">Generate spreadsheet</button> <span class="who" id="seqGenNote"></span></div>';
+
+    order.forEach((k) => {
+      const g = cfg.groups[k] = cfg.groups[k] || { pool: true, targetConc: SEQ_CONC_DEFAULT, targetVol: SEQ_VOL_DEFAULT, reads: SEQ_READS_DEFAULT[groups[k][0].type] || 10000, exclude: {} };
+      html += '<div class="seq-group"><div class="seq-group-head"><strong>' + esc(k) + '</strong> <span class="who">' + groups[k].length + ' librar' + (groups[k].length === 1 ? 'y' : 'ies') + '</span>'
+        + ' <label class="who" style="margin-left:10px"><input type="radio" name="mode-' + esc(k) + '" class="seq-mode" data-k="' + escAttr(k) + '" value="pool"' + (g.pool ? ' checked' : '') + '> Pool together</label>'
+        + ' <label class="who"><input type="radio" name="mode-' + esc(k) + '" class="seq-mode" data-k="' + escAttr(k) + '" value="indiv"' + (!g.pool ? ' checked' : '') + '> Send individually</label></div>';
+      html += '<div class="bx-row" style="margin:4px 0"><label class="who">Target conc (nM) <input class="seq-g" data-k="' + escAttr(k) + '" data-f="targetConc" type="number" step="0.5" value="' + escAttr(g.targetConc) + '" style="width:5em"></label>'
+        + ' <label class="who">Target vol (µL) <input class="seq-g" data-k="' + escAttr(k) + '" data-f="targetVol" type="number" value="' + escAttr(g.targetVol) + '" style="width:5em"></label>'
+        + ' <label class="who">Reads/cell <input class="seq-g" data-k="' + escAttr(k) + '" data-f="reads" type="number" value="' + escAttr(g.reads) + '" style="width:7em"></label></div>';
+      html += '<table class="cost-table"><thead><tr><th>Incl.</th><th>Tube</th><th class="num">Qubit (ng/µL)</th><th class="num">Avg bp</th><th class="num">Molarity (nM)</th><th class="num">Cells</th></tr></thead><tbody>'
+        + groups[k].map((l) => { const mol = (l.conc != null && l.avgBp) ? Math.round((l.conc / (660 * l.avgBp)) * 1e6 * 100) / 100 : null; const ex = g.exclude && g.exclude[l.tubeId]; return '<tr><td><input type="checkbox" class="seq-incl" data-k="' + escAttr(k) + '" data-t="' + escAttr(l.tubeId) + '"' + (ex ? '' : ' checked') + '></td><td>' + esc(l.tubeId) + '</td><td class="num">' + (l.conc != null ? l.conc : '\u2014') + '</td><td class="num">' + (l.avgBp != null ? l.avgBp : '\u2014') + '</td><td class="num">' + (mol != null ? mol : '\u2014') + '</td><td class="num">' + (l.cells ? fmtNseq(l.cells) : '\u2014') + '</td></tr>'; }).join('')
+        + '</tbody></table>';
+      html += '<div class="seq-preview" id="seqprev-' + escAttr(k) + '"></div></div>';
+    });
+    host.innerHTML = html;
+
+    const save = () => Store.saveExperiment(rec);
+    host.querySelectorAll('.seq-mode').forEach((el) => el.addEventListener('change', () => { cfg.groups[el.dataset.k].pool = (el.value === 'pool'); save(); }));
+    host.querySelectorAll('.seq-g').forEach((el) => el.addEventListener('input', () => { cfg.groups[el.dataset.k][el.dataset.f] = parseFloat(el.value) || 0; save(); }));
+    host.querySelectorAll('.seq-incl').forEach((el) => el.addEventListener('change', () => { const g = cfg.groups[el.dataset.k]; g.exclude = g.exclude || {}; if (el.checked) delete g.exclude[el.dataset.t]; else g.exclude[el.dataset.t] = true; save(); }));
+    const mc = $('#seqMinConc'), mv = $('#seqMinVol');
+    if (mc) mc.addEventListener('input', () => { cfg.minConc = parseFloat(mc.value) || 0; save(); });
+    if (mv) mv.addEventListener('input', () => { cfg.minVol = parseFloat(mv.value) || 0; save(); });
+    const calc = $('#seqCalc'); if (calc) calc.addEventListener('click', () => seqRenderPreviews(rec, groups));
+    const gen = $('#seqGen'); if (gen) gen.addEventListener('click', () => generateSeqPool(rec, groups));
+    seqRenderPreviews(rec, groups);
+  }
+  function fmtNseq(n) { return (n == null || n === '') ? '\u2014' : Number(n).toLocaleString(); }
+
+  function seqPlanFor(rec, groups) {
+    const cfg = seqCfg(rec); const pools = [], individuals = [];
+    Object.keys(groups).sort().forEach((k) => {
+      const g = cfg.groups[k] || {}; const members = groups[k].filter((l) => !(g.exclude && g.exclude[l.tubeId])).map((l) => Object.assign({}, l, { reads: g.reads || 0 }));
+      if (!members.length) return;
+      if (g.pool !== false && members.length > 1) {
+        const res = seqPoolCalc(members, g.targetConc || SEQ_CONC_DEFAULT, g.targetVol || SEQ_VOL_DEFAULT, cfg.minVol || 0, cfg.minConc || 0);
+        pools.push({ key: k, poolId: (members[0].abbrev || rec.experimentId || '') + ' ' + k, res: res, members: members });
+      } else { members.forEach((l) => individuals.push(l)); }
+    });
+    return { pools: pools, individuals: individuals };
+  }
+  function seqRenderPreviews(rec, groups) {
+    const plan = seqPlanFor(rec, groups);
+    Object.keys(groups).forEach((k) => { const el = $('#seqprev-' + (window.CSS && CSS.escape ? CSS.escape(k) : k)); if (el) el.innerHTML = ''; });
+    plan.pools.forEach((p) => {
+      const el = document.getElementById('seqprev-' + p.key); if (!el) return;
+      const r = p.res;
+      let h = '<div class="seq-result"><div class="who">Pool \u201c' + esc(p.poolId) + '\u201d \u2192 ' + (Math.round(r.finalConc * 100) / 100) + ' nM in ' + (Math.round(r.finalVol * 10) / 10) + ' µL (water ' + (Math.round(r.water * 10) / 10) + ' µL)</div>';
+      h += '<table class="cost-table"><thead><tr><th>Tube</th><th class="num">Molarity (nM)</th><th class="num">Read fraction</th><th class="num">µL to pool</th></tr></thead><tbody>'
+        + r.members.map((m) => '<tr><td>' + esc(m.tubeId) + '</td><td class="num">' + (m.mol != null ? Math.round(m.mol * 100) / 100 : '\u2014') + '</td><td class="num">' + (m.frac != null ? (Math.round(m.frac * 1000) / 10) + '%' : '\u2014') + '</td><td class="num"' + (m.uL != null && m.uL < 1 ? ' style="color:#b23"' : '') + '>' + (m.uL != null ? Math.round(m.uL * 100) / 100 : '\u2014') + '</td></tr>').join('')
+        + '</tbody></table>';
+      if (r.warnings.length) h += '<div class="callout warn" style="margin-top:4px">\u26a0 ' + r.warnings.map(esc).join('<br>\u26a0 ') + '</div>';
+      h += '</div>';
+      el.innerHTML = h;
+    });
+    if (plan.individuals.length) { /* individuals shown in their group rows already */ }
+  }
+
+  function buildSeqPoolWb(rec, plan) {
+    const wb = XLSX.utils.book_new();
+    const nM = (conc, bp) => (conc != null && bp) ? Math.round((conc / (660 * bp)) * 1e6 * 100) / 100 : '';
+    // Summary tab
+    const sum = [['', 'Library', 'Targeted concentration (nM)', 'Volume (uL)', 'Qubit Concentration (ng/uL)', 'Average size (bp)', 'Actual concentration (nM)']];
+    plan.pools.forEach((p) => { const m0 = p.members[0]; sum.push(['', p.poolId, Math.round(p.res.finalConc * 100) / 100, Math.round(p.res.finalVol * 10) / 10, m0.conc, m0.avgBp, nM(m0.conc, m0.avgBp)]); });
+    plan.individuals.forEach((l) => sum.push(['', (l.abbrev || rec.experimentId || '') + ' ' + l.tubeId + ' (individual)', '', '', l.conc, l.avgBp, nM(l.conc, l.avgBp)]));
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(sum), 'Summary');
+    // One tab per pool
+    plan.pools.forEach((p) => {
+      const r = p.res;
+      const rows = [['Library Pool ID:', '', p.poolId], ['Date pooled:', '', ''], ['Pooled By:', '', ''], [],
+        ['', 'Desired final concentration (nM)', Math.round(r.finalConc * 100) / 100, '', 'Total reads needed (M)', Math.round((r.totReads || 0) / 1e6 * 10) / 10],
+        ['', 'Desired total volume (uL)', Math.round(r.finalVol * 10) / 10, '', 'Total volume pooled (uL)', Math.round((r.totPooled || 0) * 10) / 10],
+        ['', '', '', '', 'Water to add (uL)', Math.round(r.water * 10) / 10], [],
+        ['Project_Abbreviation', 'Experiment_ID', 'Tube_ID', 'Concentration (ng/uL)', 'Average size (bp)', 'Molarity (nM)', '# Cells', 'Reads/cell', 'Total reads (M)', 'Fraction of reads', 'uL to pool']];
+      p.members.forEach((m) => rows.push([p.members[0].abbrev || '', m.expId || rec.experimentId || '', m.tubeId, m.conc, m.avgBp, m.mol != null ? Math.round(m.mol * 100) / 100 : '', m.cells || '', m.reads ? Math.round(m.reads / (m.cells || 1)) : '', m.reads ? Math.round(m.reads / 1e6 * 100) / 100 : '', m.frac != null ? Math.round(m.frac * 1000) / 10 + '%' : '', m.uL != null ? Math.round(m.uL * 100) / 100 : '']));
+      if (r.warnings.length) { rows.push([]); rows.push(['Warnings:']); r.warnings.forEach((w) => rows.push(['', w])); }
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(rows), sheetSafeName(p.key));
+    });
+    // Individually-submitted libraries
+    if (plan.individuals.length) {
+      const ind = [['Project_Abbreviation', 'Experiment_ID', 'Tube_ID', 'Concentration (ng/uL)', 'Average size (bp)', 'Molarity (nM)', '# Cells']];
+      plan.individuals.forEach((l) => ind.push([l.abbrev || '', l.expId || rec.experimentId || '', l.tubeId, l.conc, l.avgBp, nM(l.conc, l.avgBp), l.cells || '']));
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(ind), 'Individual libraries');
+    }
+    return wb;
+  }
+
+  function generateSeqPool(rec, groups) {
+    const note = $('#seqGenNote'); const plan = seqPlanFor(rec, groups);
+    if (!plan.pools.length && !plan.individuals.length) { if (note) note.textContent = 'Nothing to generate \u2014 select libraries first.'; return; }
+    const expId = rec.experimentId || projectLabel(rec.name || 'experiment');
+    rec.seqPoolVersion = (rec.seqPoolVersion || 0) + 1; Store.saveExperiment(rec);
+    const ver = rec.seqPoolVersion;
+    const fileName = sanitizeName(expId + '_Library_Pooling_v' + ver);
+    if (note) note.textContent = 'Generating v' + ver + '\u2026';
+    const b64 = XLSX.write(buildSeqPoolWb(rec, plan), { type: 'base64', bookType: 'xlsx' });
+    const req = rec.driveFolderId
+      ? { action: 'ensurePath', parentId: rec.driveFolderId, subPath: ['data', 'sequencing pooling and submission'] }
+      : { action: 'ensurePath', project: rec.project || CURRENT_PROJECT, experiment: rec.name || 'Experiment', subPath: ['data', 'sequencing pooling and submission'] };
+    driveApi(req).then((path) => {
+      if (!path || !path.subId) throw new Error('could not reach the sequencing pooling folder');
+      return driveApi({ action: 'upload', name: fileName, folderId: path.subId, base64: b64, sourceMime: XLSX_MIME, targetMime: GSHEET_MIME });
+    }).then((res) => { if (note) note.innerHTML = res && res.id ? 'Created <a href="https://docs.google.com/spreadsheets/d/' + escAttr(res.id) + '/edit" target="_blank" rel="noopener">' + esc(fileName) + '</a> in data/sequencing pooling and submission.' : 'Saved v' + ver + '.'; })
+      .catch((e) => { if (note) note.textContent = 'Could not save to Drive: ' + e.message; });
+  }
+
   function renderReviewDesign() {
     const host = $('#revDesignContent'); if (!host) return;
     const rec = CURRENT_EXP_ID ? Store.getExperiment(CURRENT_EXP_ID) : null;
@@ -1562,6 +1733,19 @@
     html += '<h3 style="margin-top:20px">Experiment flow</h3>';
     html += '<div class="rev-flow">' + step(nSamples, 'samples') + '<div class="rev-arrow">\u2192</div>' + step(nPools, 'genetic pools') + '<div class="rev-arrow">\u2192</div>' + step(totalLanes, '10x lanes') + '<div class="rev-arrow">\u2192</div>' + step(nLibs, 'libraries') + '</div>';
 
+    html += '<h3 style="margin-top:20px">Estimated cells recovered <span class="who">(rough estimate)</span></h3>';
+    html += '<p class="who">Cells loaded is summed from the recorded 10x loading (where entered). Recovered is a rough estimate at ~65% of loaded; use your own lane-recovery figures for precision.</p>';
+    html += '<div style="overflow:auto"><table class="cost-table"><thead><tr><th>Modality</th><th class="num">Cells loaded</th><th class="num">~Cells recovered (est.)</th></tr></thead><tbody>';
+    let totLoad = 0, totRec = 0;
+    arms.forEach((arm) => { const cl = cellsLoaded(arm); const rc = Math.round(cl * 0.65); totLoad += cl; totRec += rc; html += '<tr><td>' + esc(ARM_LABEL[arm]) + '</td><td class="num">' + (cl ? fmtN(cl) : '\u2014') + '</td><td class="num">' + (cl ? '~' + fmtN(rc) : '\u2014') + '</td></tr>'; });
+    html += '<tr style="font-weight:600;background:#f3f6fa"><td>Total</td><td class="num">' + (totLoad ? fmtN(totLoad) : '\u2014') + '</td><td class="num">' + (totLoad ? '~' + fmtN(totRec) : '\u2014') + '</td></tr></tbody></table></div>';
+
+    html += '<h3 style="margin-top:20px">Libraries generated</h3>';
+    html += '<div style="overflow:auto"><table class="cost-table"><thead><tr><th>Modality</th><th>Library types</th><th class="num"># lanes</th><th class="num"># libraries</th></tr></thead><tbody>'
+      + arms.map((arm) => '<tr><td>' + esc(ARM_LABEL[arm]) + '</td><td>' + ARM_LIBS[arm].join(', ') + '</td><td class="num">' + lanesOf(arm) + '</td><td class="num">' + (lanesOf(arm) * ARM_LIBS[arm].length) + '</td></tr>').join('')
+      + '<tr style="font-weight:600;background:#f3f6fa"><td>Total</td><td></td><td class="num">' + totalLanes + '</td><td class="num">' + nLibs + '</td></tr>'
+      + '</tbody></table></div>';
+
     html += '<h3 style="margin-top:20px">Lanes loaded</h3>';
     arms.forEach((arm) => {
       const rows = loadRows(arm), n = lanesOf(arm);
@@ -1585,19 +1769,6 @@
       html += '<div class="rev-tree-libs">\u2192 ' + (arms.map((arm) => '<strong>' + esc(ARM_LABEL[arm]) + '</strong>: ' + ARM_LIBS[arm].join(', ')).join(' &nbsp;\u00b7&nbsp; ') || '\u2014') + '</div></div>';
     });
     html += '</div>';
-
-    html += '<h3 style="margin-top:20px">Libraries generated</h3>';
-    html += '<div style="overflow:auto"><table class="cost-table"><thead><tr><th>Modality</th><th>Library types</th><th class="num"># lanes</th><th class="num"># libraries</th></tr></thead><tbody>'
-      + arms.map((arm) => '<tr><td>' + esc(ARM_LABEL[arm]) + '</td><td>' + ARM_LIBS[arm].join(', ') + '</td><td class="num">' + lanesOf(arm) + '</td><td class="num">' + (lanesOf(arm) * ARM_LIBS[arm].length) + '</td></tr>').join('')
-      + '<tr style="font-weight:600;background:#f3f6fa"><td>Total</td><td></td><td class="num">' + totalLanes + '</td><td class="num">' + nLibs + '</td></tr>'
-      + '</tbody></table></div>';
-
-    html += '<h3 style="margin-top:20px">Estimated cells recovered <span class="who">(rough estimate)</span></h3>';
-    html += '<p class="who">Cells loaded is summed from the recorded 10x loading (where entered). Recovered is a rough estimate at ~65% of loaded; use your own lane-recovery figures for precision.</p>';
-    html += '<div style="overflow:auto"><table class="cost-table"><thead><tr><th>Modality</th><th class="num">Cells loaded</th><th class="num">~Cells recovered (est.)</th></tr></thead><tbody>';
-    let totLoad = 0, totRec = 0;
-    arms.forEach((arm) => { const cl = cellsLoaded(arm); const rc = Math.round(cl * 0.65); totLoad += cl; totRec += rc; html += '<tr><td>' + esc(ARM_LABEL[arm]) + '</td><td class="num">' + (cl ? fmtN(cl) : '\u2014') + '</td><td class="num">' + (cl ? '~' + fmtN(rc) : '\u2014') + '</td></tr>'; });
-    html += '<tr style="font-weight:600;background:#f3f6fa"><td>Total</td><td class="num">' + (totLoad ? fmtN(totLoad) : '\u2014') + '</td><td class="num">' + (totLoad ? '~' + fmtN(totRec) : '\u2014') + '</td></tr></tbody></table></div>';
 
     host.innerHTML = html;
   }
