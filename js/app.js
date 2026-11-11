@@ -1532,6 +1532,7 @@
     const snap = rec.snapshot;
     if (!snap || !snap.batches || !snap.batches.length) { host.innerHTML = '<h2>Experimental design</h2><p class="empty">Build a plan first (Plan experiment \u2192 Build), then the summary appears here.</p>'; return; }
     const ws = rec.worksheets || {}, lib = ws.library || {}, bd = ws.batchday || {};
+    const fmtN = (n) => (n == null || n === '') ? '\u2014' : Number(n).toLocaleString();
     const ARM_LABEL = { unsort5: "5' unsort", sort5: "5' sort", asap3: 'ASAP' };
     const ARM_LOADKEY = { unsort5: 'unsort', sort5: 'sort', asap3: 'asap' };
     const ARM_LIBS = { unsort5: ['GEX', 'ADT', 'TCR', 'BCR'], sort5: ['GEX', 'ADT'], asap3: ['ATAC', 'ADT', 'HTO'] };
