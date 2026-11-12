@@ -1529,6 +1529,16 @@
   // ===== Sequencing pooling & submission (Record -> Sequencing data) =====
   const SEQ_READS_DEFAULT = { GEX: 20000, ADT: 5000, TCR: 5000, BCR: 5000, ATAC: 25000, HTO: 2000, CSP: 5000 };
   const SEQ_CONC_DEFAULT = 10, SEQ_VOL_DEFAULT = 30;   // nM, µL
+  // Sequencing-vendor (Psomagen) submission mapping. Names use exp_modality_feature
+  // with the company's convention: ADT-containing libraries are hashtagged, so they
+  // are named ADT_HTO; HTO-only libraries are named HTO.
+  const SUBMIT_KIT = { U: "10X 5' v3", S: "10X 5' v3", A: '10X ATAC v2' };
+  const SUBMIT_ANALYSIS = { GEX: 'Gene Expression', ADT: 'Antibody Capture (ADT + HTO)', HTO: 'Cell Multiplexing (HTO)', TCR: 'VDJ-T', BCR: 'VDJ-B', ATAC: 'ATAC', P: 'cDNA', S: 'cDNA' };
+  function seqFeatureName(types) { const s = {}; (Array.isArray(types) ? types : [types]).forEach((t) => { s[t] = 1; }); if (s.ADT) return 'ADT_HTO'; if (s.HTO) return 'HTO'; const k = Object.keys(s).filter(Boolean); return k.length === 1 ? k[0] : k.join('_'); }
+  function seqExpU(rec) { return String(rec.experimentId || projectLabel(rec.name || 'EXP')).replace(/-/g, '_'); }
+  function seqGemWellId(tubeId, type) { const base = String(tubeId).replace(/-\d+\s*$/, ''); const cut = base.slice(0, Math.max(0, base.length - (String(type).length + 1))); return cut || base.split('-')[0]; }
+  function seqPoolSubmitName(rec, members) { const mod = (members[0] && members[0].modalityAbbr) || ''; return seqExpU(rec) + '_' + mod + '_' + seqFeatureName(members.map((m) => m.type)); }
+  function seqLibSubmitName(rec, m) { return seqExpU(rec) + '_' + seqGemWellId(m.tubeId, m.type) + '_' + seqFeatureName([m.type]); }
 
   // Final libraries available to pool, from the library record (tube, modality, type, conc, avg bp).
   function seqLibraries(rec) {
@@ -1735,6 +1745,26 @@
       ws['!cols'] = [{ wch: 18 }, { wch: 14 }, { wch: 12 }, { wch: 15 }, { wch: 13 }, { wch: 13 }, { wch: 10 }];
       XLSX.utils.book_append_sheet(wb, ws, 'Individual libraries');
     }
+    // ---- Vendor submission tabs (copy-paste into the Psomagen order form) ----
+    const today = new Date().toISOString().slice(0, 10);
+    const poolRows = [['Pool (Sample ID)', 'Final conc (nM)', 'Final vol (uL)', 'Water to add (uL)', 'Total reads (M)', '# libraries', 'Library Kit']];
+    const libRows = [['Sample ID', 'Pooling', 'Group ID', 'Library Kit (Prep Chemistry)', 'Analysis Target / Feature', 'Conc. (ng/ul)', 'Average size (bp)', '# Cells', 'Target Cell#', 'Target Read#/Cell', 'Target Read (M)']];
+    const labelRows = [['Line1', 'Line2', 'Line3']];
+    plan.pools.forEach((p) => {
+      const poolName = seqPoolSubmitName(rec, p.members);
+      poolRows.push([poolName, Math.round(p.res.finalConc * 100) / 100, Math.round(p.res.finalVol * 10) / 10, Math.round(p.res.water * 10) / 10, Math.round((p.res.totReads || 0) / 1e6 * 10) / 10, p.members.length, SUBMIT_KIT[(p.members[0] || {}).modalityAbbr] || '']);
+      labelRows.push([poolName, 'Tsang', today]);
+      p.members.forEach((m) => libRows.push([seqLibSubmitName(rec, m), 'Pool', poolName, SUBMIT_KIT[m.modalityAbbr] || '', SUBMIT_ANALYSIS[m.type] || m.type, m.conc != null ? m.conc : '', m.avgBp != null ? m.avgBp : '', m.cells || '', m.cells || '', m.reads || '', (m.cells && m.reads) ? Math.round((m.cells * m.reads) / 1e6 * 100) / 100 : '']));
+    });
+    plan.individuals.forEach((l) => {
+      const nm = seqLibSubmitName(rec, l); const rpc = SEQ_READS_DEFAULT[l.type] || '';
+      libRows.push([nm, 'Individual', '', SUBMIT_KIT[l.modalityAbbr] || '', SUBMIT_ANALYSIS[l.type] || l.type, l.conc != null ? l.conc : '', l.avgBp != null ? l.avgBp : '', l.cells || '', l.cells || '', rpc, (l.cells && rpc) ? Math.round((l.cells * rpc) / 1e6 * 100) / 100 : '']);
+      labelRows.push([nm, 'Tsang', today]);
+    });
+    const mkSheet = (name, aoa, widths) => { const s = XLSX.utils.aoa_to_sheet(aoa); if (widths) s['!cols'] = widths; XLSX.utils.book_append_sheet(wb, s, name); };
+    mkSheet('Submission pools', poolRows, [{ wch: 22 }, { wch: 13 }, { wch: 12 }, { wch: 14 }, { wch: 13 }, { wch: 10 }, { wch: 16 }]);
+    mkSheet('Submission libraries', libRows, [{ wch: 20 }, { wch: 10 }, { wch: 20 }, { wch: 18 }, { wch: 26 }, { wch: 12 }, { wch: 13 }, { wch: 10 }, { wch: 11 }, { wch: 15 }, { wch: 13 }]);
+    mkSheet('Submission labels', labelRows, [{ wch: 24 }, { wch: 22 }, { wch: 14 }]);
     return wb;
   }
   function generateSeqPool(rec) {
